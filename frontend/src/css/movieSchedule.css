@@ -1,0 +1,149 @@
+.movieSchedule-page {
+  width: 100%;
+}
+
+.movieSchedule-wrap {
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  padding: 0 12px;
+  box-sizing: border-box;
+}
+
+.movieSchedule-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 24px 0 16px;
+}
+
+.movieSchedule-title {
+  margin: 0;
+  font-size: clamp(26px, 3.6vw, 38px);
+  font-weight: 900;
+  color: rgba(234, 240, 255, 0.95);
+}
+
+.movieSchedule-meta {
+  margin: 6px 0 0;
+  font-size: 14px;
+  color: rgba(167, 179, 214, 0.9);
+}
+
+.movieSchedule-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.movieSchedule-dates {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.movieSchedule-date {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(15, 18, 28, 0.8);
+  color: rgba(234, 240, 255, 0.9);
+  border-radius: 10px;
+  padding: 12px 16px;
+  min-width: 78px;
+  font-size: 13px;
+  display: grid;
+  gap: 4px;
+  justify-items: center;
+  cursor: pointer;
+}
+
+.movieSchedule-date strong {
+  font-size: 14px;
+  letter-spacing: 0.04em;
+}
+
+.movieSchedule-dateActive {
+  border-color: rgba(0, 179, 255, 0.7);
+  box-shadow: 0 8px 20px rgba(0, 179, 255, 0.18);
+  color: #eaf0ff;
+}
+
+.movieSchedule-filters {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.movieSchedule-select {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(15, 18, 28, 0.8);
+  color: rgba(234, 240, 255, 0.85);
+  border-radius: 999px;
+  padding: 10px 16px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.movieSchedule-select option {
+  background: #0b0f16;
+  color: var(--text);
+}
+
+.movieSchedule-list {
+  display: grid;
+  gap: 12px;
+}
+
+.movieSchedule-card {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.2fr) 1.8fr;
+  gap: 18px;
+  align-items: center;
+  padding: 16px 20px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(16, 19, 28, 0.95);
+}
+
+.movieSchedule-cinemaName {
+  font-size: 17px;
+  font-weight: 800;
+  color: rgba(234, 240, 255, 0.95);
+}
+
+.movieSchedule-cinemaLocation {
+  font-size: 14px;
+  color: rgba(167, 179, 214, 0.9);
+  margin-top: 4px;
+}
+
+.movieSchedule-times {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.movieSchedule-time {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(15, 18, 28, 0.8);
+  color: rgba(234, 240, 255, 0.9);
+  border-radius: 10px;
+  padding: 9px 14px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.movieSchedule-time:hover {
+  border-color: rgba(34, 197, 94, 0.7);
+  background: rgba(34, 197, 94, 0.12);
+}
+
+@media (max-width: 900px) {
+  .movieSchedule-card {
+    grid-template-columns: 1fr;
+  }
+}

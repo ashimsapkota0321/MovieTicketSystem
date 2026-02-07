@@ -1,0 +1,132 @@
+.cinemas-page {
+  width: 100%;
+}
+
+.cinemas-wrap {
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  padding: 0 12px;
+  box-sizing: border-box;
+}
+
+.cinemas-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 26px 0 22px;
+}
+
+.cinemas-title {
+  margin: 0;
+  font-size: clamp(24px, 3vw, 36px);
+  font-weight: 900;
+  color: rgba(234, 240, 255, 0.95);
+}
+
+.cinemas-sub {
+  margin: 8px 0 0;
+  color: rgba(167, 179, 214, 0.9);
+  font-size: 13px;
+}
+
+.cinemas-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 18px;
+}
+
+.cinema-card {
+  position: relative;
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(16, 19, 28, 0.95);
+  border-radius: 18px;
+  padding: 18px;
+  text-align: left;
+  color: var(--text);
+  font-family: inherit;
+  cursor: pointer;
+  box-shadow: 0 18px 45px rgba(0, 0, 0, 0.45);
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+  overflow: hidden;
+}
+
+.cinema-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 18px;
+  border: 1px solid var(--cinema-accent, #00b3ff);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  pointer-events: none;
+}
+
+.cinema-card:hover {
+  transform: translateY(-6px);
+  border-color: rgba(255, 255, 255, 0.16);
+  box-shadow: 0 26px 60px rgba(0, 0, 0, 0.6);
+}
+
+.cinema-card:hover::after {
+  opacity: 0.65;
+}
+
+.cinema-cardTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.cinema-mark {
+  width: 56px;
+  height: 40px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 900;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--cinema-accent, #00b3ff);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.cinema-count {
+  font-size: 11px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(234, 240, 255, 0.8);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.cinema-name {
+  font-size: 16px;
+  font-weight: 800;
+  margin-bottom: 6px;
+}
+
+.cinema-locations {
+  font-size: 12px;
+  color: rgba(167, 179, 214, 0.9);
+}
+
+.cinema-action {
+  margin-top: 16px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--cinema-accent, #00b3ff);
+}
+
+@media (max-width: 720px) {
+  .cinemas-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
