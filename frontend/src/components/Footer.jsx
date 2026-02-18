@@ -39,8 +39,8 @@ export default function Footer() {
             <div className="wf2-footerCol">
               <div className="wf2-footerTitle">Contact</div>
               <div className="wf2-footerSmall">support@meroticket.com</div>
-              <div className="wf2-footerSmall">+977 98XXXXXXXX</div>
-              <div className="wf2-footerSmall">Kathmandu, Nepal</div>
+              <div className="wf2-footerSmall">+977 9826633701</div>
+              <div className="wf2-footerSmall">Pokhara, Nepal</div>
             </div>
           </div>
         </div>

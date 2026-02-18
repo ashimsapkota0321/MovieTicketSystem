@@ -17,14 +17,14 @@ export default function Movies() {
   const navigate = useNavigate();
   const location = useLocation();
   const ctx = safeUseAppContext();
-  const shows = ctx?.shows ?? fallbackShows;
+  const movies = ctx?.movies ?? ctx?.shows ?? fallbackShows;
   const initialTab =
     location?.state?.filter === "soon" || location?.hash === "#coming-soon" ? "soon" : "now";
   const [activeTab, setActiveTab] = useState(initialTab);
   const hideTabs = Boolean(location?.state?.hideTabs);
 
-  const nowShowing = useMemo(() => shows?.filter(Boolean).slice(0, 6), [shows]);
-  const comingSoon = useMemo(() => shows?.filter(Boolean).slice(6, 12), [shows]);
+  const nowShowing = useMemo(() => getNowShowing(movies), [movies]);
+  const comingSoon = useMemo(() => getComingSoon(movies), [movies]);
   const heroSlides = useMemo(
     () => [
       {
@@ -189,7 +189,8 @@ export default function Movies() {
 
 function NowCard({ movie, onBuy }) {
   const title = movie?.title || movie?.name || "Movie Name";
-  const poster = movie?.poster || movie?.posterUrl || movie?.image || gharjwai;
+  const poster =
+    movie?.bannerImage || movie?.poster || movie?.posterUrl || movie?.image || gharjwai;
   const dateLabel =
     formatDateLabel(movie?.releaseDate || movie?.date || movie?.showDate || movie?.premiere) || "13 Feb 2026";
   const ratingLabel =
@@ -262,6 +263,32 @@ function buildMetaLine(movie) {
 function isAdultRating(label) {
   const value = String(label || "").toLowerCase();
   return value.includes("adult") || value.includes("18");
+}
+
+function getNowShowing(items) {
+  if (!Array.isArray(items)) return [];
+  const filtered = items.filter((item) =>
+    isNowShowingStatus(item?.listingStatus || item?.status)
+  );
+  return filtered.length ? filtered : items.filter(Boolean).slice(0, 6);
+}
+
+function getComingSoon(items) {
+  if (!Array.isArray(items)) return [];
+  const filtered = items.filter((item) =>
+    isComingSoonStatus(item?.listingStatus || item?.status)
+  );
+  return filtered.length ? filtered : items.filter(Boolean).slice(6, 12);
+}
+
+function isNowShowingStatus(status) {
+  const value = String(status || "").toLowerCase();
+  return value.includes("now") || value.includes("showing");
+}
+
+function isComingSoonStatus(status) {
+  const value = String(status || "").toLowerCase();
+  return value.includes("coming") || value.includes("soon") || value.includes("premiere");
 }
 
 const fallbackShows = [

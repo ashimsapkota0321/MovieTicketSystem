@@ -1,87 +1,63 @@
-import { createContext } from "react";
-import { useContext } from "react";
-import {useLocation,useNavigate} from 'react-router-dom'
-import axios from "axios";
-import { useState } from "react";
-import {toast} from 'react-hot-toast'
-import {useAuth, useUser} from '@clerk/clerk-react'
-import { useEffect } from "react";
-
-axios.defaults.baseURL = import.meta.env.VITE_BASE_URL;
+import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { fetchCinemas, fetchMovies, fetchShows } from "../lib/catalogApi";
+import { setRuntimeCinemas } from "../lib/cinemas";
 
 const AppContext = createContext();
 
 export const AppProvider = (props) => {
-     const [isAdmin,setisAdmin] = useState(false);
-     const [shows,setShows] = useState([]);
-     const [favorites,setFavorites] = useState([]);
+  const [movies, setMovies] = useState([]);
+  const [showtimes, setShowtimes] = useState([]);
+  const [vendors, setVendors] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
 
-     const {user} = useUser();
-     const {getToken} = useAuth();
-     const location = useLocation();
-     const navigate = useNavigate();
+  const refreshCatalog = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const [movieList, showList, vendorList] = await Promise.all([
+        fetchMovies(),
+        fetchShows(),
+        fetchCinemas(),
+      ]);
 
-     const fetchisAdmin = async() => {
-        try {
-            const {data} = await axios.get('/api/admin/isAdmin', {
-            headers : {
-                Authorization : `Bearer ${await getToken()}`
-            }})
-            setisAdmin(data.isAdmin);
+      setMovies(movieList || []);
+      setShowtimes(showList || []);
+      setVendors(vendorList || []);
 
-            if(!data.isAdmin && location.pathname.startsWith('/admin')) {
-                navigate('/');
-                toast.error('You are not authorized to access admin panel');
-            }
-        } catch (error) {
-            console.log(error);
-        }
-     }
+      if (Array.isArray(vendorList)) {
+        setRuntimeCinemas(
+          vendorList.map((vendor) => ({
+            name: vendor.name,
+            slug: vendor.slug,
+            short: vendor.short,
+            locations: [vendor.theatre || vendor.city || "Kathmandu"],
+            accent: vendor.accent,
+          }))
+        );
+      }
+    } catch (error) {
+      console.log(error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
 
-     const fetchshows = async() => {
-        try {
-            const {data} = await axios.get('/api/show/getmovies')
-            if(data.success) {
-                setShows(data.shows);
-            } else {
-                toast.error(data.message)
-            }
-        } catch (error) {
-            console.log(error);
-        }
-     }
+  useEffect(() => {
+    refreshCatalog();
+  }, [refreshCatalog]);
 
-     const fetchfavorites = async() => {
-        try {
-            const {data} = await axios.get('/api/user/getfavorites',{
-            headers : {
-                Authorization : `Bearer ${await getToken()}`
-            }})
-
-            if(data.success) {
-                setFavorites(data.movies)
-            } else {
-                toast.error(data.message)
-            }
-        } catch (error) {
-            console.log(error);
-        }
-     }
-    
-     useEffect(() => {
-         if(user) {
-            fetchisAdmin();
-            fetchfavorites();
-         }
-     },[user])
-
-     useEffect(() => {
-        fetchshows();
-     },[])
-
-    return <AppContext.Provider value = {{axios,user,navigate,isAdmin,fetchisAdmin,getToken,fetchfavorites,favorites,setFavorites,shows}}>
-        {props.children}
+  return (
+    <AppContext.Provider
+      value={{
+        movies,
+        showtimes,
+        vendors,
+        isLoading,
+        refreshCatalog,
+      }}
+    >
+      {props.children}
     </AppContext.Provider>
-}
+  );
+};
 
 export const useAppContext = () => useContext(AppContext);

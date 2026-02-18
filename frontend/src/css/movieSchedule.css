@@ -12,22 +12,42 @@
 
 .movieSchedule-head {
   display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
+  align-items: center;
   gap: 16px;
-  margin: 24px 0 16px;
+  margin: 14px 0 16px;
+}
+
+.movieSchedule-backBtn {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.08);
+  color: #f2f4fb;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  line-height: 0;
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.movieSchedule-backBtn:hover {
+  background: rgba(255, 255, 255, 0.16);
+  transform: translateX(-2px);
 }
 
 .movieSchedule-title {
   margin: 0;
-  font-size: clamp(26px, 3.6vw, 38px);
+  font-size: clamp(28px, 3.8vw, 40px);
   font-weight: 900;
   color: rgba(234, 240, 255, 0.95);
 }
 
 .movieSchedule-meta {
   margin: 6px 0 0;
-  font-size: 14px;
+  font-size: 15px;
   color: rgba(167, 179, 214, 0.9);
 }
 
@@ -42,18 +62,18 @@
 
 .movieSchedule-dates {
   display: flex;
-  gap: 10px;
+  gap: 12px;
   flex-wrap: wrap;
 }
 
 .movieSchedule-date {
   border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(15, 18, 28, 0.8);
+  background: #3f3f44;
   color: rgba(234, 240, 255, 0.9);
-  border-radius: 10px;
-  padding: 12px 16px;
-  min-width: 78px;
-  font-size: 13px;
+  border-radius: 12px;
+  padding: 14px 18px;
+  min-width: 84px;
+  font-size: 14px;
   display: grid;
   gap: 4px;
   justify-items: center;
@@ -61,7 +81,7 @@
 }
 
 .movieSchedule-date strong {
-  font-size: 14px;
+  font-size: 15px;
   letter-spacing: 0.04em;
 }
 
@@ -79,11 +99,11 @@
 
 .movieSchedule-select {
   border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(15, 18, 28, 0.8);
+  background: #3f3f44;
   color: rgba(234, 240, 255, 0.85);
   border-radius: 999px;
-  padding: 10px 16px;
-  font-size: 14px;
+  padding: 11px 18px;
+  font-size: 15px;
   cursor: pointer;
 }
 
@@ -94,28 +114,29 @@
 
 .movieSchedule-list {
   display: grid;
-  gap: 12px;
+  gap: 16px;
 }
 
 .movieSchedule-card {
   display: grid;
   grid-template-columns: minmax(220px, 1.2fr) 1.8fr;
-  gap: 18px;
+  gap: 20px;
   align-items: center;
-  padding: 16px 20px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(16, 19, 28, 0.95);
+  padding: 20px 24px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: #3f3f44;
+  box-shadow: var(--shadow);
 }
 
 .movieSchedule-cinemaName {
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 800;
   color: rgba(234, 240, 255, 0.95);
 }
 
 .movieSchedule-cinemaLocation {
-  font-size: 14px;
+  font-size: 15px;
   color: rgba(167, 179, 214, 0.9);
   margin-top: 4px;
 }
@@ -123,16 +144,16 @@
 .movieSchedule-times {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 12px;
 }
 
 .movieSchedule-time {
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(15, 18, 28, 0.8);
   color: rgba(234, 240, 255, 0.9);
-  border-radius: 10px;
-  padding: 9px 14px;
-  font-size: 14px;
+  border-radius: 12px;
+  padding: 10px 16px;
+  font-size: 15px;
   font-weight: 700;
   cursor: pointer;
 }

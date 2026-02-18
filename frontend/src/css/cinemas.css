@@ -82,19 +82,26 @@
   margin-bottom: 14px;
 }
 
-.cinema-mark {
-  width: 56px;
-  height: 40px;
-  border-radius: 12px;
+.cinema-avatar {
+  width: 54px;
+  height: 54px;
+  border-radius: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
   font-weight: 900;
-  font-size: 12px;
+  font-size: 13px;
   letter-spacing: 0.08em;
   color: var(--cinema-accent, #00b3ff);
   border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+}
+
+.cinema-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .cinema-count {
@@ -104,6 +111,10 @@
   border: 1px solid rgba(255, 255, 255, 0.12);
   color: rgba(234, 240, 255, 0.8);
   background: rgba(255, 255, 255, 0.04);
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .cinema-name {
@@ -122,6 +133,21 @@
   font-size: 12px;
   font-weight: 700;
   color: var(--cinema-accent, #00b3ff);
+}
+
+.cinemas-empty {
+  grid-column: 1 / -1;
+  padding: 18px;
+  border-radius: 16px;
+  text-align: center;
+  color: rgba(167, 179, 214, 0.9);
+  border: 1px dashed rgba(255, 255, 255, 0.08);
+}
+
+.cinemas-error {
+  margin-top: 14px;
+  color: rgba(248, 113, 113, 0.95);
+  font-size: 12px;
 }
 
 @media (max-width: 720px) {

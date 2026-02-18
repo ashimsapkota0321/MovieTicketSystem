@@ -3,57 +3,21 @@ import "../css/home.css";
 import { useNavigate } from "react-router-dom";
 import { Film, Play } from "lucide-react";
 import { useAppContext } from "../context/Appcontext";
-import BodyHero from "../components/BodyHero";
-import background from "../images/kumari.jpg";
+import HeroSlider from "../components/HeroSlider";
+import CollaboratorsRow from "../components/CollaboratorsRow";
 import gharjwai from "../images/gharjwai.jpg";
 import balidan from "../images/balidan.jpg";
 import degreemaila from "../images/degreemaila.jpg";
 import avengers from "../images/avengers.jpg";
 import jerry from "../images/jerry.jpg";
-import Tiba from "../images/Tiba.jpg";
-import aama from "../images/aama.png"
 
 export default function Home() {
   const navigate = useNavigate();
 
   const ctx = safeUseAppContext();
-  const shows = ctx?.shows ?? fallbackShows;
-  const nowShowing = useMemo(() => shows?.filter(Boolean).slice(0, 5), [shows]);
-  const visibleShows = nowShowing.length ? nowShowing : fallbackShows;
-
-  const heroSlides = useMemo(
-    () => [
-      {
-        title: "Kumari",
-        genre: "Romantic | Dramatic",
-        year: "2018",
-        duration: "2h 8m",
-        desc:
-          "Ramro Movie in Nepal, Actor: Rajesh Hamal, Nikhil Upreti, Late Shree Krishna Shrestha, Rekha Thapa etc.",
-        bg: background,
-      },
-      {
-        title: "Tiba",
-        genre: "Action | Sci-Fi",
-        year: "2021",
-        duration: "3h 1m",
-        desc:
-          "The heroes assemble for a final stand that decides the fate of the universe.",
-        bg: Tiba,
-      },
-      {
-        title: "Aa Bata Aama",
-        genre: "Emotional | Romantic",
-        year: "2025",
-        duration: "3h 1m",
-        desc:
-          "The heroes assemble for a final stand that decides the fate of the universe.",
-        bg: aama,
-      },
-    ],
-    []
-  );
-
+  const movies = ctx?.movies ?? ctx?.shows ?? [];
+  const nowShowing = useMemo(() => getNowShowing(movies), [movies]);
+  const visibleShows = nowShowing.length ? nowShowing : [];
 
 
   const trailers = useMemo(
@@ -87,7 +51,7 @@ export default function Home() {
       },
       {
         image: avengers,
-        url: "https://www.youtube.com/watch?v=6ZfuNTqbHE8",
+        url: "https://www.youtube.com/watch?v=neOasLBWoy0&list=RDGMEM916WJxafRUGgOvd6dVJkeQ&start_radio=1&rv=BN4k9I88D5g",
         title: "Avengers: Endgame Official Trailer",
         channel: "Marvel Studio",
         views: "6.3m views",
@@ -113,13 +77,8 @@ export default function Home() {
   return (
     <div className="wf2-page">
       {/* ===== HERO ===== */}
-      <BodyHero
-        slides={heroSlides}
-        interval={6000}
-        badge="Now Showing"
-        variant="full"
-        cta={{ label: "Buy Ticket", onClick: () => navigate("/movies") }}
-      />
+      <HeroSlider />
+      <CollaboratorsRow />
 
       <section className="home-mediaWrap">
         {/* ===== NOW SHOWING ===== */}
@@ -133,17 +92,21 @@ export default function Home() {
             </div>
 
             <div className="ns-grid">
-              {visibleShows.map((movie) => (
-                <NowCard
-                  key={movie._id || movie.id || movie.title}
-                  movie={movie}
-                  onBuy={() =>
-                    navigate(
-                      `/movie/${movie?._id || movie?.id || encodeURIComponent(movie?.title || movie?.name || "")}`
-                    )
-                  }
-                />
-              ))}
+              {visibleShows.length ? (
+                visibleShows.map((movie) => (
+                  <NowCard
+                    key={movie._id || movie.id || movie.title}
+                    movie={movie}
+                    onBuy={() =>
+                      navigate(
+                        `/movie/${movie?._id || movie?.id || encodeURIComponent(movie?.title || movie?.name || "")}`
+                      )
+                    }
+                  />
+                ))
+              ) : (
+                <div className="text-muted">No now showing movies yet.</div>
+              )}
             </div>
 
             <div className="wf2-center">
@@ -218,7 +181,8 @@ export default function Home() {
 /* ===== Now Showing Card ===== */
 function NowCard({ movie, onBuy }) {
   const title = movie?.title || movie?.name || "Movie Name";
-  const poster = movie?.poster || movie?.posterUrl || movie?.image || gharjwai;
+  const poster =
+    movie?.bannerImage || movie?.poster || movie?.posterUrl || movie?.image || gharjwai;
   const dateLabel =
     formatDateLabel(movie?.releaseDate || movie?.date || movie?.showDate || movie?.premiere) || "13 Feb 2026";
   const ratingLabel =
@@ -306,10 +270,17 @@ function isAdultRating(label) {
   return value.includes("adult") || value.includes("18");
 }
 
-const fallbackShows = [
-  { _id: "1", title: "Gharjwai", poster: gharjwai },
-  { _id: "2", title: "Balidan", poster: balidan },
-  { _id: "3", title: "Degree Maila", poster: degreemaila },
-  { _id: "4", title: "Avengers", poster: avengers },
-  { _id: "5", title: "Jerry: On Top", poster: jerry },
-];
+function getNowShowing(items) {
+  if (!Array.isArray(items)) return [];
+  const filtered = items.filter((item) =>
+    isNowShowingStatus(item?.listingStatus || item?.status)
+  );
+  return filtered.length ? filtered.slice(0, 5) : items.filter(Boolean).slice(0, 5);
+}
+
+function isNowShowingStatus(status) {
+  const value = String(status || "").toLowerCase();
+  return value.includes("now") || value.includes("showing");
+}
+
+// fallback posters are handled in NowCard when data is missing

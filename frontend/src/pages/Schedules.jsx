@@ -10,7 +10,7 @@ import avengers from "../images/avengers.jpg";
 import degreemaila from "../images/degreemaila.jpg";
 import balidan from "../images/balidan.jpg";
 
-const days = [
+const fallbackDays = [
   { label: "Today", date: "Feb 5th", times: ["08:30 AM", "11:00 AM", "02:30 PM", "07:45 PM"] },
   { label: "Fri", date: "06.02", times: ["08:30 AM", "11:00 AM", "05:30 PM"] },
   { label: "Sat", date: "07.02" },
@@ -24,7 +24,8 @@ export default function Schedules() {
   const navigate = useNavigate();
   const { vendor } = useParams();
   const ctx = safeUseAppContext();
-  const shows = ctx?.shows ?? [];
+  const movies = ctx?.movies ?? [];
+  const showtimes = ctx?.showtimes ?? [];
   const [currentTrailer, setCurrentTrailer] = useState("");
   const [isTrailerOpen, setTrailerOpen] = useState(false);
 
@@ -103,48 +104,68 @@ export default function Schedules() {
       },
     ];
 
-    const baseItems =
-      !shows || shows.length === 0
-        ? fallback.map((item, index) => ({
-            ...item,
-            cinemaRaw: item.cinema,
-            index,
-          }))
-        : shows.slice(0, 4).map((show, index) => ({
-            title: show?.title || show?.name || fallback[index]?.title,
-            language: show?.language || fallback[index]?.language,
-            genre: show?.genre || fallback[index]?.genre,
-            duration: show?.duration || fallback[index]?.duration,
-            censor: show?.censor || fallback[index]?.censor,
-            director: show?.director || fallback[index]?.director,
-            desc: show?.desc || fallback[index]?.desc,
-            poster: show?.poster || show?.posterUrl || show?.image || fallback[index]?.poster,
-            trailerUrl:
-              show?.trailerUrl ||
-              show?.trailer ||
-              show?.videoUrl ||
-              show?.youtubeUrl ||
-              show?.youtube ||
-              fallback[index]?.trailerUrl ||
-              trailerUrls[index % trailerUrls.length],
-            cinemaRaw:
-              show?.cinema ||
-              show?.theatre ||
-              show?.vendor ||
-              show?.hall ||
-              show?.cinemaHall ||
-              fallback[index]?.cinema,
-            index,
-          }));
+    if (!showtimes || showtimes.length === 0) {
+      return fallback.map((item, index) => {
+        const fallbackCinema = vendorSlug ? getCinemaBySlug(vendorSlug) : getCinemaFallback(index);
+        const cinemaSlug = resolveCinemaSlug(item.cinema) || fallbackCinema?.slug || "";
+        const cinemaName =
+          getCinemaBySlug(cinemaSlug)?.name || item.cinema || fallbackCinema?.name || "Cinema";
+        return { ...item, cinemaSlug, cinemaName, days: fallbackDays };
+      });
+    }
 
-    return baseItems.map(({ cinemaRaw, index, ...rest }) => {
-      const fallbackCinema = vendorSlug ? getCinemaBySlug(vendorSlug) : getCinemaFallback(index);
-      const cinemaSlug = resolveCinemaSlug(cinemaRaw) || fallbackCinema?.slug || "";
-      const cinemaName =
-        getCinemaBySlug(cinemaSlug)?.name || cinemaRaw || fallbackCinema?.name || "Cinema";
-      return { ...rest, cinemaSlug, cinemaName };
+    const movieIndex = buildMovieIndex(movies);
+    const grouped = new Map();
+
+    showtimes.forEach((show) => {
+      const vendorName = String(show.vendor || show.vendor_name || show.vendorName || show.cinema || "").trim();
+      const showDate = String(show.date || show.show_date || show.showDate || "").trim();
+      const showTime = String(show.start || show.start_time || show.startTime || "").trim();
+      if (!vendorName || !showDate || !showTime) return;
+
+      const movie = resolveMovieForShow(show, movieIndex);
+      const movieTitle = movie?.title || movie?.name || show.movie || show.movie_title || "Movie";
+      const movieKey = String(movie?.id || movie?._id || movieTitle).trim();
+      const key = `${movieKey}__${vendorName.toLowerCase()}`;
+
+      const group = grouped.get(key) || {
+        title: movieTitle,
+        language: movie?.language || movie?.lang || "Nepali",
+        genre: movie?.genre || movie?.category || "",
+        duration: movie?.duration || movie?.runtime || "",
+        censor: movie?.censor || movie?.rating || "",
+        director: movie?.director || "",
+        desc: movie?.description || movie?.overview || movie?.synopsis || "",
+        poster: movie?.poster || movie?.posterUrl || movie?.image || fallback[0]?.poster,
+        trailerUrl:
+          movie?.trailerUrl ||
+          movie?.trailer ||
+          movie?.videoUrl ||
+          movie?.youtubeUrl ||
+          movie?.youtube ||
+          trailerUrls[0],
+        cinemaRaw: vendorName,
+        dates: {},
+      };
+
+      const formattedTime = formatTime(showTime);
+      if (!group.dates[showDate]) {
+        group.dates[showDate] = new Set();
+      }
+      group.dates[showDate].add(formattedTime);
+
+      grouped.set(key, group);
     });
-  }, [shows, vendorSlug]);
+
+    return Array.from(grouped.values()).map((item, index) => {
+      const fallbackCinema = vendorSlug ? getCinemaBySlug(vendorSlug) : getCinemaFallback(index);
+      const cinemaSlug = resolveCinemaSlug(item.cinemaRaw) || fallbackCinema?.slug || "";
+      const cinemaName =
+        getCinemaBySlug(cinemaSlug)?.name || item.cinemaRaw || fallbackCinema?.name || "Cinema";
+      const days = buildDaysFromDates(item.dates);
+      return { ...item, cinemaSlug, cinemaName, days };
+    });
+  }, [movies, showtimes, vendorSlug]);
 
   const visibleItems = useMemo(() => {
     if (!vendorSlug) return scheduleItems;
@@ -213,7 +234,7 @@ export default function Schedules() {
                   <span className="schedule-rightLabel">{item.language.slice(0, 3).toUpperCase()}</span>
                 </div>
                 <div className="schedule-daysRow">
-                  {days.map((day) => (
+                  {(item.days || fallbackDays).map((day) => (
                     <div className="schedule-dayHead" key={`${item.title}-${day.label}-head`}>
                       {day.label}
                       <span>{day.date}</span>
@@ -221,7 +242,7 @@ export default function Schedules() {
                   ))}
                 </div>
                 <div className="schedule-timesRow">
-                  {days.map((day) => (
+                  {(item.days || fallbackDays).map((day) => (
                     <div className="schedule-dayTimes" key={`${item.title}-${day.label}-times`}>
                       {(day.times || []).map((time) => (
                         <button
@@ -291,4 +312,66 @@ function toEmbedUrl(url) {
     if (id) return `https://www.youtube.com/embed/${id}?rel=0`;
   } catch {}
   return url;
+}
+
+function buildMovieIndex(movies) {
+  const index = new Map();
+  (Array.isArray(movies) ? movies : []).forEach((movie) => {
+    if (!movie) return;
+    const id = String(movie.id || movie._id || "").trim();
+    const title = String(movie.title || movie.name || "").trim().toLowerCase();
+    if (id) index.set(id, movie);
+    if (title) index.set(title, movie);
+  });
+  return index;
+}
+
+function resolveMovieForShow(show, movieIndex) {
+  if (!show) return null;
+  const movieId = String(show.movieId || show.movie_id || "").trim();
+  if (movieId && movieIndex.has(movieId)) return movieIndex.get(movieId);
+  const title = String(show.movie || show.movie_title || show.title || show.name || "")
+    .trim()
+    .toLowerCase();
+  if (title && movieIndex.has(title)) return movieIndex.get(title);
+  return null;
+}
+
+function buildDaysFromDates(datesMap) {
+  const entries = Object.entries(datesMap || {});
+  return entries
+    .map(([date, times]) => {
+      const label = formatDayLabel(date);
+      const dateLabel = formatShortDate(date);
+      const timesList = Array.from(times || []).filter(Boolean).sort((a, b) => (a > b ? 1 : -1));
+      const sortKey = new Date(date).getTime();
+      return { label, date: dateLabel, times: timesList, sortKey };
+    })
+    .sort((a, b) => (a.sortKey || 0) - (b.sortKey || 0))
+    .map(({ sortKey, ...rest }) => rest);
+}
+
+function formatDayLabel(dateValue) {
+  const date = new Date(dateValue);
+  if (Number.isNaN(date.getTime())) return "Day";
+  const today = new Date();
+  const isToday = date.toDateString() === today.toDateString();
+  if (isToday) return "Today";
+  return date.toLocaleDateString("en-GB", { weekday: "short" });
+}
+
+function formatShortDate(dateValue) {
+  const date = new Date(dateValue);
+  if (Number.isNaN(date.getTime())) return String(dateValue);
+  return date.toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
+}
+
+function formatTime(value) {
+  if (!value) return "";
+  if (value.toLowerCase().includes("am") || value.toLowerCase().includes("pm")) return value;
+  const [hours, minutes] = value.split(":").map((part) => Number(part));
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) return value;
+  const period = hours >= 12 ? "PM" : "AM";
+  const adjusted = hours % 12 || 12;
+  return `${String(adjusted).padStart(2, "0")}:${String(minutes).padStart(2, "0")} ${period}`;
 }

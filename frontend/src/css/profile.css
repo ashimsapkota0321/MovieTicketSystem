@@ -1,0 +1,679 @@
+.wf2-profilePage {
+  min-height: 100vh;
+  padding: 26px var(--page-pad) 64px;
+  color: var(--text);
+  display: grid;
+  gap: 24px;
+  font-family: var(--font-hero);
+}
+
+.wf2-profilePage:not(.wf2-profilePage--editing) .wf2-profileInputRow {
+  background: #3f3f44;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.wf2-profilePage:not(.wf2-profilePage--editing) .wf2-profileInput {
+  color: rgba(234, 240, 255, 0.85);
+}
+
+.wf2-profileHeader {
+  background: #3f3f44;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom-color: rgba(255, 255, 255, 0.2);
+  border-radius: 16px;
+  padding: 28px;
+  box-shadow: none;
+}
+
+.wf2-profileHeaderMain {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 24px;
+  align-items: center;
+}
+
+.wf2-profileHeaderDetails {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.wf2-profileAvatarWrap {
+  position: relative;
+  --avatar-size: 150px;
+  width: var(--avatar-size);
+  height: var(--avatar-size);
+  min-width: var(--avatar-size);
+  min-height: var(--avatar-size);
+  max-width: var(--avatar-size);
+  max-height: var(--avatar-size);
+  flex: 0 0 var(--avatar-size);
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  isolation: isolate;
+}
+
+.wf2-profileAvatar {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  box-sizing: border-box;
+  aspect-ratio: 1 / 1;
+  background: #3a3f45;
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.14);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  position: relative;
+  z-index: 0;
+}
+
+.wf2-profileAvatar--clickable {
+  cursor: pointer;
+}
+
+.wf2-profileAvatar--clickable:focus-visible {
+  outline: 2px solid rgba(31, 182, 216, 0.8);
+  outline-offset: 4px;
+}
+
+.wf2-profileAvatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  display: block;
+  border-radius: 50%;
+  transform: scale(1.02);
+  transform-origin: center;
+}
+
+.wf2-profileAvatar span {
+  font-size: 32px;
+  font-weight: 900;
+  color: #fff;
+  letter-spacing: 0.04em;
+}
+
+.wf2-profileCamera {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  background: rgba(15, 15, 15, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  display: grid;
+  place-items: center;
+  color: #fff;
+  cursor: pointer;
+  z-index: 2;
+}
+
+.wf2-profileCamera:hover {
+  background: rgba(20, 20, 20, 0.95);
+}
+
+.wf2-profileCamera input {
+  display: none;
+}
+
+.wf2-profileRemovePhoto {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(15, 15, 15, 0.88);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  z-index: 2;
+}
+
+.wf2-profileRemovePhoto:hover {
+  background: rgba(20, 20, 20, 0.95);
+}
+
+.wf2-profileImageModal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  z-index: 999;
+}
+
+.wf2-profileImageDialog {
+  position: relative;
+  max-width: min(92vw, 860px);
+  max-height: 92vh;
+}
+
+.wf2-profileImageFull {
+  max-width: 100%;
+  max-height: 92vh;
+  width: auto;
+  height: auto;
+  display: block;
+  border-radius: 16px;
+  object-fit: contain;
+  background: #0f1116;
+}
+
+.wf2-profileImageClose {
+  position: absolute;
+  top: -14px;
+  right: -14px;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: rgba(10, 10, 10, 0.7);
+  color: #fff;
+  font-size: 18px;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.wf2-profileImageClose:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.wf2-profileHeaderInfo {
+  display: grid;
+  gap: 10px;
+}
+
+.wf2-profileNameRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.wf2-profileName {
+  margin: 0;
+  font-size: clamp(26px, 4vw, 34px);
+  font-weight: 900;
+  color: #fff;
+}
+
+.wf2-profileHeaderActions {
+  display: inline-flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.wf2-profileEditBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #3b3f44;
+  color: #fff;
+  font-weight: 800;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.wf2-profileEditBtn:hover {
+  background: #4a4f56;
+}
+
+.wf2-profileEditBtnSave {
+  background: #1fb6d8;
+  border-color: rgba(31, 182, 216, 0.5);
+  color: #071b20;
+}
+
+.wf2-profileEditBtnSave:hover {
+  background: #16a6c8;
+}
+
+.wf2-profileCancelBtn {
+  padding: 8px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: transparent;
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.wf2-profileCancelBtn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+
+.wf2-profileMetaRow {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  color: rgba(234, 240, 255, 0.85);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.wf2-profileMetaItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wf2-profileMetaItem svg {
+  color: rgba(234, 240, 255, 0.5);
+}
+
+.wf2-profileStatus {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  width: fit-content;
+}
+
+.wf2-profileStatusSuccess {
+  background: rgba(16, 185, 129, 0.2);
+  color: #86efac;
+  border: 1px solid rgba(16, 185, 129, 0.45);
+}
+
+.wf2-profileStatusError {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fecaca;
+  border: 1px solid rgba(239, 68, 68, 0.45);
+}
+
+.wf2-profileDetails {
+  background: #3f3f44;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  padding: 22px;
+  box-shadow: none;
+}
+
+.wf2-profileDetailsHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.wf2-profileDetailsTitle {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 900;
+  color: #fff;
+}
+
+.wf2-profileDetailsHint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.wf2-profileDetailsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.wf2-profileDetailsActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+  flex-wrap: wrap;
+}
+
+.wf2-profileViewValue {
+  display: flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #3f3f44;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: rgba(234, 240, 255, 0.9);
+  font-size: 14px;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.wf2-profileField {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+  color: rgba(234, 240, 255, 0.7);
+  font-weight: 700;
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+
+.wf2-profileInputRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #3f3f44;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.wf2-profileInputRow svg {
+  color: rgba(234, 240, 255, 0.6);
+}
+
+.wf2-profileInputRowLocked {
+  background: #3f3f44;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.wf2-profileInput {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  outline: none;
+  padding: 0;
+}
+
+.wf2-profilePage--editing .wf2-profileInputRow:not(.wf2-profileInputRowLocked) {
+  border-color: rgba(31, 182, 216, 0.45);
+  background: #3f3f44;
+}
+
+.wf2-profileFooter {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.wf2-profileLogout {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #1fb6d8;
+  color: #071b20;
+  font-weight: 800;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.wf2-profileLogout:hover {
+  background: #16a6c8;
+}
+
+@media (max-width: 900px) {
+  .wf2-profileHeaderMain {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    text-align: center;
+  }
+
+  .wf2-profileHeaderInfo {
+    justify-items: center;
+  }
+
+  .wf2-profileNameRow {
+    flex-direction: column;
+  }
+
+  .wf2-profileHeaderActions {
+    justify-content: center;
+  }
+}
+
+@media (max-width: 720px) {
+  .wf2-profileDetailsGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .wf2-profileMetaRow {
+    justify-content: center;
+  }
+
+  .wf2-profileDetailsActions {
+    justify-content: center;
+  }
+}
+
+/* Light theme overrides for vendor/admin panels */
+.vendor-shell .wf2-profilePage,
+.admin-shell .wf2-profilePage {
+  color: var(--vendor-text, #1f2937);
+}
+
+.admin-shell .wf2-profilePage {
+  color: var(--admin-text, #1f2937);
+}
+
+.vendor-shell .wf2-profileHeader,
+.admin-shell .wf2-profileHeader {
+  background: var(--vendor-panel, #ffffff);
+  border: 1px solid var(--vendor-border, #e6eaef);
+  border-bottom-color: var(--vendor-border, #e6eaef);
+  box-shadow: var(--vendor-shadow, 0 18px 30px rgba(15, 23, 42, 0.08));
+}
+
+.admin-shell .wf2-profileHeader {
+  background: var(--admin-panel, #ffffff);
+  border-color: var(--admin-border, #e6eaef);
+  border-bottom-color: var(--admin-border, #e6eaef);
+  box-shadow: var(--admin-shadow, 0 18px 30px rgba(15, 23, 42, 0.08));
+}
+
+.vendor-shell .wf2-profileHeaderDetails,
+.admin-shell .wf2-profileHeaderDetails {
+  border-top: 1px solid var(--vendor-border, #e6eaef);
+}
+
+.admin-shell .wf2-profileHeaderDetails {
+  border-top-color: var(--admin-border, #e6eaef);
+}
+
+.vendor-shell .wf2-profileName,
+.admin-shell .wf2-profileName {
+  color: var(--vendor-text, #1f2937);
+}
+
+.admin-shell .wf2-profileName {
+  color: var(--admin-text, #1f2937);
+}
+
+.vendor-shell .wf2-profileDetailsTitle,
+.admin-shell .wf2-profileDetailsTitle {
+  color: var(--vendor-text, #1f2937);
+}
+
+.admin-shell .wf2-profileDetailsTitle {
+  color: var(--admin-text, #1f2937);
+}
+
+.vendor-shell .wf2-profileDetailsHint,
+.vendor-shell .wf2-profileField,
+.vendor-shell .wf2-profileMetaRow {
+  color: var(--vendor-muted, #7b8794);
+}
+
+.admin-shell .wf2-profileDetailsHint,
+.admin-shell .wf2-profileField,
+.admin-shell .wf2-profileMetaRow {
+  color: var(--admin-muted, #7b8794);
+}
+
+.vendor-shell .wf2-profileMetaItem svg,
+.admin-shell .wf2-profileMetaItem svg {
+  color: var(--vendor-muted, #7b8794);
+}
+
+.admin-shell .wf2-profileMetaItem svg {
+  color: var(--admin-muted, #7b8794);
+}
+
+.vendor-shell .wf2-profileAvatar,
+.admin-shell .wf2-profileAvatar {
+  background: var(--vendor-panel, #ffffff);
+  color: var(--vendor-text, #1f2937);
+  box-shadow: 0 0 0 2px var(--vendor-border, #e6eaef);
+}
+
+.admin-shell .wf2-profileAvatar {
+  background: var(--admin-panel, #ffffff);
+  color: var(--admin-text, #1f2937);
+  box-shadow: 0 0 0 2px var(--admin-border, #e6eaef);
+}
+
+.vendor-shell .wf2-profileAvatar span,
+.admin-shell .wf2-profileAvatar span {
+  color: #111827;
+}
+
+.vendor-shell .wf2-profileInputRow,
+.vendor-shell .wf2-profileViewValue,
+.vendor-shell .wf2-profileInputRowLocked {
+  background: var(--vendor-panel, #ffffff);
+  border: 1px solid var(--vendor-border, #e6eaef);
+  color: var(--vendor-text, #1f2937);
+}
+
+.vendor-shell .wf2-profilePage--editing .wf2-profileInputRow {
+  background: var(--vendor-panel, #ffffff);
+}
+
+.admin-shell .wf2-profileInputRow,
+.admin-shell .wf2-profileViewValue,
+.admin-shell .wf2-profileInputRowLocked {
+  background: var(--admin-panel, #ffffff);
+  border: 1px solid var(--admin-border, #e6eaef);
+  color: var(--admin-text, #1f2937);
+}
+
+.admin-shell .wf2-profilePage--editing .wf2-profileInputRow {
+  background: var(--admin-panel, #ffffff);
+}
+.vendor-shell .wf2-profileInputRow svg,
+.admin-shell .wf2-profileInputRow svg {
+  color: var(--vendor-muted, #7b8794);
+}
+
+.admin-shell .wf2-profileInputRow svg {
+  color: var(--admin-muted, #7b8794);
+}
+
+.vendor-shell .wf2-profileInput,
+.admin-shell .wf2-profileInput {
+  color: var(--vendor-text, #1f2937);
+}
+
+.admin-shell .wf2-profileInput {
+  color: var(--admin-text, #1f2937);
+}
+
+.vendor-shell .wf2-profileInput:disabled,
+.admin-shell .wf2-profileInput:disabled {
+  color: var(--vendor-text, #1f2937);
+  opacity: 0.75;
+}
+
+.admin-shell .wf2-profileInput:disabled {
+  color: var(--admin-text, #1f2937);
+}
+
+.vendor-shell .wf2-profilePage--editing .wf2-profileInputRow:not(.wf2-profileInputRowLocked),
+.admin-shell .wf2-profilePage--editing .wf2-profileInputRow:not(.wf2-profileInputRowLocked) {
+  border-color: rgba(16, 185, 129, 0.45);
+}
+
+.vendor-shell .wf2-profileEditBtn,
+.admin-shell .wf2-profileEditBtn {
+  background: var(--vendor-panel, #ffffff);
+  border: 1px solid var(--vendor-border, #e6eaef);
+  color: var(--vendor-text, #1f2937);
+}
+
+.admin-shell .wf2-profileEditBtn {
+  background: var(--admin-panel, #ffffff);
+  border-color: var(--admin-border, #e6eaef);
+  color: var(--admin-text, #1f2937);
+}
+
+.vendor-shell .wf2-profileEditBtn:hover,
+.admin-shell .wf2-profileEditBtn:hover {
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.vendor-shell .wf2-profileEditBtnSave,
+.vendor-shell .wf2-profileLogout {
+  background: var(--vendor-accent, #17b888);
+  border-color: var(--vendor-accent, #17b888);
+  color: #fff;
+}
+
+.admin-shell .wf2-profileEditBtnSave,
+.admin-shell .wf2-profileLogout {
+  background: var(--admin-accent, #17b888);
+  border-color: var(--admin-accent, #17b888);
+  color: #fff;
+}
+
+.vendor-shell .wf2-profileEditBtnSave:hover,
+.vendor-shell .wf2-profileLogout:hover {
+  background: var(--vendor-accent-2, #0ea971);
+}
+
+.admin-shell .wf2-profileEditBtnSave:hover,
+.admin-shell .wf2-profileLogout:hover {
+  background: var(--admin-accent-2, #0ea971);
+}
+
+.vendor-shell .wf2-profileCancelBtn,
+.admin-shell .wf2-profileCancelBtn {
+  border: 1px solid var(--vendor-border, #e6eaef);
+  color: var(--vendor-text, #1f2937);
+  background: transparent;
+}
+
+.admin-shell .wf2-profileCancelBtn {
+  border-color: var(--admin-border, #e6eaef);
+  color: var(--admin-text, #1f2937);
+}
+
+.vendor-shell .wf2-profileCancelBtn:hover,
+.admin-shell .wf2-profileCancelBtn:hover {
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.vendor-shell .wf2-profileStatusSuccess,
+.admin-shell .wf2-profileStatusSuccess {
+  background: rgba(16, 185, 129, 0.14);
+  color: #0f9b6c;
+  border-color: rgba(16, 185, 129, 0.35);
+}
+
+.vendor-shell .wf2-profileStatusError,
+.admin-shell .wf2-profileStatusError {
+  background: rgba(239, 68, 68, 0.14);
+  color: #dc2626;
+  border-color: rgba(239, 68, 68, 0.35);
+}

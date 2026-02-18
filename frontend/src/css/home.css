@@ -1,7 +1,7 @@
 .wf2-page{
   width:100%;
   min-height:100vh;
-  padding: 0.5px var(--page-pad) 80px;
+  padding: 0 var(--page-pad) 80px;
   box-sizing: border-box;
   background: transparent;
   color: var(--text);
@@ -129,6 +129,17 @@
   padding:0;
   display:block;
   background: #0b0e14;
+  cursor: grab;
+  touch-action: pan-y;
+}
+
+.wf2-bodyHeroDragging{
+  cursor: grabbing;
+  user-select: none;
+}
+
+.wf2-bodyHeroDragging .wf2-bodyHeroTrack{
+  transition: none;
 }
 
 .wf2-bodyHeroTrack{
@@ -149,6 +160,10 @@
   background: #0b0e14;
 }
 
+.wf2-bodyHeroSlideClickable {
+  cursor: pointer;
+}
+
 .wf2-bodyHeroSlide::before{
   content:"";
   position:absolute;
@@ -165,7 +180,7 @@
 }
 
 .wf2-bodyHeroFull{
-  min-height: clamp(420px, calc(100vh - 200px), 760px);
+  min-height: clamp(420px, calc(100vh - 180px), 760px);
   width: 100vw;
   max-width: 100vw;
   border-radius: 0;
@@ -173,7 +188,12 @@
   box-shadow: none;
   margin-left: calc(50% - 50vw);
   margin-right: calc(50% - 50vw);
+  margin-top: -1px;
   padding: 0;
+}
+
+.wf2-bodyHeroFull .wf2-bodyHeroSlide::before{
+  inset: -1px;
 }
 
 .wf2-bodyHeroFull .wf2-bodyHeroSlide{
@@ -261,6 +281,12 @@
 
 .dot:hover{ transform:scale(1.1); }
 
+.dot:focus,
+.dot:focus-visible{
+  outline: none;
+  box-shadow: none;
+}
+
 .dot.active{
   background:#13b0d6;
   border-color:#13b0d6;
@@ -290,7 +316,7 @@
   .wf2-bodyHero{ min-height:280px; }
   .wf2-bodyHeroSlide{ padding:28px; }
   .wf2-bodyHeroFull{
-    min-height: clamp(320px, calc(100vh - 220px), 560px);
+    min-height: clamp(320px, calc(100vh - 180px), 560px);
     padding: 0;
   }
   .wf2-bodyHeroFull .wf2-bodyHeroSlide{
@@ -587,10 +613,10 @@
 .movies-page .ns-cardInfo{
   position: relative;
   background-image:
-    repeating-linear-gradient(90deg, rgba(255,255,255,0.35) 0 14px, transparent 14px 24px),
+    repeating-linear-gradient(90deg, rgba(255,255,255,0.35) 0 24px, transparent 24px 40px),
     linear-gradient(#3f3f44, #3f3f44);
-  background-size: 24px 8px, 100% 100%;
-  background-position: center 6px, center;
+  background-size: 40px 4px, 100% 100%;
+  background-position: center 4px, center;
   background-repeat: repeat-x, repeat;
   padding: 30px 18px 26px;
   border-top: none;
@@ -602,7 +628,7 @@
 .movies-page .ns-cardInfo::after{
   content: "";
   position: absolute;
-  top: 6px;
+  top: 4px;
   width: 34px;
   height: 34px;
   border-radius: 50%;
@@ -649,10 +675,10 @@
   position: relative;
   background-color: #3f3f44;
   background-image:
-    repeating-linear-gradient(90deg, rgba(255,255,255,0.35) 0 14px, transparent 14px 24px),
+    repeating-linear-gradient(90deg, rgba(255,255,255,0.35) 0 24px, transparent 24px 40px),
     linear-gradient(#3f3f44, #3f3f44);
-  background-size: 24px 8px, 100% 100%;
-  background-position: center 6px, center;
+  background-size: 40px 4px, 100% 100%;
+  background-position: center 4px, center;
   background-repeat: repeat-x, repeat;
   padding: 30px 18px 26px;
   border-top: none;
@@ -662,7 +688,7 @@
 .home-nowshowing .ns-cardInfo::after{
   content: "";
   position: absolute;
-  top: 6px;
+  top: 4px;
   width: 34px;
   height: 34px;
   border-radius: 50%;

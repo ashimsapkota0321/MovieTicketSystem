@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { Heart, Play, Star } from "lucide-react";
 
@@ -17,10 +17,14 @@ export default function MovieDetails() {
   const location = useLocation();
 
   const ctx = safeUseAppContext();
-  const shows = ctx?.shows ?? fallbackShows;
+  const shows = ctx?.movies ?? ctx?.shows ?? fallbackShows;
 
   const movie = useMemo(() => findMovie(shows, id) ?? fallbackShows[0], [shows, id]);
   const isComingSoon = Boolean(location?.state?.variant === "soon" || location?.state?.isComingSoon);
+  const [currentTrailer, setCurrentTrailer] = useState("");
+  const [isTrailerOpen, setTrailerOpen] = useState(false);
+
+  const trailerUrl = resolveTrailerUrl(movie) || fallbackTrailerUrls[0];
 
   const title = movie?.title || movie?.name || "Movie Title";
   const poster = movie?.poster || movie?.posterUrl || movie?.image || gharjwai;
@@ -66,6 +70,16 @@ export default function MovieDetails() {
   const directorLabel = getDirectorLabel(movie, crew) || "TBA";
   const castLabel = getCastLabel(cast) || "TBA";
   const trailerLang = getTrailerLang(language);
+  const openTrailer = (url) => {
+    if (!url) return;
+    setCurrentTrailer(url);
+    setTrailerOpen(true);
+  };
+
+  const closeTrailer = () => {
+    setTrailerOpen(false);
+  };
+
   const infoRows = [
     { label: "Original Title", value: originalTitle },
     { label: "Release Date", value: releaseValue },
@@ -79,12 +93,17 @@ export default function MovieDetails() {
     {
       label: "Trailer",
       value: (
-        <div className="md-soonTrailer">
+        <button
+          className="md-soonTrailer"
+          type="button"
+          onClick={() => openTrailer(trailerUrl)}
+          aria-label="Play trailer"
+        >
           <span className="md-soonPlay">
             <Play size={12} />
           </span>
           <span className="md-soonTrailerText">{trailerLang}</span>
-        </div>
+        </button>
       ),
     },
   ];
@@ -138,7 +157,12 @@ export default function MovieDetails() {
                 <div className="md-meta">{metaLine}</div>
 
                 <div className="md-actions">
-                  <button className="md-btn md-btnGhost" type="button">
+                  <button
+                    className="md-btn md-btnGhost"
+                    type="button"
+                    onClick={() => openTrailer(trailerUrl)}
+                    disabled={!trailerUrl}
+                  >
                     <span className="md-btnIcon">
                       <Play size={14} />
                     </span>
@@ -220,6 +244,28 @@ export default function MovieDetails() {
           </>
         )}
       </div>
+      {isTrailerOpen ? (
+        <div className="md-trailerModal" role="dialog" aria-modal="true">
+          <div className="md-trailerCard">
+            <button
+              className="md-trailerClose"
+              type="button"
+              onClick={closeTrailer}
+              aria-label="Close trailer"
+            >
+              ×
+            </button>
+            <div className="md-trailerFrame">
+              <iframe
+                src={toEmbedUrl(currentTrailer)}
+                title="Trailer"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                allowFullScreen
+              />
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -348,6 +394,43 @@ function getTrailerLang(language) {
   if (!first) return "ENG";
   return first.slice(0, 3).toUpperCase();
 }
+
+function resolveTrailerUrl(movie) {
+  if (!movie) return "";
+  const url =
+    movie.trailerUrl ||
+    movie.trailer ||
+    movie.videoUrl ||
+    movie.youtubeUrl ||
+    movie.youtube ||
+    movie.trailer_link ||
+    movie.trailerLink ||
+    movie.promoUrl;
+  if (typeof url === "string") return url;
+  if (url && typeof url === "object") {
+    return url.url || url.link || "";
+  }
+  return "";
+}
+
+function toEmbedUrl(url) {
+  if (!url) return "";
+  try {
+    const match = url.match(/(?:v=)([0-9A-Za-z_-]{11})(?:[&?]|$)\s*/);
+    const shortMatch = url.match(/youtu\.be\/([0-9A-Za-z_-]{11})/);
+    const match2 = url.match(/\/([0-9A-Za-z_-]{11})(?:\?|$)/);
+    const id = (match && match[1]) || (shortMatch && shortMatch[1]) || (match2 && match2[1]);
+    if (id) return `https://www.youtube.com/embed/${id}?rel=0`;
+  } catch {}
+  return url;
+}
+
+const fallbackTrailerUrls = [
+  "https://www.youtube.com/watch?v=1WajDWLXuVU",
+  "https://www.youtube.com/watch?v=ZtZSSgDDXrk",
+  "https://www.youtube.com/watch?v=Sy5x1Nwm4mw",
+  "https://www.youtube.com/watch?v=6ZfuNTqbHE8",
+];
 
 const fallbackShows = [
   { _id: "1", title: "Gharjwai", poster: gharjwai },

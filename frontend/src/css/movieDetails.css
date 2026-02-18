@@ -112,6 +112,22 @@
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.18em;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.md-soonTrailer:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.md-soonTrailer:disabled .md-soonPlay {
+  border-color: rgba(255, 255, 255, 0.35);
+  color: rgba(255, 255, 255, 0.6);
+  box-shadow: none;
 }
 
 .md-soonPlay {
@@ -155,6 +171,65 @@
   color: var(--md-soonAccent);
 }
 
+.md-trailerModal {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.7);
+  padding: 24px;
+  z-index: 999;
+}
+
+.md-trailerCard {
+  width: min(960px, 100%);
+  background: #14161c;
+  border: 1px solid var(--md-border);
+  border-radius: 18px;
+  padding: 18px;
+  position: relative;
+  box-shadow: 0 28px 70px rgba(0, 0, 0, 0.6);
+}
+
+.md-trailerClose {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(0, 0, 0, 0.4);
+  color: #fff;
+  font-size: 20px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.md-trailerClose:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.md-trailerFrame {
+  position: relative;
+  width: 100%;
+  padding-top: 56.25%;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.md-trailerFrame iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+}
+
 .md-hero {
   position: relative;
   display: grid;
@@ -168,7 +243,7 @@
   content: "";
   position: absolute;
   inset: -30px -20px -40px -20px;
-  background: radial-gradient(420px 320px at 40% 30%, rgba(255, 77, 109, 0.24), transparent 70%);
+  background: none;
   z-index: 0;
 }
 
@@ -200,7 +275,7 @@
   font-size: 12px;
   letter-spacing: 0.2em;
   text-transform: uppercase;
-  color: var(--md-accent);
+  color: var(--md-muted);
   font-weight: 800;
 }
 
@@ -506,10 +581,10 @@
 .md-likeGrid .ns-cardInfo{
   position: relative;
   background-image:
-    repeating-linear-gradient(90deg, rgba(255,255,255,0.35) 0 14px, transparent 14px 24px),
+    repeating-linear-gradient(90deg, rgba(255,255,255,0.35) 0 24px, transparent 24px 40px),
     linear-gradient(#3f3f44, #3f3f44);
-  background-size: 24px 8px, 100% 100%;
-  background-position: center 6px, center;
+  background-size: 40px 4px, 100% 100%;
+  background-position: center 4px, center;
   background-repeat: repeat-x, repeat;
   padding: 30px 18px 26px;
   border-top: none;
@@ -519,7 +594,7 @@
 .md-likeGrid .ns-cardInfo::after{
   content: "";
   position: absolute;
-  top: 6px;
+  top: 4px;
   width: 34px;
   height: 34px;
   border-radius: 50%;

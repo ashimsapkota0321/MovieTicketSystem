@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { ChevronDown, Search, Ticket } from "lucide-react";
+import { ChevronDown, Search, User } from "lucide-react";
 import { useAppContext } from "../context/Appcontext";
 import logo from "../images/logo.png";
 import "../css/layout.css";
@@ -21,6 +21,7 @@ export default function Header() {
   const [selectedDate, setSelectedDate] = useState("Select Date");
   const [selectedTime, setSelectedTime] = useState("Select Time");
   const [searchTerm, setSearchTerm] = useState("");
+  const [storedUser, setStoredUser] = useState(() => getStoredUser());
   const isCinemaSelected = !selectedCinema.startsWith("Select");
   const isMovieSelected = !selectedMovie.startsWith("Select");
   const isDateSelected = !selectedDate.startsWith("Select");
@@ -86,12 +87,33 @@ export default function Header() {
     }
   }, [openSelect, cinemaLocked, movieLocked, dateLocked, timeLocked]);
 
+  useEffect(() => {
+    const handleUserUpdate = () => {
+      setStoredUser(getStoredUser());
+    };
+    window.addEventListener("storage", handleUserUpdate);
+    window.addEventListener("mt:user-updated", handleUserUpdate);
+    return () => {
+      window.removeEventListener("storage", handleUserUpdate);
+      window.removeEventListener("mt:user-updated", handleUserUpdate);
+    };
+  }, []);
+
   const ctx = safeUseAppContext();
-  const user =
-    ctx?.user ??
-    (typeof window !== "undefined" && localStorage.getItem("user")
-      ? JSON.parse(localStorage.getItem("user"))
-      : null);
+  const user = ctx?.user ?? storedUser;
+  const displayName = getUserDisplayName(user);
+  const username = getUserUsername(user);
+  const initials = getUserInitials(displayName || username);
+  const avatarSrc = getUserAvatar(user);
+
+  const handleLogout = () => {
+    localStorage.removeItem("user");
+    setStoredUser(null);
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event("mt:user-updated"));
+    }
+    navigate("/login");
+  };
 
   const SelectField = ({ id, label, value, options, onChange, disabled }) => {
     const isOpen = !disabled && openSelect === id;
@@ -244,15 +266,46 @@ export default function Header() {
             Sign in
           </button>
         ) : (
-          <button
-            className="wf2-btn wf2-btnPrimary wf2-btnPill"
-            onClick={() => {
-              localStorage.removeItem("user");
-              navigate("/login");
-            }}
-          >
-            Logout
-          </button>
+          <div className="wf2-navItem wf2-navDropdown wf2-userDropdown">
+            <button
+              className="wf2-userBtn"
+              type="button"
+              onClick={() => navigate("/profile")}
+              aria-label="Account menu"
+              title={displayName || "Profile"}
+            >
+              <span className="wf2-userGreeting">
+                <span className="wf2-userHello">{getTimeGreeting()}</span>
+                <span className="wf2-userName">{username || "User"}</span>
+              </span>
+              <span className="wf2-userAvatar">
+                {avatarSrc ? (
+                  <img src={avatarSrc} alt="Profile avatar" />
+                ) : initials ? (
+                  <span className="wf2-userInitials">{initials}</span>
+                ) : (
+                  <User size={16} />
+                )}
+              </span>
+              <ChevronDown size={18} />
+            </button>
+            <div className="wf2-navMenu wf2-userMenu" role="menu">
+              <button
+                className="wf2-navMenuItem"
+                type="button"
+                onClick={() => navigate("/profile")}
+              >
+                PROFILE
+              </button>
+              <button
+                className="wf2-navMenuItem"
+                type="button"
+                onClick={handleLogout}
+              >
+                LOGOUT
+              </button>
+            </div>
+          </div>
         )}
       </div>
 
@@ -413,4 +466,70 @@ function safeUseAppContext() {
 function isActive(path, target) {
   if (target === "/") return path === "/" || path === "/home" || path === "/dashboard";
   return path.startsWith(target);
+}
+
+function getStoredUser() {
+  if (typeof window === "undefined") return null;
+  const raw = localStorage.getItem("user");
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function getUserDisplayName(user) {
+  if (!user) return "";
+  const parts = [user.first_name, user.middle_name, user.last_name].filter(Boolean);
+  if (parts.length) return parts.join(" ");
+  if (user.name) return user.name;
+  if (user.username) return user.username;
+  if (user.email) return user.email;
+  if (user.phone_number) return user.phone_number;
+  if (user.phone) return user.phone;
+  return "";
+}
+
+function getUserUsername(user) {
+  if (!user) return "";
+  if (user.username) return user.username;
+  if (user.email) return user.email.split("@")[0];
+  if (user.phone_number) return user.phone_number;
+  if (user.phone) return user.phone;
+  return "";
+}
+
+function getUserInitials(value) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return "";
+  const parts = trimmed.split(/\s+/);
+  if (parts.length === 1) {
+    return parts[0].slice(0, 3).toUpperCase();
+  }
+  return parts
+    .slice(0, 3)
+    .map((part) => part[0])
+    .join("")
+    .toUpperCase();
+}
+
+function getTimeGreeting() {
+  const hour = new Date().getHours();
+  if (hour < 12) return "Good Morning,";
+  if (hour < 18) return "Good Afternoon,";
+  return "Good Evening,";
+}
+
+function getUserAvatar(user) {
+  if (!user) return "";
+  return (
+    user.avatar ||
+    user.avatarUrl ||
+    user.profile_image ||
+    user.profileImage ||
+    user.photo ||
+    user.image ||
+    ""
+  );
 }

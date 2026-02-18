@@ -1,0 +1,49 @@
+.qfx-collaborators {
+  width: 100%;
+  padding: 18px var(--page-pad) 0;
+}
+
+.qfx-collaborators-inner {
+  display: flex;
+  gap: 28px;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  padding: 18px 22px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 18px;
+  backdrop-filter: blur(10px);
+}
+
+.qfx-collaborator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 10px;
+  border-radius: 12px;
+  transition: transform 0.2s ease;
+}
+
+.qfx-collaborator:hover {
+  transform: translateY(-2px);
+}
+
+.qfx-collaborator-logo {
+  height: 38px;
+  width: auto;
+  object-fit: contain;
+  filter: brightness(0) invert(1);
+  opacity: 0.85;
+}
+
+@media (max-width: 640px) {
+  .qfx-collaborators-inner {
+    justify-content: flex-start;
+    overflow-x: auto;
+  }
+
+  .qfx-collaborator-logo {
+    height: 32px;
+  }
+}

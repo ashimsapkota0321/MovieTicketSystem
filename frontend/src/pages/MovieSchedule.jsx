@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { ChevronLeft } from "lucide-react";
 import "../css/movieSchedule.css";
 import { useAppContext } from "../context/Appcontext";
 import { cinemaVendors } from "../lib/cinemas";
@@ -12,10 +13,16 @@ import avengers from "../images/avengers.jpg";
 export default function MovieSchedule() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const ctx = safeUseAppContext();
-  const shows = ctx?.shows ?? fallbackShows;
+  const shows = ctx?.movies ?? ctx?.shows ?? fallbackShows;
+  const showtimes = ctx?.showtimes ?? [];
+  const stateMovie = location?.state?.movie || null;
 
-  const movie = useMemo(() => findMovie(shows, id) ?? fallbackShows[0], [shows, id]);
+  const movie = useMemo(
+    () => stateMovie || findMovie(shows, id) || fallbackShows[0],
+    [stateMovie, shows, id]
+  );
   const title = movie?.title || movie?.name || "Movie Title";
   const duration = toText(movie?.duration) || "2h 10m";
   const genre = toText(movie?.genre || movie?.category || movie?.type) || "Action, Comedy";
@@ -27,13 +34,26 @@ export default function MovieSchedule() {
   const [priceRange, setPriceRange] = useState("all");
   const [preferredTime, setPreferredTime] = useState("all");
 
-  const dateOptions = useMemo(() => buildDateOptions(7), []);
-  const showtimeRows = useMemo(() => buildShowtimeRows(cinemaVendors), []);
+  const movieShowDates = useMemo(() => collectShowDates(showtimes, movie), [showtimes, movie]);
+  const dateOptions = useMemo(() => buildDateOptions(7, movieShowDates), [movieShowDates]);
+  const activeDateValue = dateOptions[activeDate]?.iso || "";
+  const showtimeRows = useMemo(() => {
+    const rows = buildShowtimeRowsFromShows(showtimes, movie, activeDateValue, cinemaVendors);
+    return rows.length ? rows : buildShowtimeRows(cinemaVendors);
+  }, [showtimes, movie, activeDateValue]);
 
   return (
     <div className="wf2-page movieSchedule-page">
       <div className="wf2-container movieSchedule-wrap">
         <div className="movieSchedule-head">
+          <button
+            className="movieSchedule-backBtn"
+            type="button"
+            onClick={() => navigate(-1)}
+            aria-label="Go back"
+          >
+            <ChevronLeft size={18} />
+          </button>
           <div>
             <h2 className="movieSchedule-title">{title}</h2>
             <p className="movieSchedule-meta">{metaLine}</p>
@@ -142,25 +162,35 @@ function toText(value) {
   return String(value).trim();
 }
 
-function buildDateOptions(count) {
+function buildDateOptions(count, extraDates = []) {
   const today = new Date();
-  return Array.from({ length: count }, (_, index) => {
+  const baseDates = Array.from({ length: count }, (_, index) => {
     const date = new Date(today);
     date.setDate(today.getDate() + index);
-    const label =
-      index === 0
-        ? "Today"
-        : date.toLocaleDateString("en-GB", { weekday: "short" });
-    const dateLabel = date.toLocaleDateString("en-GB", {
-      day: "2-digit",
-      month: "short",
-    });
-    return {
-      key: `${label}-${dateLabel}`,
-      label,
-      date: dateLabel,
-    };
+    return date.toISOString().slice(0, 10);
   });
+
+  const uniqueDates = new Set([...baseDates, ...extraDates.filter(Boolean)]);
+
+  return Array.from(uniqueDates)
+    .map((iso) => {
+      const date = new Date(iso);
+      const isToday = date.toDateString() === today.toDateString();
+      const label = isToday ? "Today" : date.toLocaleDateString("en-GB", { weekday: "short" });
+      const dateLabel = date.toLocaleDateString("en-GB", {
+        day: "2-digit",
+        month: "short",
+      });
+      return {
+        key: `${label}-${dateLabel}-${iso}`,
+        label,
+        date: dateLabel,
+        iso,
+        sortKey: date.getTime(),
+      };
+    })
+    .sort((a, b) => (a.sortKey || 0) - (b.sortKey || 0))
+    .map(({ sortKey, ...rest }) => rest);
 }
 
 function buildShowtimeRows(vendors) {
@@ -175,6 +205,81 @@ function buildShowtimeRows(vendors) {
     location: vendor.locations[0] || "Kathmandu",
     times: timeSets[index % timeSets.length],
   }));
+}
+
+function collectShowDates(shows, movie) {
+  if (!Array.isArray(shows) || !movie) return [];
+  const dates = new Set();
+  shows.forEach((show) => {
+    if (!matchesMovie(show, movie)) return;
+    const value = String(show.date || show.show_date || show.showDate || "").trim();
+    if (value) dates.add(value);
+  });
+  return Array.from(dates);
+}
+
+function buildShowtimeRowsFromShows(shows, movie, activeDate, vendors) {
+  if (!Array.isArray(shows) || !movie) return [];
+  const grouped = new Map();
+  shows.forEach((show) => {
+    if (!matchesMovie(show, movie)) return;
+    const showDate = String(show.date || show.show_date || show.showDate || "").trim();
+    if (activeDate && showDate && showDate !== activeDate) return;
+    const vendorName = String(show.vendor || show.vendor_name || show.vendorName || show.cinema || "").trim();
+    if (!vendorName) return;
+    const key = vendorName.toLowerCase();
+    const startTime = String(show.start || show.start_time || show.startTime || "").trim();
+    if (!startTime) return;
+    const formattedTime = formatTime(startTime);
+    const existing = grouped.get(key);
+    if (existing) {
+      if (!existing.times.includes(formattedTime)) {
+        existing.times.push(formattedTime);
+      }
+      return;
+    }
+    const vendorInfo =
+      vendors.find((vendor) => vendor.name.toLowerCase() === vendorName.toLowerCase()) || null;
+    grouped.set(key, {
+      vendor: vendorInfo || { name: vendorName, slug: key },
+      location:
+        vendorInfo?.locations?.[0] ||
+        show.city ||
+        show.location ||
+        show.theatre ||
+        "Kathmandu",
+      times: [formattedTime],
+    });
+  });
+  return Array.from(grouped.values()).map((row) => ({
+    ...row,
+    times: row.times.sort((a, b) => (a > b ? 1 : -1)),
+  }));
+}
+
+function matchesMovie(show, movie) {
+  if (!show || !movie) return false;
+  const movieId = String(movie.id || movie._id || "").trim();
+  const showMovieId = String(show.movieId || show.movie_id || "").trim();
+  if (movieId && showMovieId && movieId === showMovieId) return true;
+  const showTitle = String(show.movie || show.movie_title || show.title || show.name || "")
+    .trim()
+    .toLowerCase();
+  const movieTitle = String(movie.title || movie.name || "")
+    .trim()
+    .toLowerCase();
+  if (!showTitle || !movieTitle) return false;
+  return showTitle === movieTitle;
+}
+
+function formatTime(value) {
+  if (!value) return "";
+  if (value.toLowerCase().includes("am") || value.toLowerCase().includes("pm")) return value;
+  const [hours, minutes] = value.split(":").map((part) => Number(part));
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) return value;
+  const period = hours >= 12 ? "PM" : "AM";
+  const adjusted = hours % 12 || 12;
+  return `${String(adjusted).padStart(2, "0")}:${String(minutes).padStart(2, "0")} ${period}`;
 }
 
 const fallbackShows = [

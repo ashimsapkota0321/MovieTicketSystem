@@ -30,7 +30,7 @@
   grid-template-columns: 1.3fr 1fr;
   max-width: 1200px;
   width: 100%;
-  background: #ffffff;
+  background: #3f3f44;
   border-radius: 20px;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
   overflow: hidden;
@@ -44,30 +44,36 @@
   display: flex;
   flex-direction: column;
   position: relative;
+  background: #3f3f44;
+  color: rgba(234, 240, 255, 0.92);
 }
 
 /* Logo */
 .mt-logo {
-  width: 100px;
-  height: 100px;
+  width: 112px;
+  height: 112px;
   object-fit: contain;
   position: absolute;
   top: 20px;
   left: 20px;
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 /* Titles */
 .mt-title {
   font-size: 32px;
   font-weight: 700;
-  color: #111827;
+  color: #f2f4fb;
   margin-bottom: 8px;
-  margin-top: 60px;
+  margin-top: 92px;
 }
 
 .mt-subtitle {
   font-size: 15px;
-  color: #6b7280;
+  color: rgba(214, 224, 246, 0.75);
   margin-bottom: 32px;
 }
 
@@ -85,13 +91,13 @@
   gap: 6px;
   font-size: 14px;
   font-weight: 600;
-  color: #111827;
+  color: rgba(234, 240, 255, 0.85);
 }
 
 .mt-inline-label {
   font-size: 14px;
   font-weight: 600;
-  color: #111827;
+  color: rgba(234, 240, 255, 0.85);
   margin-bottom: 4px;
 }
 
@@ -190,7 +196,7 @@
 .mt-footer-text {
   text-align: center;
   font-size: 14px;
-  color: #6b7280;
+  color: rgba(214, 224, 246, 0.75);
   margin-top: 20px;
 }
 
@@ -260,11 +266,20 @@
 }
 
 @media (max-width: 640px) {
+  .mt-logo {
+    width: 64px;
+    height: 64px;
+    top: 16px;
+    left: 16px;
+    padding: 0;
+    border-radius: 0;
+  }
   .mt-login-left {
     padding: 32px 24px;
   }
   .mt-title {
     font-size: 28px;
+    margin-top: 72px;
   }
   .mt-subtitle {
     font-size: 14px;

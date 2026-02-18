@@ -43,15 +43,37 @@ export const cinemaVendors = [
   },
 ];
 
+let runtimeCinemas = [];
+
+export function setRuntimeCinemas(list) {
+  runtimeCinemas = Array.isArray(list) ? list.filter(Boolean) : [];
+}
+
+function getCinemaList() {
+  const bySlug = new Map();
+  runtimeCinemas.forEach((vendor) => {
+    if (vendor && vendor.slug) {
+      bySlug.set(vendor.slug, vendor);
+    }
+  });
+  cinemaVendors.forEach((vendor) => {
+    if (vendor && vendor.slug && !bySlug.has(vendor.slug)) {
+      bySlug.set(vendor.slug, vendor);
+    }
+  });
+  return Array.from(bySlug.values());
+}
+
 export function getCinemaBySlug(slug) {
   if (!slug) return null;
-  return cinemaVendors.find((vendor) => vendor.slug === slug) || null;
+  return getCinemaList().find((vendor) => vendor.slug === slug) || null;
 }
 
 export function getCinemaFallback(index) {
-  if (!cinemaVendors.length) return null;
-  const safeIndex = Math.abs(index || 0) % cinemaVendors.length;
-  return cinemaVendors[safeIndex];
+  const list = getCinemaList();
+  if (!list.length) return null;
+  const safeIndex = Math.abs(index || 0) % list.length;
+  return list[safeIndex];
 }
 
 export function resolveCinemaSlug(value) {
@@ -63,7 +85,7 @@ export function resolveCinemaSlug(value) {
     .replace(/(^-|-$)/g, "");
   if (!cleaned) return "";
 
-  const match = cinemaVendors.find(
+  const match = getCinemaList().find(
     (vendor) => cleaned === vendor.slug || cleaned.includes(vendor.slug)
   );
   return match?.slug || cleaned;

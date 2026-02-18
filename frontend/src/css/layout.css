@@ -539,6 +539,12 @@ main > *{
   transition: border-color 0.2s ease, color 0.2s ease;
 }
 
+.wf2-selectTrigger:focus,
+.wf2-selectTrigger:focus-visible{
+  outline: none;
+  box-shadow: none;
+}
+
 .wf2-selectTrigger svg{
   color: rgba(234,240,255,0.7);
   margin-top: 1px;
@@ -846,6 +852,104 @@ main > *{
   border-radius: 12px;
 }
 
+.wf2-userBtn{
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 0;
+  border: none;
+  background: transparent;
+  color: rgba(234,240,255,0.9);
+  font-weight: 800;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-right: 28px;
+}
+
+.wf2-userBtn:hover{
+  background: transparent;
+  border-color: transparent;
+}
+
+.wf2-userGreeting{
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.1;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.wf2-userHello{
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(234,240,255,0.72);
+}
+
+.wf2-userName{
+  font-size: 14px;
+  font-weight: 800;
+  color: rgba(234,240,255,0.95);
+}
+
+.wf2-userBtn:focus,
+.wf2-userBtn:focus-visible{
+  outline: none;
+  box-shadow: none;
+}
+
+.wf2-userAvatar{
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 900;
+  color: rgba(234,240,255,0.9);
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.4);
+}
+
+.wf2-userInitials{
+  letter-spacing: 0.04em;
+}
+
+.wf2-userAvatar img{
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 999px;
+  display: block;
+}
+
+.wf2-userAvatar svg{
+  color: rgba(234,240,255,0.9);
+}
+
+.wf2-userDropdown{
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.wf2-userMenu{
+  left: auto;
+  right: 0;
+  transform: translateY(6px);
+  min-width: 180px;
+}
+
+.wf2-userDropdown:hover .wf2-userMenu,
+.wf2-userDropdown:focus-within .wf2-userMenu{
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
 .wf2-btnGhost{
   background: rgba(255,255,255,0.06);
   border:1px solid var(--border);
@@ -863,6 +967,7 @@ main > *{
   padding: 34px var(--page-pad) 40px;
   background: #3f3f44;
   backdrop-filter: blur(6px);
+  font-family: var(--font-hero);
 }
 
 .wf2-footer .wf2-container{
@@ -944,6 +1049,7 @@ main > *{
   background-repeat: no-repeat, repeat, repeat;
   background-size: cover, var(--page-pattern-size), 220px 220px;
   background-position: top center, top center, center;
+  font-family: var(--font-hero);
 }
 
 @media (max-width:1024px){

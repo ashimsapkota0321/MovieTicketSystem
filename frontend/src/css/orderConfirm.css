@@ -1,0 +1,819 @@
+.wf2-orderPage {
+  padding: 24px var(--page-pad) 80px;
+  color: #f2f4fb;
+  font-family: var(--font-hero);
+}
+
+.wf2-orderHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.wf2-orderBack {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.08);
+  color: #f2f4fb;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  line-height: 0;
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.wf2-orderBack:hover {
+  background: rgba(255, 255, 255, 0.16);
+  transform: translateX(-1px);
+}
+
+.wf2-orderHeaderText {
+  display: grid;
+  gap: 4px;
+}
+
+.wf2-orderTitle {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 800;
+  color: #f2f4fb;
+}
+
+.wf2-orderSubtitle {
+  margin: 0;
+  font-size: 17px;
+  color: rgba(226, 234, 252, 0.85);
+}
+
+.wf2-orderLayout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 380px;
+  gap: 24px;
+  align-items: start;
+}
+
+.wf2-orderMain {
+  display: grid;
+  gap: 24px;
+}
+
+.wf2-orderSidebar {
+  width: 100%;
+}
+
+.wf2-orderPanel {
+  background: #3f3f44;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 20px;
+  padding: 24px;
+  box-shadow: var(--shadow);
+}
+
+.wf2-orderPanelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.wf2-orderPanelTitle {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 800;
+  color: #f2f4fb;
+}
+
+.wf2-orderChip {
+  font-size: 15px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.2);
+  color: #f6d35e;
+  border: 1px solid rgba(245, 158, 11, 0.5);
+}
+
+.wf2-orderMovieRow {
+  display: grid;
+  grid-template-columns: 110px 1fr auto;
+  gap: 16px;
+  align-items: center;
+}
+
+.wf2-orderPoster {
+  width: 110px;
+  height: 84px;
+  border-radius: 14px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.wf2-orderPoster img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.wf2-orderMovieInfo {
+  display: grid;
+  gap: 4px;
+}
+
+.wf2-orderMovieTitle {
+  font-size: 20px;
+  font-weight: 800;
+  color: #f2f4fb;
+}
+
+.wf2-orderMovieMeta {
+  font-size: 15px;
+  color: rgba(226, 234, 252, 0.85);
+}
+
+.wf2-orderPriceTag {
+  font-size: 20px;
+  font-weight: 800;
+  color: #f2f4fb;
+  white-space: nowrap;
+}
+
+.wf2-orderItemList {
+  display: grid;
+  gap: 8px;
+}
+
+.wf2-orderItemRow {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.wf2-orderItemRow:last-child {
+  border-bottom: 0;
+}
+
+.wf2-orderItemInfo {
+  display: grid;
+  gap: 2px;
+}
+
+.wf2-orderItemName {
+  font-size: 16px;
+  font-weight: 700;
+  color: #f2f4fb;
+}
+
+.wf2-orderItemMeta {
+  font-size: 14px;
+  color: rgba(226, 234, 252, 0.8);
+}
+
+.wf2-orderItemQty,
+.wf2-orderItemPrice {
+  font-size: 16px;
+  font-weight: 700;
+  color: #f2f4fb;
+  white-space: nowrap;
+}
+
+.wf2-orderEmpty {
+  font-size: 15px;
+  color: rgba(226, 234, 252, 0.8);
+  padding: 8px 0;
+}
+
+.wf2-orderSummaryRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 17px;
+  color: rgba(226, 234, 252, 0.85);
+  margin-bottom: 10px;
+}
+
+.wf2-orderSummaryTotal {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 20px;
+  font-weight: 800;
+  color: #f2f4fb;
+  padding-top: 14px;
+  margin-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.wf2-orderPayBtn {
+  width: 100%;
+  margin-top: 16px;
+  border: none;
+  border-radius: 14px;
+  padding: 14px 16px;
+  background: linear-gradient(135deg, #f59e0b, #f6d35e);
+  color: #2b1d04;
+  font-size: 17px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform 0.2s ease, filter 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.wf2-orderPayBtn:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.05);
+}
+
+.wf2-orderPayBtn:disabled {
+  cursor: not-allowed;
+  filter: grayscale(0.2);
+  opacity: 0.7;
+  transform: none;
+}
+
+.wf2-orderDownloadBtn {
+  width: 100%;
+  margin-top: 16px;
+  border: none;
+  border-radius: 14px;
+  padding: 14px 16px;
+  background: linear-gradient(180deg, #f6d35e 0%, #f59e0b 100%);
+  color: #2b1d04;
+  font-size: 17px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform 0.2s ease, filter 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.wf2-orderDownloadBtn:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.05);
+}
+
+.wf2-orderDownloadBtn:disabled {
+  cursor: not-allowed;
+  filter: grayscale(0.2);
+  opacity: 0.7;
+  transform: none;
+}
+
+.wf2-orderPayment {
+  margin-top: 24px;
+}
+
+.wf2-orderQrBlock {
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+  text-align: center;
+}
+
+.wf2-orderQr {
+  width: min(220px, 100%);
+  height: auto;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: #fff;
+  padding: 10px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+}
+
+.wf2-orderTicketPreview {
+  width: 100%;
+  border-radius: 0;
+  border: none;
+  background: transparent;
+  padding: 0;
+  margin-bottom: 14px;
+  display: block;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+}
+
+.wf2-orderQrHint {
+  font-size: 14px;
+  color: rgba(226, 234, 252, 0.85);
+}
+
+.wf2-orderQrStatus {
+  font-size: 14px;
+  color: rgba(226, 234, 252, 0.85);
+}
+
+.wf2-orderGhostBtn {
+  width: 100%;
+  margin-top: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 14px;
+  padding: 12px 16px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #f2f4fb;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.wf2-orderGhostBtn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  transform: translateY(-1px);
+}
+
+.wf2-ticketPreviewPanel {
+  display: grid;
+  gap: 16px;
+}
+
+.wf2-ticketPreviewImage {
+  width: 100%;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: var(--shadow);
+}
+
+.wf2-ticketPlaceholder {
+  padding: 26px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px dashed rgba(255, 255, 255, 0.25);
+  text-align: center;
+  color: rgba(226, 234, 252, 0.8);
+  font-size: 15px;
+}
+
+.wf2-ticketDetailGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+}
+
+.wf2-ticketFrame {
+  background: #f6b21a;
+  border-radius: 16px;
+  padding: 12px;
+  display: grid;
+  position: relative;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.2);
+}
+
+.wf2-ticketStripe {
+  position: absolute;
+  left: 10px;
+  top: 20px;
+  display: grid;
+  gap: 6px;
+}
+
+.wf2-ticketStripe span {
+  width: 10px;
+  height: 34px;
+  border-radius: 4px;
+}
+
+.wf2-ticketStripe span:nth-child(1) { background: #facc15; }
+.wf2-ticketStripe span:nth-child(2) { background: #16a34a; }
+.wf2-ticketStripe span:nth-child(3) { background: #ef4444; }
+.wf2-ticketStripe span:nth-child(4) { background: #2563eb; }
+
+.wf2-ticketCard {
+  background: #ffffff;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  overflow: hidden;
+}
+
+.wf2-ticketLeft {
+  padding: 24px 26px 24px 32px;
+  display: grid;
+  gap: 10px;
+}
+
+.wf2-ticketBrand {
+  width: fit-content;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: #111827;
+  color: #ffffff;
+  font-weight: 800;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  line-height: 1;
+}
+
+.wf2-ticketTitle {
+  font-size: 28px;
+  font-weight: 800;
+  color: #111827;
+}
+
+.wf2-ticketSubtitle {
+  font-size: 16px;
+  color: #4b5563;
+}
+
+.wf2-ticketInfoBox {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.wf2-ticketInfoItem {
+  padding: 8px 12px;
+  border-right: 1px solid #d1d5db;
+  border-bottom: 1px solid #d1d5db;
+  font-size: 13px;
+  color: #111827;
+}
+
+.wf2-ticketInfoItem:nth-child(2n) {
+  border-right: none;
+}
+
+.wf2-ticketInfoItem:nth-last-child(-n + 2) {
+  border-bottom: none;
+}
+
+.wf2-ticketInfoItem strong {
+  display: block;
+  font-size: 13px;
+}
+
+.wf2-ticketInfoItem span {
+  display: block;
+  color: #4b5563;
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.wf2-ticketMetaRows {
+  display: grid;
+  gap: 4px;
+  font-size: 14px;
+  color: #4b5563;
+}
+
+.wf2-ticketMetaRows span {
+  font-weight: 700;
+  color: #111827;
+  margin-right: 6px;
+}
+
+.wf2-ticketTotals {
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px dashed #d1d5db;
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  color: #4b5563;
+}
+
+.wf2-ticketTotals div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.wf2-ticketTotals strong {
+  color: #111827;
+  font-weight: 800;
+}
+
+.wf2-ticketRight {
+  padding: 20px 16px;
+  background: #0f6fbf;
+  color: #ffffff;
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  justify-items: center;
+  position: relative;
+}
+
+.wf2-ticketRight::before {
+  content: "";
+  position: absolute;
+  left: -10px;
+  top: 50%;
+  width: 20px;
+  height: 40px;
+  transform: translateY(-50%);
+  background: #ffffff;
+  border-radius: 999px;
+}
+
+.wf2-ticketQrWrap {
+  background: #ffffff;
+  padding: 8px;
+  border-radius: 10px;
+}
+
+.wf2-ticketQr {
+  width: 130px;
+  height: auto;
+  display: block;
+}
+
+.wf2-ticketQrPlaceholder {
+  padding: 14px;
+  border-radius: 10px;
+  border: 1px dashed rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.15);
+  color: #e5e7eb;
+  font-size: 12px;
+  text-align: center;
+}
+
+.wf2-ticketSideText {
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  text-align: center;
+}
+
+.wf2-ticketRef {
+  font-size: 13px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.wf2-ticketDetailLabel {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(226, 234, 252, 0.6);
+}
+
+.wf2-ticketDetailValue {
+  margin-top: 6px;
+  font-size: 16px;
+  font-weight: 700;
+  color: #f2f4fb;
+}
+
+.wf2-ticketDownloadNote {
+  font-size: 14px;
+  color: rgba(226, 234, 252, 0.8);
+  margin-bottom: 12px;
+}
+
+.wf2-orderQrError {
+  font-size: 14px;
+  color: #fecaca;
+  margin-top: 10px;
+}
+
+.wf2-thankyouPage {
+  padding: 48px var(--page-pad) 90px;
+  font-family: var(--font-hero);
+  background: transparent;
+  color: #f2f4fb;
+  min-height: 100vh;
+}
+
+.wf2-thankyouContainer {
+  width: min(980px, 100%);
+  margin: 0 auto;
+  display: grid;
+  gap: 28px;
+  background: #3f3f44;
+  border-radius: 24px;
+  padding: clamp(26px, 3vw, 40px);
+  box-shadow: var(--shadow-xl);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.wf2-thankyouHero {
+  text-align: center;
+  display: grid;
+  gap: 10px;
+}
+
+.wf2-thankyouCheck {
+  width: 48px;
+  height: 48px;
+  border-radius: 999px;
+  background: rgba(16, 185, 129, 0.12);
+  color: #16a34a;
+  display: grid;
+  place-items: center;
+  margin: 0 auto;
+}
+
+.wf2-thankyouTitle {
+  font-size: clamp(42px, 8vw, 82px);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin: 0;
+  color: #f2f4fb;
+}
+
+.wf2-thankyouSubtext {
+  margin: 0 auto;
+  max-width: 520px;
+  color: rgba(226, 234, 252, 0.85);
+  font-size: 15px;
+}
+
+.wf2-thankyouRow {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.wf2-thankyouCard {
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  padding: 20px;
+  display: grid;
+  gap: 12px;
+}
+
+.wf2-thankyouQrCard {
+  text-align: center;
+}
+
+.wf2-thankyouCard h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 800;
+  color: #f2f4fb;
+}
+
+.wf2-thankyouCard p {
+  margin: 0;
+  font-size: 13px;
+  color: rgba(226, 234, 252, 0.8);
+}
+
+.wf2-thankyouQr {
+  width: min(210px, 100%);
+  margin: 0 auto;
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.wf2-thankyouQrPlaceholder {
+  padding: 18px;
+  border-radius: 12px;
+  border: 1px dashed rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(226, 234, 252, 0.85);
+  font-size: 13px;
+  text-align: center;
+}
+
+.wf2-thankyouRef {
+  width: fit-content;
+  margin: 0 auto;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px dashed rgba(255, 255, 255, 0.2);
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(234, 240, 255, 0.95);
+}
+
+.wf2-thankyouBtnPrimary {
+  border: none;
+  border-radius: 12px;
+  padding: 12px 16px;
+  background: linear-gradient(180deg, #f6d35e 0%, #f59e0b 100%);
+  color: #2b1d04;
+  font-weight: 800;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: transform 0.2s ease, filter 0.2s ease;
+}
+
+.wf2-thankyouBtnPrimary:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.wf2-thankyouBtnPrimary:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.05);
+}
+
+.wf2-thankyouBtnGhost {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 12px;
+  padding: 11px 14px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #f2f4fb;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.wf2-thankyouSummary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.wf2-thankyouSummaryItem {
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  display: grid;
+  gap: 6px;
+}
+
+.wf2-thankyouSummaryItem span {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: rgba(234, 240, 255, 0.65);
+  font-weight: 700;
+}
+
+.wf2-thankyouSummaryItem strong {
+  font-size: 14px;
+  font-weight: 800;
+  color: #f2f4fb;
+}
+
+.wf2-thankyouFooterActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+}
+
+@media (max-width: 1024px) {
+  .wf2-orderLayout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .wf2-orderMovieRow {
+    grid-template-columns: 72px 1fr;
+  }
+  .wf2-orderPriceTag {
+    grid-column: 2;
+    justify-self: end;
+  }
+  .wf2-orderItemRow {
+    grid-template-columns: 1fr auto;
+  }
+  .wf2-orderItemPrice {
+    grid-column: 2;
+  }
+  .wf2-thankyouRow {
+    grid-template-columns: 1fr;
+  }
+  .wf2-thankyouBtnPrimary,
+  .wf2-thankyouBtnGhost {
+    width: 100%;
+  }
+
+  .wf2-ticketCard {
+    grid-template-columns: 1fr;
+  }
+
+  .wf2-ticketRight {
+    border-left: none;
+    border-top: 2px dashed #e5e7eb;
+  }
+}

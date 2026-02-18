@@ -27,6 +27,7 @@
   max-width: 900px;
   margin: auto;
   width: 100%;
+  background: #3f3f44;
   border-radius: 20px;
   overflow: hidden;
   position: relative;
@@ -48,33 +49,38 @@
 /* ==================== LEFT SIDE (FORM) ==================== */
 .mt-login-left {
   padding: 48px 40px;
-  background: transparent;
+  background: #3f3f44;
+  color: rgba(234, 240, 255, 0.92);
   display: flex;
   flex-direction: column;
   position: relative;
 }
 
 .mt-logo {
-  width: 100px;
-  height: 100px;
+  width: 112px;
+  height: 112px;
   object-fit: contain;
   position: absolute;
   top: 20px;
   left: 20px;
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .mt-title {
   font-size: 32px;
   font-weight: 700;
-  color: black;
+  color: #f2f4fb;
   margin-bottom: 8px;
-  margin-top: 52px; /* space below logo */
+  margin-top: 92px; /* space below logo */
   line-height: 1.2;
 }
 
 .mt-subtitle {
   font-size: 15px;
-  color: var(--text-light);
+  color: rgba(214, 224, 246, 0.75);
   margin-bottom: 32px;
 }
 
@@ -91,7 +97,7 @@
   gap: 8px;
   font-size: 14px;
   font-weight: 600;
-  color: var(--text-dark);
+  color: rgba(234, 240, 255, 0.85);
 }
 
 .mt-input-wrapper {
@@ -180,7 +186,7 @@
   gap: 8px;
   font-size: 14px;
   font-weight: 500;
-  color: black;
+  color: rgba(234, 240, 255, 0.85);
   cursor: pointer;
   user-select: none;
 }
@@ -273,13 +279,13 @@
 .mt-footer-text {
   text-align: center;
   font-size: 14px;
-  color: var(--text-light);
+  color: rgba(214, 224, 246, 0.75);
   margin-top: 24px;
 }
 
 /* OTP resend info (visible and black) */
 .mt-otp-resend {
-  color: #000; /* black */
+  color: rgba(234, 240, 255, 0.85);
   font-weight: 600;
   font-size: 14px;
   margin-top: 8px;
@@ -418,15 +424,18 @@
     padding: 32px 24px;
   }
 
-  .mt-logo {
-    width: 56px;
-    height: 56px;
-    top: 16px;
-    left: 16px;
-  }
+.mt-logo {
+  width: 64px;
+  height: 64px;
+  top: 16px;
+  left: 16px;
+  padding: 0;
+  border-radius: 0;
+}
 
   .mt-title {
     font-size: 24px;
+    margin-top: 72px;
   }
 
   .mt-subtitle {

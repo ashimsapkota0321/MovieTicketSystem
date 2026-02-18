@@ -33,6 +33,9 @@ const LoginPage = () => {
   const validatePhone = (phone) =>
     /^\+?[0-9]{10,13}$/.test(phone);
 
+  const validateUsername = (value) =>
+    /^[a-zA-Z0-9._-]{3,}$/.test(value);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
@@ -48,11 +51,9 @@ const LoginPage = () => {
         setError("Invalid email format");
         return;
       }
-    } else {
-      if (!validatePhone(emailOrPhone)) {
-        setError("Invalid phone number format");
-        return;
-      }
+    } else if (!validatePhone(emailOrPhone) && !validateUsername(emailOrPhone)) {
+      setError("Enter a valid email, phone number, or vendor ID");
+      return;
     }
 
     setLoading(true);
@@ -87,6 +88,31 @@ const LoginPage = () => {
       setSuccess((data && data.message) || "Login successful!");
       setEmailOrPhone("");
       setPassword("");
+
+      const isAdminLogin = data && (data.role === "admin" || data.admin);
+      if (isAdminLogin) {
+        if (data.admin) {
+          localStorage.setItem("admin", JSON.stringify(data.admin));
+        }
+        setTimeout(() => {
+          window.location.href = "/admin";
+        }, 1500);
+        return;
+      }
+
+      const isVendorLogin = data && (data.role === "vendor" || data.vendor);
+      if (isVendorLogin) {
+        if (data.vendor) {
+          sessionStorage.setItem("vendor", JSON.stringify(data.vendor));
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(new Event("mt:vendor-updated"));
+          }
+        }
+        setTimeout(() => {
+          window.location.href = "/vendor";
+        }, 1500);
+        return;
+      }
 
       if (data && data.user) {
         localStorage.setItem("user", JSON.stringify(data.user));
