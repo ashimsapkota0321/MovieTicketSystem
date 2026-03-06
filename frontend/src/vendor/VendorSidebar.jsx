@@ -3,6 +3,7 @@ import { NavLink } from "react-router-dom";
 import {
   LayoutGrid,
   CalendarDays,
+  Armchair,
   Ticket,
   Users,
   Store,
@@ -16,6 +17,7 @@ import {
 const navItems = [
   { label: "Dashboard", icon: LayoutGrid, to: "/vendor/dashboard" },
   { label: "Shows", icon: CalendarDays, to: "/vendor/shows" },
+  { label: "Seats", icon: Armchair, to: "/vendor/seats" },
   { label: "Orders", icon: Ticket, disabled: true },
   { label: "Seller List", icon: Store, disabled: true },
   { label: "Customers", icon: Users, disabled: true },

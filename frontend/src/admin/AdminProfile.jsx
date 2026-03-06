@@ -11,6 +11,7 @@ import {
   Phone,
 } from "lucide-react";
 import "../css/profile.css";
+import { clearAuthSession, getAuthHeaders } from "../lib/authSession";
 
 const STORAGE_KEY = "admin";
 const UPDATE_EVENT = "mt:admin-updated";
@@ -244,6 +245,7 @@ export default function AdminProfile() {
         method: "PATCH",
         headers: {
           Accept: "application/json",
+          ...getAuthHeaders(),
         },
       };
 
@@ -308,6 +310,7 @@ export default function AdminProfile() {
   };
 
   const handleLogout = () => {
+    clearAuthSession();
     localStorage.removeItem(STORAGE_KEY);
     setAdmin(null);
     if (typeof window !== "undefined") {

@@ -1,3 +1,9 @@
+"""Management command to promote a user to an Admin record."""
+
+from __future__ import annotations
+
+from typing import Any
+
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.db.models import Q
@@ -6,9 +12,12 @@ from app.models import User, Admin
 
 
 class Command(BaseCommand):
+    """Promote an existing user to the Admin model."""
+
     help = "Promote an existing user to system admin (Admin model)."
 
     def add_arguments(self, parser):
+        """Register CLI arguments."""
         parser.add_argument("--username", help="Username of the user")
         parser.add_argument("--email", help="Email of the user")
         parser.add_argument("--phone", help="Phone number of the user")
@@ -24,7 +33,8 @@ class Command(BaseCommand):
             help="Show what would change without saving",
         )
 
-    def handle(self, *args, **options):
+    def handle(self, *args: Any, **options: Any) -> None:
+        """Run the admin promotion flow."""
         username = options.get("username")
         email = options.get("email")
         phone = options.get("phone")

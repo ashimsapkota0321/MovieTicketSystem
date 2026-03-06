@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { Eye, Pencil, Plus, Trash2 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import AdminPageHeader from "./components/AdminPageHeader";
 import AdminModal from "./components/AdminModal";
 import ConfirmModal from "./components/ConfirmModal";
+import MovieForm from "./components/MovieForm";
 import { useAdminToast } from "./AdminToastContext";
-import { createMovie, deleteMovie, updateMovie } from "../lib/catalogApi";
+import { createMovie, deleteMovie, fetchMovieById, updateMovie } from "../lib/catalogApi";
 import { useAppContext } from "../context/Appcontext";
 
 export default function AdminMovies() {
@@ -12,39 +14,50 @@ export default function AdminMovies() {
   const ctx = safeUseAppContext();
   const movies = ctx?.movies ?? [];
   const refreshCatalog = ctx?.refreshCatalog ?? (async () => {});
+  const navigate = useNavigate();
 
   const [showModal, setShowModal] = useState(false);
   const [editingMovie, setEditingMovie] = useState(null);
   const [showConfirm, setShowConfirm] = useState(false);
   const [movieToDelete, setMovieToDelete] = useState(null);
   const [form, setForm] = useState(() => buildEmptyMovie());
+  const [formLoading, setFormLoading] = useState(false);
+
 
   const openAdd = () => {
     setEditingMovie(null);
     setForm(buildEmptyMovie());
+    setFormLoading(false);
     setShowModal(true);
   };
 
-  const openEdit = (movie) => {
+  const openEdit = async (movie) => {
     setEditingMovie(movie);
-    setForm({
-      title: movie?.title || "",
-      duration: movie?.duration || "",
-      genre: movie?.genre || "",
-      language: movie?.language || "",
-      rating: movie?.rating || "",
-      releaseDate: movie?.releaseDate || movie?.release_date || "",
-      status: movie?.status || "Coming Soon",
-      synopsis: movie?.description || movie?.synopsis || "",
-      posterUrl: movie?.posterUrl || movie?.poster_url || "",
-      trailerUrl: movie?.trailerUrl || movie?.trailer_url || "",
-    });
+    setForm(buildEmptyMovie());
     setShowModal(true);
+    if (!movie?.id) return;
+    setFormLoading(true);
+    try {
+      const detail = await fetchMovieById(movie.id);
+      setForm(buildFormFromMovie(detail));
+    } catch (error) {
+      pushToast({
+        title: "Load failed",
+        message: error.message || "Unable to load movie details.",
+      });
+    } finally {
+      setFormLoading(false);
+    }
   };
 
   const handleSave = async () => {
     if (!form.title.trim()) {
       pushToast({ title: "Missing title", message: "Please enter a movie title." });
+      return;
+    }
+    const creditError = validateCredits(form);
+    if (creditError) {
+      pushToast({ title: "Cast/Crew issue", message: creditError });
       return;
     }
 
@@ -55,11 +68,12 @@ export default function AdminMovies() {
       language: form.language.trim(),
       rating: form.rating.trim(),
       releaseDate: form.releaseDate,
-      status: form.status || "Coming Soon",
+      status: form.status || "COMING_SOON",
       synopsis: form.synopsis?.trim() || "",
       posterUrl: form.posterUrl?.trim() || "",
       trailerUrl: form.trailerUrl?.trim() || "",
     };
+    payload.credits = buildCreditsPayload(form);
 
     try {
       if (editingMovie?.id) {
@@ -166,18 +180,8 @@ export default function AdminMovies() {
                   <td>{movie.rating}</td>
                   <td>{movie.releaseDate}</td>
                   <td>
-                    <span
-                      className={`badge-soft ${
-                        movie.status === "Now Showing"
-                          ? "success"
-                          : movie.status === "Ending Soon"
-                          ? "warning"
-                          : movie.status === "Archived"
-                          ? "danger"
-                          : "info"
-                      }`}
-                    >
-                      {movie.status}
+                    <span className={`badge-soft ${statusTone(movie.status)}`}>
+                      {formatStatusLabel(movie.status)}
                     </span>
                   </td>
                   <td>
@@ -233,103 +237,21 @@ export default function AdminMovies() {
             <button type="button" className="btn btn-outline-light" onClick={() => setShowModal(false)}>
               Cancel
             </button>
-            <button type="button" className="btn btn-primary" onClick={handleSave}>
+            <button type="button" className="btn btn-primary" onClick={handleSave} disabled={formLoading}>
               Save Movie
             </button>
           </>
         }
       >
-        <div className="row g-3">
-          <div className="col-md-8">
-            <label className="form-label">Movie title</label>
-            <input
-              className="form-control"
-              value={form.title}
-              onChange={(event) => setForm((prev) => ({ ...prev, title: event.target.value }))}
-            />
-          </div>
-          <div className="col-md-4">
-            <label className="form-label">Duration</label>
-            <input
-              className="form-control"
-              value={form.duration}
-              onChange={(event) => setForm((prev) => ({ ...prev, duration: event.target.value }))}
-            />
-          </div>
-          <div className="col-md-6">
-            <label className="form-label">Genre</label>
-            <input
-              className="form-control"
-              value={form.genre}
-              onChange={(event) => setForm((prev) => ({ ...prev, genre: event.target.value }))}
-            />
-          </div>
-          <div className="col-md-6">
-            <label className="form-label">Language</label>
-            <input
-              className="form-control"
-              value={form.language}
-              onChange={(event) => setForm((prev) => ({ ...prev, language: event.target.value }))}
-            />
-          </div>
-          <div className="col-md-4">
-            <label className="form-label">Rating</label>
-            <input
-              className="form-control"
-              value={form.rating}
-              onChange={(event) => setForm((prev) => ({ ...prev, rating: event.target.value }))}
-            />
-          </div>
-          <div className="col-md-4">
-            <label className="form-label">Release date</label>
-            <input
-              type="date"
-              className="form-control"
-              value={form.releaseDate}
-              onChange={(event) => setForm((prev) => ({ ...prev, releaseDate: event.target.value }))}
-            />
-          </div>
-          <div className="col-md-4">
-            <label className="form-label">Status</label>
-            <select
-              className="form-select"
-              value={form.status}
-              onChange={(event) => setForm((prev) => ({ ...prev, status: event.target.value }))}
-            >
-              <option>Now Showing</option>
-              <option>Coming Soon</option>
-              <option>Premiere</option>
-              <option>Ending Soon</option>
-              <option>Archived</option>
-            </select>
-          </div>
-          <div className="col-12">
-            <label className="form-label">Synopsis</label>
-            <textarea
-              className="form-control"
-              rows="3"
-              placeholder="Short plot summary"
-              value={form.synopsis}
-              onChange={(event) => setForm((prev) => ({ ...prev, synopsis: event.target.value }))}
-            />
-          </div>
-          <div className="col-md-6">
-            <label className="form-label">Poster URL</label>
-            <input
-              className="form-control"
-              value={form.posterUrl}
-              onChange={(event) => setForm((prev) => ({ ...prev, posterUrl: event.target.value }))}
-            />
-          </div>
-          <div className="col-md-6">
-            <label className="form-label">Trailer URL</label>
-            <input
-              className="form-control"
-              value={form.trailerUrl}
-              onChange={(event) => setForm((prev) => ({ ...prev, trailerUrl: event.target.value }))}
-            />
-          </div>
-        </div>
+        <MovieForm
+          value={form}
+          loading={formLoading}
+          onChange={setForm}
+          onEditPerson={(personId) => {
+            if (!personId) return;
+            navigate(`/admin/people?personId=${encodeURIComponent(personId)}`);
+          }}
+        />
       </AdminModal>
 
       <ConfirmModal
@@ -359,11 +281,117 @@ function buildEmptyMovie() {
     language: "",
     rating: "",
     releaseDate: "",
-    status: "Coming Soon",
+    status: "COMING_SOON",
     synopsis: "",
     posterUrl: "",
     trailerUrl: "",
+    cast: [],
+    crew: [],
   };
+}
+
+function buildFormFromMovie(movie) {
+  const cast = Array.isArray(movie?.cast)
+    ? movie.cast.map((credit, index) => toCreditForm(credit, index, "CAST"))
+    : [];
+  const crew = Array.isArray(movie?.crew)
+    ? movie.crew.map((credit, index) => toCreditForm(credit, index, "CREW"))
+    : [];
+  return {
+    title: movie?.title || "",
+    duration: movie?.duration || "",
+    genre: movie?.genre || "",
+    language: movie?.language || "",
+    rating: movie?.rating || "",
+    releaseDate: movie?.releaseDate || movie?.release_date || "",
+    status: movie?.status || "COMING_SOON",
+    synopsis: movie?.description || movie?.synopsis || "",
+    posterUrl: movie?.posterUrl || movie?.poster_url || "",
+    trailerUrl: movie?.trailerUrl || movie?.trailer_url || "",
+    cast,
+    crew,
+  };
+}
+
+function toCreditForm(credit, index, roleType) {
+  const person = credit?.person || {};
+  const name =
+    person?.fullName ||
+    person?.full_name ||
+    person?.name ||
+    credit?.name ||
+    "";
+  const role =
+    credit?.characterName ||
+    credit?.jobTitle ||
+    credit?.roleName ||
+    credit?.department ||
+    credit?.role ||
+    "";
+  return {
+    id: credit?.id,
+    position: credit?.position ?? credit?.order ?? index + 1,
+    personId: person?.id || credit?.personId || "",
+    name,
+    role,
+    roleType: credit?.roleType || credit?.creditType || roleType,
+  };
+}
+
+function buildCreditsPayload(form) {
+  const buildPayload = (items = [], roleType) =>
+    items.map((credit, index) => {
+      const position = Number(credit.position) || index + 1;
+      const name = String(credit.name || "").trim();
+      if (credit.personId) {
+        return {
+          id: credit.id,
+          role_type: roleType,
+          character_name: roleType === "CAST" ? credit.role || "" : "",
+          job_title: roleType === "CREW" ? credit.role || "" : "",
+          position,
+          person_id: Number(credit.personId),
+        };
+      }
+      return {
+        id: credit.id,
+        role_type: roleType,
+        character_name: roleType === "CAST" ? credit.role || "" : "",
+        job_title: roleType === "CREW" ? credit.role || "" : "",
+        position,
+        person: {
+          full_name: name,
+        },
+      };
+    });
+  const castPayload = buildPayload(form?.cast || [], "CAST");
+  const crewPayload = buildPayload(form?.crew || [], "CREW");
+  return [...castPayload, ...crewPayload];
+}
+
+function validateCredits(form) {
+  const allCredits = [...(form.cast || []), ...(form.crew || [])];
+  for (const credit of allCredits) {
+    if (!credit.personId && !String(credit.name || "").trim()) {
+      return "Each cast/crew entry must have a name.";
+    }
+    if (!String(credit.role || "").trim()) {
+      return "Each cast/crew entry must have a role.";
+    }
+  }
+  return "";
+}
+
+function formatStatusLabel(status) {
+  if (status === "NOW_SHOWING") return "Now Showing";
+  if (status === "COMING_SOON") return "Coming Soon";
+  return status || "Unknown";
+}
+
+function statusTone(status) {
+  if (status === "NOW_SHOWING") return "success";
+  if (status === "COMING_SOON") return "info";
+  return "info";
 }
 
 function pickPosterTone() {

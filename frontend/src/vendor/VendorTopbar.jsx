@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Bell, Menu, ChevronDown, User } from "lucide-react";
+import { clearAuthSession } from "../lib/authSession";
 
 export default function VendorTopbar({ onToggleSidebar }) {
   const navigate = useNavigate();
@@ -32,6 +33,7 @@ export default function VendorTopbar({ onToggleSidebar }) {
   }, []);
 
   const handleLogout = () => {
+    clearAuthSession();
     sessionStorage.removeItem("vendor");
     if (typeof window !== "undefined") {
       window.dispatchEvent(new Event("mt:vendor-updated"));

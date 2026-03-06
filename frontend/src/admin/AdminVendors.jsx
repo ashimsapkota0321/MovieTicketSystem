@@ -5,6 +5,7 @@ import AdminModal from "./components/AdminModal";
 import ConfirmModal from "./components/ConfirmModal";
 import { vendors as seedVendors } from "./data";
 import { useAdminToast } from "./AdminToastContext";
+import { getAuthHeaders } from "../lib/authSession";
 
 const API_BASE_URL = "http://localhost:8000/api";
 const INITIAL_FORM = {
@@ -49,7 +50,7 @@ export default function AdminVendors() {
   const loadVendors = async () => {
     try {
       const response = await fetch(`${API_BASE_URL}/admin/vendors/`, {
-        headers: { Accept: "application/json" },
+        headers: { Accept: "application/json", ...getAuthHeaders() },
       });
       if (!response.ok) return;
       const data = await response.json();
@@ -82,6 +83,7 @@ export default function AdminVendors() {
         headers: {
           "Content-Type": "application/json",
           Accept: "application/json",
+          ...getAuthHeaders(),
         },
         body: JSON.stringify(form),
       });

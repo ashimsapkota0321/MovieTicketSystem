@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { ChevronLeft, Search, Plus, Minus } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import "../css/foodBeverage.css";
 import gharjwai from "../images/gharjwai.jpg";
 import foodItemImage from "../images/food-item.png";
@@ -135,9 +135,19 @@ const FOOD_ITEMS = [
 ];
 
 const TICKET_PRICE = 300;
+const DEFAULT_MOVIE = {
+  title: "Hami Teen Bhai",
+  language: "Nepali",
+  runtime: "2h 10m",
+  seat: "Seat No: A12, A13",
+  venue: "QFX Civil Mall, 18 Feb 2026, 08:30 PM",
+  poster: gharjwai,
+};
 
 export default function FoodBeverage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const state = location?.state || {};
   const [activeCategory, setActiveCategory] = useState("All");
   const [query, setQuery] = useState("");
   const [cart, setCart] = useState({});
@@ -161,16 +171,18 @@ export default function FoodBeverage() {
 
   const cartCount = cartItems.reduce((sum, item) => sum + cart[item.id], 0);
   const cartTotal = cartItems.reduce((sum, item) => sum + item.price * cart[item.id], 0);
-  const ticketTotal = TICKET_PRICE;
+  const ticketTotal = Number(state.ticketTotal) || TICKET_PRICE;
   const orderTotal = ticketTotal + cartTotal;
+  const selectedSeats = Array.isArray(state.selectedSeats) ? state.selectedSeats : [];
   const orderMovie = {
-    title: "Hami Teen Bhai",
-    language: "Nepali",
-    runtime: "2h 10m",
-    seat: "Seat No: A12, A13",
-    venue: "QFX Civil Mall, 18 Feb 2026, 08:30 PM",
-    poster: gharjwai,
+    ...DEFAULT_MOVIE,
+    ...(state.movie || {}),
+    seat:
+      state?.movie?.seat ||
+      (selectedSeats.length ? `Seat No: ${selectedSeats.join(", ")}` : DEFAULT_MOVIE.seat),
+    poster: state?.movie?.poster || DEFAULT_MOVIE.poster,
   };
+  const bookingContext = state.bookingContext || {};
 
   const addItem = (id) => {
     setCart((prev) => ({ ...prev, [id]: (prev[id] || 0) + 1 }));
@@ -210,6 +222,14 @@ export default function FoodBeverage() {
         movie: orderMovie,
         ticketTotal,
         items,
+        selectedSeats,
+        bookingContext: {
+          ...bookingContext,
+          selectedSeats:
+            bookingContext?.selectedSeats && Array.isArray(bookingContext.selectedSeats)
+              ? bookingContext.selectedSeats
+              : selectedSeats,
+        },
       },
     });
   };
@@ -226,9 +246,11 @@ export default function FoodBeverage() {
           <ChevronLeft size={18} />
         </button>
         <div className="wf2-foodHeaderInfo">
-          <h2 className="wf2-foodHeaderTitle">Hami Teen Bhai (Nepali)</h2>
+          <h2 className="wf2-foodHeaderTitle">
+            {orderMovie.title} ({orderMovie.language || "Nepali"})
+          </h2>
           <p className="wf2-foodHeaderSub">
-            QFX Civil Mall | Hall 02 | 18 Feb 2026, 08:30 PM
+            {orderMovie.venue || DEFAULT_MOVIE.venue}
           </p>
         </div>
         <div className="wf2-foodHeaderSpacer" />

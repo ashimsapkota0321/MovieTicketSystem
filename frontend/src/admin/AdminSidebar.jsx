@@ -9,16 +9,20 @@ import {
   Ticket,
   BarChart3,
   Clapperboard,
+  Image,
   Settings,
 } from "lucide-react";
+import adminLogo from "../images/admin-logo.png";
 
 const navItems = [
   { label: "Dashboard", icon: LayoutGrid, to: "/admin/dashboard" },
   { label: "Manage Movies", icon: Film, to: "/admin/movies" },
+  { label: "Manage Cast & Crew", icon: Users, to: "/admin/people" },
   { label: "Manage Vendors", icon: Clapperboard, to: "/admin/vendors" },
   { label: "Manage Users", icon: Users, to: "/admin/users" },
   { label: "Manage Shows", icon: CalendarDays, to: "/admin/shows" },
   { label: "Manage Schedule", icon: CalendarRange, to: "/admin/schedule" },
+  { label: "Manage Banners", icon: Image, to: "/admin/banners" },
   { label: "Manage Bookings", icon: Ticket, to: "/admin/bookings" },
   { label: "View Reports", icon: BarChart3, to: "/admin/reports" },
 ];
@@ -44,7 +48,9 @@ export default function AdminSidebar({ onNavigate }) {
   return (
     <aside className="admin-sidebar">
       <div className="admin-brand">
-        <span className="admin-brand-mark">M</span>
+        <span className="admin-brand-mark">
+          <img src={adminLogo} alt="MeroTicket logo" className="admin-brand-logo" />
+        </span>
         <div>
           <div className="admin-brand-name">MeroTicket</div>
           <small className="admin-brand-sub">Admin Console</small>

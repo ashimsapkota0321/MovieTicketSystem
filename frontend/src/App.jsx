@@ -19,6 +19,7 @@ import Profile from "./pages/Profile";
 import AdminLayout from "./admin/AdminLayout";
 import AdminDashboard from "./admin/AdminDashboard";
 import AdminMovies from "./admin/AdminMovies";
+import AdminBanners from "./admin/AdminBanners";
 import AdminVendors from "./admin/AdminVendors";
 import AdminUsers from "./admin/AdminUsers";
 import AdminShows from "./admin/AdminShows";
@@ -26,10 +27,28 @@ import AdminSchedule from "./admin/AdminSchedule";
 import AdminBookings from "./admin/AdminBookings";
 import AdminReports from "./admin/AdminReports";
 import AdminProfile from "./admin/AdminProfile";
+import AdminPeople from "./admin/AdminPeople";
 import VendorLayout from "./vendor/VendorLayout";
 import VendorDashboard from "./vendor/VendorDashboard";
 import VendorProfile from "./vendor/VendorProfile";
 import VendorShows from "./vendor/VendorShows";
+import VendorSeats from "./vendor/VendorSeats";
+import { getAuthSession } from "./lib/authSession";
+
+
+function RequireRole({ allowedRole, children }) {
+  const auth = getAuthSession();
+  if (!auth?.role) {
+    return <Navigate to="/login" replace />;
+  }
+  if ((allowedRole === "admin" || allowedRole === "vendor") && !auth?.token) {
+    return <Navigate to="/login" replace />;
+  }
+  if (auth.role !== allowedRole) {
+    return <Navigate to="/" replace />;
+  }
+  return children;
+}
 
 
 function App() {
@@ -55,10 +74,12 @@ function App() {
         <Route path="/home" element={<Layout><Home /></Layout>} />
         <Route path="/dashboard" element={<Layout><Home /></Layout>} />
         <Route path="/profile" element={<Layout><Profile /></Layout>} />
-        <Route path="/admin" element={<AdminLayout />}>
+        <Route path="/admin" element={<RequireRole allowedRole="admin"><AdminLayout /></RequireRole>}>
           <Route index element={<Navigate to="dashboard" replace />} />
           <Route path="dashboard" element={<AdminDashboard />} />
+          <Route path="banners" element={<AdminBanners />} />
           <Route path="movies" element={<AdminMovies />} />
+          <Route path="people" element={<AdminPeople />} />
           <Route path="vendors" element={<AdminVendors />} />
           <Route path="users" element={<AdminUsers />} />
           <Route path="shows" element={<AdminShows />} />
@@ -67,10 +88,11 @@ function App() {
           <Route path="reports" element={<AdminReports />} />
           <Route path="profile" element={<AdminProfile />} />
         </Route>
-        <Route path="/vendor" element={<VendorLayout />}>
+        <Route path="/vendor" element={<RequireRole allowedRole="vendor"><VendorLayout /></RequireRole>}>
           <Route index element={<Navigate to="dashboard" replace />} />
           <Route path="dashboard" element={<VendorDashboard />} />
           <Route path="shows" element={<VendorShows />} />
+          <Route path="seats" element={<VendorSeats />} />
           <Route path="profile" element={<VendorProfile />} />
         </Route>
       </Routes>

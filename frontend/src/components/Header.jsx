@@ -2,8 +2,61 @@ import React, { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ChevronDown, Search, User } from "lucide-react";
 import { useAppContext } from "../context/Appcontext";
+import api from "../api/api";
+import { clearAuthSession } from "../lib/authSession";
 import logo from "../images/logo.png";
 import "../css/layout.css";
+
+const formatDateLabel = (value) => {
+  if (!value) return "";
+  const parts = String(value).split("-").map(Number);
+  if (parts.length !== 3 || parts.some(Number.isNaN)) return value;
+  const [year, month, day] = parts;
+  const date = new Date(year, month - 1, day);
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(date);
+};
+
+const formatTimeLabel = (value) => {
+  if (!value) return "";
+  const parts = String(value).split(":").map(Number);
+  if (parts.length < 2 || parts.some(Number.isNaN)) return value;
+  const [hour, minute] = parts;
+  const time = new Date();
+  time.setHours(hour, minute, 0, 0);
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(time);
+};
+
+const mapCinemaOptions = (items) =>
+  (items || []).map((cinema) => ({
+    value: String(cinema.id),
+    label:
+      cinema.name || cinema.theatre || cinema.city || `Cinema ${cinema.id}`,
+  }));
+
+const mapMovieOptions = (items) =>
+  (items || []).map((movie) => ({
+    value: String(movie.id),
+    label: movie.title || `Movie ${movie.id}`,
+  }));
+
+const mapDateOptions = (items) =>
+  (items || []).map((date) => ({
+    value: String(date),
+    label: formatDateLabel(date),
+  }));
+
+const mapTimeOptions = (items) =>
+  (items || []).map((time) => ({
+    value: String(time),
+    label: formatTimeLabel(time),
+  }));
 
 export default function Header() {
   const navigate = useNavigate();
@@ -16,21 +69,27 @@ export default function Header() {
   const [locationOpen, setLocationOpen] = useState(false);
   const [openSelect, setOpenSelect] = useState(null);
   const [bookingMode, setBookingMode] = useState("cinema");
-  const [selectedCinema, setSelectedCinema] = useState("Select Cinema");
-  const [selectedMovie, setSelectedMovie] = useState("Select Movie");
-  const [selectedDate, setSelectedDate] = useState("Select Date");
-  const [selectedTime, setSelectedTime] = useState("Select Time");
+  const [selectedCinemaId, setSelectedCinemaId] = useState("");
+  const [selectedMovieId, setSelectedMovieId] = useState("");
+  const [selectedDate, setSelectedDate] = useState("");
+  const [selectedTime, setSelectedTime] = useState("");
+  const [allCinemas, setAllCinemas] = useState([]);
+  const [allMovies, setAllMovies] = useState([]);
+  const [cinemasForMovie, setCinemasForMovie] = useState([]);
+  const [moviesForCinema, setMoviesForCinema] = useState([]);
+  const [dateOptions, setDateOptions] = useState([]);
+  const [timeOptions, setTimeOptions] = useState([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [storedUser, setStoredUser] = useState(() => getStoredUser());
-  const isCinemaSelected = !selectedCinema.startsWith("Select");
-  const isMovieSelected = !selectedMovie.startsWith("Select");
-  const isDateSelected = !selectedDate.startsWith("Select");
+  const isCinemaSelected = Boolean(selectedCinemaId);
+  const isMovieSelected = Boolean(selectedMovieId);
+  const isDateSelected = Boolean(selectedDate);
   const cinemaLocked = bookingMode === "movie" && !isMovieSelected;
   const movieLocked = bookingMode === "cinema" && !isCinemaSelected;
   const dateLocked = !(isCinemaSelected && isMovieSelected);
   const timeLocked = !isDateSelected;
-  const isBookingReady = [selectedCinema, selectedMovie, selectedDate, selectedTime].every(
-    (value) => !value.startsWith("Select")
+  const isBookingReady = Boolean(
+    selectedCinemaId && selectedMovieId && selectedDate && selectedTime
   );
 
   const locations = [
@@ -44,19 +103,18 @@ export default function Header() {
     "Birgunj",
     "Pokhara",
   ];
-  const cinemas = ["Select Cinema", "QFX Cinemas", "Usha Cinema", "Himalaya Cinema"];
-  const movies = [
-    "Select Movie",
-    "Kumari",
-    "Rammita Koo Pirati",
-    "Aa Bata Aama",
-    "Border 2",
-    "Gobar Ganesh",
-    "Paran",
-    "Jhari Pachhi Ko",
-  ];
-  const dates = ["Select Date", "Feb 6, 2026", "Feb 7, 2026"];
-  const times = ["Select Time", "10:00 AM", "1:00 PM", "4:00 PM", "7:00 PM"];
+  const cinemaOptions =
+    bookingMode === "movie" && selectedMovieId ? cinemasForMovie : allCinemas;
+  const movieOptions =
+    bookingMode === "cinema" && selectedCinemaId ? moviesForCinema : allMovies;
+  const selectedCinemaOption =
+    cinemaOptions.find((option) => String(option.value) === String(selectedCinemaId)) ||
+    allCinemas.find((option) => String(option.value) === String(selectedCinemaId)) ||
+    null;
+  const selectedMovieOption =
+    movieOptions.find((option) => String(option.value) === String(selectedMovieId)) ||
+    allMovies.find((option) => String(option.value) === String(selectedMovieId)) ||
+    null;
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 16);
@@ -88,6 +146,166 @@ export default function Header() {
   }, [openSelect, cinemaLocked, movieLocked, dateLocked, timeLocked]);
 
   useEffect(() => {
+    setSelectedCinemaId("");
+    setSelectedMovieId("");
+    setSelectedDate("");
+    setSelectedTime("");
+    setDateOptions([]);
+    setTimeOptions([]);
+    setOpenSelect(null);
+  }, [bookingMode]);
+
+  useEffect(() => {
+    let active = true;
+    const loadInitialOptions = async () => {
+      try {
+        const [cinemaResponse, movieResponse] = await Promise.all([
+          api.get("/api/booking/cinemas/"),
+          api.get("/api/booking/movies/"),
+        ]);
+        if (!active) return;
+        setAllCinemas(mapCinemaOptions(cinemaResponse?.data?.cinemas));
+        setAllMovies(mapMovieOptions(movieResponse?.data?.movies));
+      } catch (error) {
+        if (!active) return;
+        setAllCinemas([]);
+        setAllMovies([]);
+      }
+    };
+    loadInitialOptions();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (bookingMode === "cinema") {
+      setSelectedMovieId("");
+    }
+    setSelectedDate("");
+    setSelectedTime("");
+    setDateOptions([]);
+    setTimeOptions([]);
+
+    if (!selectedCinemaId) {
+      setMoviesForCinema([]);
+      return;
+    }
+
+    let active = true;
+    const loadMoviesForCinema = async () => {
+      try {
+        const response = await api.get("/api/booking/movies/", {
+          params: { cinema_id: selectedCinemaId },
+        });
+        if (!active) return;
+        setMoviesForCinema(mapMovieOptions(response?.data?.movies));
+      } catch (error) {
+        if (!active) return;
+        setMoviesForCinema([]);
+      }
+    };
+    loadMoviesForCinema();
+    return () => {
+      active = false;
+    };
+  }, [selectedCinemaId, bookingMode]);
+
+  useEffect(() => {
+    if (bookingMode === "movie") {
+      setSelectedCinemaId("");
+    }
+    setSelectedDate("");
+    setSelectedTime("");
+    setDateOptions([]);
+    setTimeOptions([]);
+
+    if (!selectedMovieId) {
+      setCinemasForMovie([]);
+      return;
+    }
+
+    let active = true;
+    const loadCinemasForMovie = async () => {
+      try {
+        const response = await api.get("/api/booking/cinemas/", {
+          params: { movie_id: selectedMovieId },
+        });
+        if (!active) return;
+        setCinemasForMovie(mapCinemaOptions(response?.data?.cinemas));
+      } catch (error) {
+        if (!active) return;
+        setCinemasForMovie([]);
+      }
+    };
+    loadCinemasForMovie();
+    return () => {
+      active = false;
+    };
+  }, [selectedMovieId, bookingMode]);
+
+  useEffect(() => {
+    if (!selectedCinemaId || !selectedMovieId) {
+      setDateOptions([]);
+      setSelectedDate("");
+      setTimeOptions([]);
+      setSelectedTime("");
+      return;
+    }
+
+    let active = true;
+    const loadDates = async () => {
+      try {
+        const response = await api.get("/api/booking/dates/", {
+          params: {
+            cinema_id: selectedCinemaId,
+            movie_id: selectedMovieId,
+          },
+        });
+        if (!active) return;
+        setDateOptions(mapDateOptions(response?.data?.dates));
+      } catch (error) {
+        if (!active) return;
+        setDateOptions([]);
+      }
+    };
+    loadDates();
+    return () => {
+      active = false;
+    };
+  }, [selectedCinemaId, selectedMovieId]);
+
+  useEffect(() => {
+    if (!selectedCinemaId || !selectedMovieId || !selectedDate) {
+      setTimeOptions([]);
+      setSelectedTime("");
+      return;
+    }
+
+    let active = true;
+    const loadTimes = async () => {
+      try {
+        const response = await api.get("/api/booking/times/", {
+          params: {
+            cinema_id: selectedCinemaId,
+            movie_id: selectedMovieId,
+            date: selectedDate,
+          },
+        });
+        if (!active) return;
+        setTimeOptions(mapTimeOptions(response?.data?.times));
+      } catch (error) {
+        if (!active) return;
+        setTimeOptions([]);
+      }
+    };
+    loadTimes();
+    return () => {
+      active = false;
+    };
+  }, [selectedCinemaId, selectedMovieId, selectedDate]);
+
+  useEffect(() => {
     const handleUserUpdate = () => {
       setStoredUser(getStoredUser());
     };
@@ -107,6 +325,7 @@ export default function Header() {
   const avatarSrc = getUserAvatar(user);
 
   const handleLogout = () => {
+    clearAuthSession();
     localStorage.removeItem("user");
     setStoredUser(null);
     if (typeof window !== "undefined") {
@@ -115,18 +334,24 @@ export default function Header() {
     navigate("/login");
   };
 
-  const SelectField = ({ id, label, value, options, onChange, disabled }) => {
+  const SelectField = ({ id, label, value, options, onChange, disabled, placeholder }) => {
     const isOpen = !disabled && openSelect === id;
-    const isPlaceholder = value.startsWith("Select");
-    const menuOptions = options.filter((option) => !option.startsWith("Select"));
+    const isPlaceholder = !value;
+    const menuOptions = options || [];
+    const selectedOption = menuOptions.find(
+      (option) => String(option.value) === String(value)
+    );
+    const displayValue = isPlaceholder
+      ? placeholder
+      : selectedOption?.label || placeholder;
 
     const handleToggle = () => {
       if (disabled) return;
       setOpenSelect(isOpen ? null : id);
     };
 
-    const handleSelect = (option) => {
-      onChange(option);
+    const handleSelect = (optionValue) => {
+      onChange(optionValue);
       setOpenSelect(null);
     };
 
@@ -140,19 +365,19 @@ export default function Header() {
             disabled={disabled}
             aria-label={label}
           >
-            <span>{value}</span>
+            <span>{displayValue}</span>
             <ChevronDown size={18} />
           </button>
           {isOpen ? (
             <div className="wf2-selectMenu">
               {menuOptions.map((option) => (
                 <button
-                  key={option}
+                  key={option.value}
                   type="button"
-                  className={`wf2-selectOption ${option === value ? "wf2-selectOptionActive" : ""}`}
-                  onClick={() => handleSelect(option)}
+                  className={`wf2-selectOption ${String(option.value) === String(value) ? "wf2-selectOptionActive" : ""}`}
+                  onClick={() => handleSelect(option.value)}
                 >
-                  {option}
+                  {option.label}
                 </button>
               ))}
             </div>
@@ -384,18 +609,20 @@ export default function Header() {
                 <SelectField
                   id="cinema"
                   label="Select Cinema"
-                  value={selectedCinema}
-                  options={cinemas}
-                  onChange={setSelectedCinema}
+                  value={selectedCinemaId}
+                  options={cinemaOptions}
+                  onChange={setSelectedCinemaId}
                   disabled={cinemaLocked}
+                  placeholder="Select Cinema"
                 />
                 <SelectField
                   id="movie"
                   label="Select Movie"
-                  value={selectedMovie}
-                  options={movies}
-                  onChange={setSelectedMovie}
+                  value={selectedMovieId}
+                  options={movieOptions}
+                  onChange={setSelectedMovieId}
                   disabled={movieLocked}
+                  placeholder="Select Movie"
                 />
               </>
             ) : (
@@ -403,18 +630,20 @@ export default function Header() {
                 <SelectField
                   id="movie"
                   label="Select Movie"
-                  value={selectedMovie}
-                  options={movies}
-                  onChange={setSelectedMovie}
+                  value={selectedMovieId}
+                  options={movieOptions}
+                  onChange={setSelectedMovieId}
                   disabled={movieLocked}
+                  placeholder="Select Movie"
                 />
                 <SelectField
                   id="cinema"
                   label="Select Cinema"
-                  value={selectedCinema}
-                  options={cinemas}
-                  onChange={setSelectedCinema}
+                  value={selectedCinemaId}
+                  options={cinemaOptions}
+                  onChange={setSelectedCinemaId}
                   disabled={cinemaLocked}
+                  placeholder="Select Cinema"
                 />
               </>
             )}
@@ -423,18 +652,23 @@ export default function Header() {
               id="date"
               label="Select Date"
               value={selectedDate}
-              options={dates}
-              onChange={setSelectedDate}
+              options={dateOptions}
+              onChange={(value) => {
+                setSelectedDate(value);
+                setSelectedTime("");
+              }}
               disabled={dateLocked}
+              placeholder="Select Date"
             />
 
             <SelectField
               id="time"
               label="Select Time"
               value={selectedTime}
-              options={times}
+              options={timeOptions}
               onChange={setSelectedTime}
               disabled={timeLocked}
+              placeholder="Select Time"
             />
 
             <button
@@ -443,7 +677,20 @@ export default function Header() {
               disabled={!isBookingReady}
               onClick={() => {
                 if (!isBookingReady) return;
-                navigate("/booking");
+                navigate("/booking", {
+                  state: {
+                    movie: {
+                      id: coerceNumber(selectedMovieId),
+                      title: selectedMovieOption?.label || "Movie",
+                    },
+                    vendor: {
+                      id: coerceNumber(selectedCinemaId),
+                      name: selectedCinemaOption?.label || "Cinema",
+                    },
+                    date: selectedDate,
+                    time: selectedTime,
+                  },
+                });
               }}
             >
               Buy Now
@@ -461,6 +708,11 @@ function safeUseAppContext() {
   } catch {
     return null;
   }
+}
+
+function coerceNumber(value) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) ? parsed : null;
 }
 
 function isActive(path, target) {

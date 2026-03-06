@@ -11,6 +11,7 @@ import {
   Phone,
 } from "lucide-react";
 import "../css/profile.css";
+import { clearAuthSession, getAuthHeaders } from "../lib/authSession";
 
 const EMPTY_PROFILE = {
   first_name: "",
@@ -246,6 +247,7 @@ export default function Profile() {
         method: "PATCH",
         headers: {
           Accept: "application/json",
+          ...getAuthHeaders(),
         },
       };
 
@@ -316,6 +318,7 @@ export default function Profile() {
   };
 
   const handleLogout = () => {
+    clearAuthSession();
     localStorage.removeItem("user");
     setUser(null);
     if (typeof window !== "undefined") {

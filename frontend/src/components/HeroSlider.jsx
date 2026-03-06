@@ -17,11 +17,12 @@ export default function HeroSlider() {
     let mounted = true;
     const loadSlides = async () => {
       try {
-        const response = await api.get("/api/home/slides/");
+        const response = await api.get("/api/home/now-showing-slides/");
+        const nextSlides = response?.data?.slides || [];
         if (!mounted) return;
-        setSlides(response?.data?.slides || []);
+        setSlides(nextSlides);
         setActiveIndex(0);
-      } catch (error) {
+      } catch {
         if (!mounted) return;
         setSlides([]);
       }
@@ -210,4 +211,3 @@ export default function HeroSlider() {
     </section>
   );
 }
-

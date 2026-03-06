@@ -4,8 +4,11 @@ import { useLocation, useNavigate } from "react-router-dom";
 import "../css/orderConfirm.css";
 import gharjwai from "../images/gharjwai.jpg";
 import html2canvas from "html2canvas";
+import { getCinemaBySlug, resolveCinemaSlug } from "../lib/cinemas";
 
 const API_BASE_URL = "http://localhost:8000/api";
+const SUPPORT_CONTACT = "+977 9826633701";
+const WEBSITE_URL = "www.meroticket.com";
 
 const DEFAULT_ORDER = {
   movie: {
@@ -125,7 +128,7 @@ export default function TicketDownload() {
         });
         triggerDownload(canvas.toDataURL("image/png"), filename);
         return;
-      } catch (err) {
+      } catch {
         // fallback to backend download
       }
     }
@@ -143,18 +146,38 @@ export default function TicketDownload() {
   }, [state?.autoDownload, downloadUrl]);
 
   const ticketDetails = remoteDetails || {};
-  const venueParts = String(order.movie.venue || "").split(",").map((part) => part.trim()).filter(Boolean);
-  const venueName = ticketDetails["cinema hall"] || venueParts[0] || order.movie.venue || "-";
-  const showDate = ticketDetails["date"] || venueParts[1] || "";
-  const showTime = ticketDetails["time"] || venueParts[2] || "";
-  const theater = ticketDetails["theater"] || "03";
-  const seatLabel = ticketDetails["seat"] || order.movie.seat;
+  const venueParts = String(order.movie.venue || "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  const fallbackCinemaName =
+    order.movie.cinemaName || venueParts[0] || order.movie.venue || "-";
+  const cinemaName = ticketDetails["cinema hall"] || fallbackCinemaName;
+  const cinemaBrand = resolveCinemaBrand(cinemaName);
+  const cinemaLocation =
+    order.movie.cinemaLocation ||
+    order.movie.location ||
+    extractLocationFromVenue(order.movie.venue, cinemaBrand.name) ||
+    "-";
+
+  const showDate = ticketDetails.date || order.movie.showDate || venueParts[1] || "";
+  const showTime = ticketDetails.time || order.movie.showTime || venueParts[2] || "";
+  const theater = ticketDetails.theater || order.movie.theater || order.movie.hall || "03";
+  const seatLabel = normalizeSeatLabel(ticketDetails.seat || order.movie.seat);
+  const movieTitle = ticketDetails.movie || order.movie.title || "Movie";
+  const formattedDate = formatDateLabel(showDate);
+  const formattedTime = formatTimeLabel(showTime);
+
   const ticketTotalLabel = ticketDetails["ticket total"] || formatPrice(order.ticketTotal);
   const foodTotalLabel = ticketDetails["food total"] || formatPrice(order.foodTotal);
   const grandTotalLabel = ticketDetails["grand total"] || formatPrice(order.total);
-  const displayDate = showDate || "Friday, July 26th";
-  const displayName = ticketDetails["name"] || "Guest User";
-  const displayWebsite = "www.meroticket.com";
+  const ticketId = ticket?.reference || "MT-XXXX";
+
+  const ticketStyle = useMemo(
+    () => ({ "--wf2-ticket-accent": cinemaBrand.accent || "#0f6fbf" }),
+    [cinemaBrand.accent]
+  );
 
   return (
     <div className="wf2-orderPage wf2-ticketPage">
@@ -184,62 +207,104 @@ export default function TicketDownload() {
                 <span className="wf2-orderChip">Ref {ticket.reference}</span>
               ) : null}
             </div>
-            <div className="wf2-ticketFrame" ref={ticketRef}>
-              <div className="wf2-ticketStripe">
-                <span />
-                <span />
-                <span />
-                <span />
-              </div>
-              <div className="wf2-ticketCard">
-              <div className="wf2-ticketLeft">
-                <div className="wf2-ticketBrand">MERO TICKET</div>
-                <div className="wf2-ticketTitle">Welcome to {venueName}</div>
-                <div className="wf2-ticketSubtitle">
-                  {ticketDetails.movie || order.movie.title}
-                </div>
-                <div className="wf2-ticketInfoBox">
-                  <div className="wf2-ticketInfoItem">
-                    <span>E-ticket</span>
+
+            <div className="wf2-ticketFrame" ref={ticketRef} style={ticketStyle}>
+              <article className="wf2-etkShell">
+                <section className="wf2-etkMain">
+                  <header className="wf2-etkHead">
+                    <div className="wf2-etkLogo">Mero Ticket</div>
+                    <div className="wf2-etkVendorBlock">
+                      <div className="wf2-etkVendorName">{cinemaBrand.name}</div>
+                      <div className="wf2-etkVendorLocation">{cinemaLocation}</div>
+                    </div>
+                    <span className="wf2-etkType">E-TICKET</span>
+                  </header>
+
+                  <h3 className="wf2-etkMovieTitle">{movieTitle}</h3>
+
+                  <div className="wf2-etkHighlightRow">
+                    <div className="wf2-etkHighlightCell">
+                      <span>Show Date</span>
+                      <strong>{formattedDate}</strong>
+                    </div>
+                    <div className="wf2-etkHighlightCell">
+                      <span>Show Time</span>
+                      <strong>{formattedTime}</strong>
+                    </div>
+                    <div className="wf2-etkHighlightCell">
+                      <span>Seats</span>
+                      <strong>{seatLabel}</strong>
+                    </div>
                   </div>
-                  <div className="wf2-ticketInfoItem">
-                    <strong>Name: {displayName}</strong>
-                    <span>ID: {ticket?.reference || "MT-XXXX"}</span>
+
+                  <div className="wf2-etkGrid">
+                    <div className="wf2-etkGridItem">
+                      <span>Movie</span>
+                      <strong>{movieTitle}</strong>
+                    </div>
+                    <div className="wf2-etkGridItem">
+                      <span>Cinema</span>
+                      <strong>{cinemaBrand.name}</strong>
+                    </div>
+                    <div className="wf2-etkGridItem">
+                      <span>Screen</span>
+                      <strong>{theater}</strong>
+                    </div>
+                    <div className="wf2-etkGridItem">
+                      <span>Seats</span>
+                      <strong>{seatLabel}</strong>
+                    </div>
+                    <div className="wf2-etkGridItem">
+                      <span>Date</span>
+                      <strong>{formattedDate}</strong>
+                    </div>
+                    <div className="wf2-etkGridItem">
+                      <span>Time</span>
+                      <strong>{formattedTime}</strong>
+                    </div>
                   </div>
-                  <div className="wf2-ticketInfoItem">
-                    <strong>{displayDate}</strong>
+
+                  <footer className="wf2-etkFooter">
+                    <div className="wf2-etkTotals">
+                      <div>
+                        <span>Ticket Price</span>
+                        <strong>{ticketTotalLabel}</strong>
+                      </div>
+                      <div>
+                        <span>Food Price</span>
+                        <strong>{foodTotalLabel}</strong>
+                      </div>
+                      <div className="wf2-etkTotalFinal">
+                        <span>Total Amount</span>
+                        <strong>{grandTotalLabel}</strong>
+                      </div>
+                    </div>
+                    <div className="wf2-etkContact">
+                      <div>Support: {SUPPORT_CONTACT}</div>
+                      <div>Website: {WEBSITE_URL}</div>
+                    </div>
+                  </footer>
+                </section>
+
+                <aside className="wf2-etkSide">
+                  <div className="wf2-etkQrWrap">
+                    {ticket?.qr_code ? (
+                      <img className="wf2-ticketQr" src={ticket.qr_code} alt="Entry QR code" />
+                    ) : (
+                      <div className="wf2-ticketQrPlaceholder">QR code not available.</div>
+                    )}
                   </div>
-                  <div className="wf2-ticketInfoItem">
-                    <strong>{displayWebsite}</strong>
+                  <div className="wf2-etkTicketMeta">
+                    <span>Ticket ID</span>
+                    <strong>{ticketId}</strong>
                   </div>
-                </div>
-                <div className="wf2-ticketMetaRows">
-                  <div><span>Cinema</span> {venueName}</div>
-                  <div><span>Theater</span> {theater}</div>
-                  <div><span>Seat</span> {seatLabel}</div>
-                  <div><span>Date</span> {showDate || "-"}</div>
-                  <div><span>Time</span> {showTime || "-"}</div>
-                </div>
-                <div className="wf2-ticketTotals">
-                  <div><span>Ticket</span><strong>{ticketTotalLabel}</strong></div>
-                  <div><span>Food</span><strong>{foodTotalLabel}</strong></div>
-                  <div><span>Total</span><strong>{grandTotalLabel}</strong></div>
-                </div>
-              </div>
-              <div className="wf2-ticketRight">
-                <div className="wf2-ticketQrWrap">
-                  {ticket?.qr_code ? (
-                    <img className="wf2-ticketQr" src={ticket.qr_code} alt="Entry QR code" />
-                  ) : (
-                    <div className="wf2-ticketQrPlaceholder">QR code not available.</div>
-                  )}
-                </div>
-                <div className="wf2-ticketSideText">
-                  Please present this ticket at the entrance
-                </div>
-                <div className="wf2-ticketRef">Questions? +977 9826633701</div>
-              </div>
-              </div>
+                  <div className="wf2-etkTicketMeta">
+                    <span>Booking ID</span>
+                    <strong>{ticketId}</strong>
+                  </div>
+                  <p className="wf2-etkSideHint">Scan this QR at cinema entry.</p>
+                </aside>
+              </article>
             </div>
           </section>
 
@@ -250,7 +315,7 @@ export default function TicketDownload() {
             <div className="wf2-ticketDetailGrid">
               <div>
                 <div className="wf2-ticketDetailLabel">Movie</div>
-                <div className="wf2-ticketDetailValue">{ticketDetails.movie || order.movie.title}</div>
+                <div className="wf2-ticketDetailValue">{movieTitle}</div>
               </div>
               <div>
                 <div className="wf2-ticketDetailLabel">Language</div>
@@ -266,7 +331,11 @@ export default function TicketDownload() {
               </div>
               <div>
                 <div className="wf2-ticketDetailLabel">Venue</div>
-                <div className="wf2-ticketDetailValue">{venueName}</div>
+                <div className="wf2-ticketDetailValue">{cinemaBrand.name}</div>
+              </div>
+              <div>
+                <div className="wf2-ticketDetailLabel">Location</div>
+                <div className="wf2-ticketDetailValue">{cinemaLocation}</div>
               </div>
             </div>
           </section>
@@ -300,4 +369,78 @@ export default function TicketDownload() {
       </div>
     </div>
   );
+}
+
+function resolveCinemaBrand(value) {
+  const raw = String(value || "").trim();
+  const slug = resolveCinemaSlug(raw);
+  const match = slug ? getCinemaBySlug(slug) : null;
+  return {
+    name: match?.name || raw || "Cinema",
+    accent: match?.accent || "#0f6fbf",
+  };
+}
+
+function normalizeSeatLabel(value) {
+  const text = String(value || "").trim();
+  if (!text) return "-";
+  const cleaned = text.replace(/seat\s*no\s*[:#-]?\s*/i, "").trim();
+  return cleaned || "-";
+}
+
+function formatDateLabel(value) {
+  const text = String(value || "").trim();
+  if (!text) return "-";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    const date = new Date(`${text}T00:00:00`);
+    if (!Number.isNaN(date.getTime())) {
+      return date.toLocaleDateString("en-GB", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      });
+    }
+  }
+  const date = new Date(text);
+  if (Number.isNaN(date.getTime())) return text;
+  return date.toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function formatTimeLabel(value) {
+  const text = String(value || "").trim();
+  if (!text) return "-";
+  if (text.toLowerCase().includes("am") || text.toLowerCase().includes("pm")) {
+    return text.toUpperCase();
+  }
+  const match = text.match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return text;
+  let hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (Number.isNaN(hour) || Number.isNaN(minute)) return text;
+  const period = hour >= 12 ? "PM" : "AM";
+  hour = hour % 12 || 12;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")} ${period}`;
+}
+
+function extractLocationFromVenue(venue, cinemaName) {
+  const rawVenue = String(venue || "").trim();
+  if (!rawVenue) return "";
+  const firstChunk = rawVenue.split(",")[0]?.trim() || "";
+  if (!firstChunk) return "";
+  const normalizedCinema = normalizeText(cinemaName);
+  const normalizedChunk = normalizeText(firstChunk);
+  if (!normalizedCinema) return firstChunk;
+  if (normalizedChunk === normalizedCinema) return "";
+  if (normalizedChunk.startsWith(normalizedCinema)) {
+    return firstChunk.slice(cinemaName.length).replace(/^[-:,\s]+/, "").trim();
+  }
+  return firstChunk;
+}
+
+function normalizeText(value) {
+  return String(value || "").trim().toLowerCase();
 }

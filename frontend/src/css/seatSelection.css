@@ -242,16 +242,22 @@
   --seat-size: 42px;
   --seat-gap: 10px;
   display: grid;
-  gap: 16px;
+  gap: 20px;
   justify-content: center;
-  padding: 12px 14px 6px;
+  padding: 14px 14px 6px;
   box-sizing: border-box;
   background: transparent;
 }
 
 .seat-group {
   display: grid;
-  gap: 10px;
+  gap: 12px;
+}
+
+.seat-group + .seat-group {
+  margin-top: 8px;
+  padding-top: 18px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.1);
 }
 
 .seat-groupTitle {
@@ -263,9 +269,14 @@
   padding-left: 28px;
 }
 
+.seat-group--normal .seat-groupTitle { color: #d1d5db; }
+.seat-group--executive .seat-groupTitle { color: #93c5fd; }
+.seat-group--premium .seat-groupTitle { color: #d8b4fe; }
+.seat-group--vip .seat-groupTitle { color: #fcd34d; }
+
 .seat-groupRows {
   display: grid;
-  gap: 12px;
+  gap: 14px;
 }
 
 .seat-row {
@@ -276,11 +287,16 @@
 }
 
 .seat-rowSeats {
-  display: grid;
-  grid-template-columns: repeat(var(--seat-count), var(--seat-size));
+  display: flex;
   gap: var(--seat-gap);
   align-items: center;
   justify-content: center;
+}
+
+.seat-aisle {
+  width: calc(var(--seat-size) * 0.75);
+  height: var(--seat-size);
+  flex: 0 0 calc(var(--seat-size) * 0.75);
 }
 
 .seat-rowLabel {
@@ -291,22 +307,31 @@
 }
 
 .seat-colLabels {
-  display: grid;
-  grid-template-columns: 20px repeat(var(--seat-count), var(--seat-size));
+  display: flex;
   gap: var(--seat-gap);
   align-items: center;
+  justify-content: center;
   margin-top: 10px;
 }
 
 .seat-colSpacer {
   width: 18px;
   height: var(--seat-size);
+  flex: 0 0 18px;
 }
 
 .seat-colLabel {
   text-align: center;
   font-size: 11px;
   color: var(--muted);
+  width: var(--seat-size);
+  flex: 0 0 var(--seat-size);
+}
+
+.seat-colAisle {
+  width: calc(var(--seat-size) * 0.75);
+  height: 1px;
+  flex: 0 0 calc(var(--seat-size) * 0.75);
 }
 
 .seat {
@@ -348,9 +373,30 @@
 }
 
 .seat--available {
-  --seat-border: rgba(255, 59, 107, 0.7);
+  --seat-border: rgba(255, 255, 255, 0.2);
   --seat-bg: rgba(8, 10, 14, 0.9);
   --seat-text: rgba(234, 240, 255, 0.9);
+}
+
+.seat--available.seat--cat-normal {
+  --seat-border: #9ca3af;
+  --seat-bg: rgba(156, 163, 175, 0.22);
+}
+
+.seat--available.seat--cat-executive {
+  --seat-border: #3b82f6;
+  --seat-bg: rgba(59, 130, 246, 0.26);
+}
+
+.seat--available.seat--cat-premium {
+  --seat-border: #8b5cf6;
+  --seat-bg: rgba(139, 92, 246, 0.28);
+}
+
+.seat--available.seat--cat-vip {
+  --seat-border: #f59e0b;
+  --seat-bg: rgba(245, 158, 11, 0.33);
+  --seat-text: #fff5d6;
 }
 
 .seat--selected {
@@ -431,6 +477,10 @@
 .seat-legendBox.reserved { --seat-color: #3b82f6; background: rgba(59, 130, 246, 0.22); }
 .seat-legendBox.sold { --seat-color: #ef4444; background: rgba(239, 68, 68, 0.22); }
 .seat-legendBox.unavailable { --seat-color: rgba(255, 255, 255, 0.08); background: rgba(12, 12, 12, 0.9); opacity: 0.6; }
+.seat-legendBox.category.normal { --seat-color: #9ca3af; background: rgba(156, 163, 175, 0.28); }
+.seat-legendBox.category.executive { --seat-color: #3b82f6; background: rgba(59, 130, 246, 0.28); }
+.seat-legendBox.category.premium { --seat-color: #8b5cf6; background: rgba(139, 92, 246, 0.3); }
+.seat-legendBox.category.vip { --seat-color: #f59e0b; background: rgba(245, 158, 11, 0.34); }
 
 .seat-summary {
   background: var(--panel);
@@ -479,6 +529,23 @@
   border-radius: 12px;
   background: rgba(12, 15, 22, 0.7);
   border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.seat-categoryLegend {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 14px;
+}
+
+.seat-categoryLegendTitle {
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(234, 240, 255, 0.82);
 }
 
 .seat-priceRow {
@@ -598,8 +665,9 @@
   .seat-top { grid-template-columns: 1fr; }
   .seat-poster { height: 220px; }
   .seat-mapCard { overflow-x: auto; }
-  .seat-map { min-width: 640px; }
+  .seat-map { min-width: 720px; }
   .seat-map { --seat-size: 32px; --seat-gap: 8px; }
-  .seat-rowSeats { grid-template-columns: repeat(var(--seat-count), var(--seat-size)); }
-  .seat-colLabels { grid-template-columns: 18px repeat(var(--seat-count), var(--seat-size)); }
+  .seat-rowSeats { min-width: max-content; }
+  .seat-colLabels { min-width: max-content; }
+  .seat-categoryLegend { min-width: max-content; }
 }

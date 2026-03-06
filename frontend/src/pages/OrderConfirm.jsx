@@ -32,7 +32,8 @@ const DEFAULT_ORDER = {
   ],
 };
 
-const API_BASE_URL = "http://localhost:8000/api";
+const API_BASE_URL =
+  `${import.meta.env.VITE_BASE_URL?.replace(/\/$/, "") || "http://localhost:8000"}/api`;
 
 export default function OrderConfirm() {
   const navigate = useNavigate();
@@ -44,10 +45,22 @@ export default function OrderConfirm() {
     const ticketTotal =
       typeof state.ticketTotal === "number" ? state.ticketTotal : DEFAULT_ORDER.ticketTotal;
     const movie = state.movie || DEFAULT_ORDER.movie;
+    const selectedSeats = Array.isArray(state.selectedSeats)
+      ? state.selectedSeats
+      : extractSeatsFromLabel(movie?.seat);
+    const bookingContext = {
+      ...(state.bookingContext || {}),
+      selectedSeats:
+        Array.isArray(state?.bookingContext?.selectedSeats)
+          ? state.bookingContext.selectedSeats
+          : selectedSeats,
+    };
     return {
       movie,
       ticketTotal,
       items,
+      selectedSeats,
+      bookingContext,
     };
   }, [state]);
 
@@ -63,18 +76,52 @@ export default function OrderConfirm() {
     setIsPaying(true);
     setPayError("");
     try {
+      const bookingPayload = {
+        showId: order.bookingContext?.showId,
+        movieId: order.bookingContext?.movieId || order.movie.movieId,
+        cinemaId: order.bookingContext?.cinemaId || order.movie.cinemaId,
+        hall: order.bookingContext?.hall || order.movie.hall,
+        date: order.bookingContext?.date,
+        time: order.bookingContext?.time,
+        selectedSeats: order.selectedSeats,
+        userId:
+          order.bookingContext?.userId || getStoredUser()?.id || null,
+      };
+      const hasCompleteBookingContext = Boolean(
+        bookingPayload.movieId &&
+          bookingPayload.cinemaId &&
+          bookingPayload.date &&
+          bookingPayload.time &&
+          Array.isArray(bookingPayload.selectedSeats) &&
+          bookingPayload.selectedSeats.length
+      );
+
       const payload = {
         order: {
           movie: {
             title: order.movie.title,
             seat: order.movie.seat,
             venue: order.movie.venue,
+            cinemaName: order.movie.cinemaName,
+            cinemaLocation: order.movie.cinemaLocation,
             language: order.movie.language,
             runtime: order.movie.runtime,
+            hall: order.movie.hall || order.bookingContext?.hall,
+            theater: order.movie.theater || order.bookingContext?.hall,
+            showDate: order.movie.showDate || order.bookingContext?.date,
+            showTime: order.movie.showTime || order.bookingContext?.time,
+            movieId: order.movie.movieId || order.bookingContext?.movieId,
+            cinemaId: order.movie.cinemaId || order.bookingContext?.cinemaId,
           },
           ticketTotal: order.ticketTotal,
           foodTotal,
           total: orderTotal,
+          ...(hasCompleteBookingContext
+            ? {
+                selectedSeats: order.selectedSeats,
+                booking: bookingPayload,
+              }
+            : {}),
           items: order.items.map((item) => ({
             name: item.name,
             qty: item.qty,
@@ -106,6 +153,8 @@ export default function OrderConfirm() {
             items: order.items,
             foodTotal,
             total: orderTotal,
+            selectedSeats: order.selectedSeats,
+            bookingContext: order.bookingContext,
           },
           ticket: data,
         },
@@ -217,4 +266,23 @@ export default function OrderConfirm() {
       </div>
     </div>
   );
+}
+
+function extractSeatsFromLabel(value) {
+  if (!value) return [];
+  const text = String(value);
+  const matches = text.match(/[A-Za-z]+\s*\d+/g);
+  if (!matches) return [];
+  return matches.map((item) => item.replace(/\s+/g, "").toUpperCase());
+}
+
+function getStoredUser() {
+  if (typeof window === "undefined") return null;
+  const raw = localStorage.getItem("user");
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
 }

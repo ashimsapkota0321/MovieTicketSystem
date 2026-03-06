@@ -114,7 +114,16 @@ export default function MovieSchedule() {
                     key={`${row.vendor.slug}-${time}`}
                     className="movieSchedule-time"
                     type="button"
-                    onClick={() => navigate("/booking")}
+                    onClick={() =>
+                      navigate("/booking", {
+                        state: {
+                          movie,
+                          vendor: row.vendor,
+                          date: activeDateValue,
+                          time,
+                        },
+                      })
+                    }
                   >
                     {time}
                   </button>

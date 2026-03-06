@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Bell, Menu, ChevronDown, User } from "lucide-react";
+import { clearAuthSession } from "../lib/authSession";
 
 export default function AdminTopbar({ onToggleSidebar }) {
   const navigate = useNavigate();
@@ -33,6 +34,7 @@ export default function AdminTopbar({ onToggleSidebar }) {
   }, []);
 
   const handleLogout = () => {
+    clearAuthSession();
     localStorage.removeItem("admin");
     if (typeof window !== "undefined") {
       window.dispatchEvent(new Event("mt:admin-updated"));

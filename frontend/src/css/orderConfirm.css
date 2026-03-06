@@ -1,3 +1,5 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Montserrat:wght@600;700;800&family=Poppins:wght@500;600;700;800&display=swap");
+
 .wf2-orderPage {
   padding: 24px var(--page-pad) 80px;
   color: #f2f4fb;
@@ -780,9 +782,278 @@
   justify-content: center;
 }
 
+.wf2-ticketFrame {
+  --wf2-ticket-accent: #0f6fbf;
+  background: linear-gradient(150deg, #f8fafc 0%, #f1f5f9 100%);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 22px;
+  padding: 16px;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.2);
+}
+
+.wf2-etkShell {
+  background: #ffffff;
+  border: 1px solid rgba(203, 213, 225, 0.9);
+  border-radius: 16px;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 240px;
+  color: #0f172a;
+  font-family: "Inter", "Poppins", sans-serif;
+}
+
+.wf2-etkMain {
+  padding: clamp(18px, 2.4vw, 28px);
+  display: grid;
+  gap: 16px;
+}
+
+.wf2-etkHead {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+}
+
+.wf2-etkLogo {
+  font-family: "Montserrat", "Poppins", sans-serif;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #ffffff;
+  background: linear-gradient(135deg, var(--wf2-ticket-accent), #0f172a);
+  border-radius: 999px;
+  padding: 7px 12px;
+}
+
+.wf2-etkVendorBlock {
+  display: grid;
+  gap: 2px;
+}
+
+.wf2-etkVendorName {
+  font-size: 19px;
+  font-weight: 800;
+  color: #0f172a;
+  line-height: 1.15;
+}
+
+.wf2-etkVendorLocation {
+  font-size: 13px;
+  color: #475569;
+}
+
+.wf2-etkType {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--wf2-ticket-accent);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border: 1px solid rgba(15, 23, 42, 0.16);
+  background: rgba(15, 23, 42, 0.05);
+  border-radius: 999px;
+  padding: 6px 10px;
+}
+
+.wf2-etkMovieTitle {
+  margin: 0;
+  font-family: "Poppins", "Montserrat", sans-serif;
+  font-size: clamp(30px, 4vw, 42px);
+  line-height: 1.06;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.wf2-etkHighlightRow {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.wf2-etkHighlightCell {
+  background: #f8fafc;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 3px;
+}
+
+.wf2-etkHighlightCell span {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #64748b;
+  font-weight: 700;
+}
+
+.wf2-etkHighlightCell strong {
+  font-size: 15px;
+  color: #0f172a;
+  font-weight: 800;
+}
+
+.wf2-etkGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.wf2-etkGridItem {
+  background: #ffffff;
+  border: 1px solid rgba(148, 163, 184, 0.38);
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 4px;
+}
+
+.wf2-etkGridItem span {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #64748b;
+  font-weight: 700;
+}
+
+.wf2-etkGridItem strong {
+  font-size: 14px;
+  color: #0f172a;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.wf2-etkFooter {
+  border-top: 1px dashed rgba(148, 163, 184, 0.6);
+  padding-top: 14px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: end;
+}
+
+.wf2-etkTotals {
+  display: grid;
+  gap: 8px;
+}
+
+.wf2-etkTotals div {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.wf2-etkTotals span {
+  font-size: 13px;
+  color: #475569;
+}
+
+.wf2-etkTotals strong {
+  font-size: 15px;
+  color: #0f172a;
+  font-weight: 700;
+}
+
+.wf2-etkTotalFinal strong {
+  color: var(--wf2-ticket-accent);
+  font-size: 17px;
+  font-weight: 800;
+}
+
+.wf2-etkContact {
+  text-align: right;
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.wf2-etkSide {
+  background: linear-gradient(180deg, var(--wf2-ticket-accent), #0f172a);
+  padding: 18px 14px;
+  color: #f8fafc;
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  justify-items: center;
+}
+
+.wf2-etkQrWrap {
+  background: #ffffff;
+  border-radius: 12px;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.8);
+}
+
+.wf2-ticketQr {
+  width: 140px;
+  height: auto;
+  display: block;
+}
+
+.wf2-ticketQrPlaceholder {
+  width: 140px;
+  min-height: 140px;
+  border: 1px dashed rgba(15, 23, 42, 0.35);
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  padding: 10px;
+  color: #334155;
+  font-size: 12px;
+  background: #e2e8f0;
+}
+
+.wf2-etkTicketMeta {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 10px;
+  padding: 8px 10px;
+  display: grid;
+  gap: 2px;
+  text-align: center;
+}
+
+.wf2-etkTicketMeta span {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(248, 250, 252, 0.8);
+}
+
+.wf2-etkTicketMeta strong {
+  font-size: 13px;
+  font-weight: 800;
+  color: #ffffff;
+}
+
+.wf2-etkSideHint {
+  margin: 4px 0 0;
+  font-size: 12px;
+  text-align: center;
+  color: rgba(241, 245, 249, 0.88);
+}
+
 @media (max-width: 1024px) {
   .wf2-orderLayout {
     grid-template-columns: 1fr;
+  }
+
+  .wf2-etkShell {
+    grid-template-columns: 1fr;
+  }
+
+  .wf2-etkSide {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-items: start;
+  }
+
+  .wf2-etkQrWrap {
+    grid-column: 1 / -1;
   }
 }
 
@@ -815,5 +1086,42 @@
   .wf2-ticketRight {
     border-left: none;
     border-top: 2px dashed #e5e7eb;
+  }
+
+  .wf2-etkMain {
+    padding: 16px;
+  }
+
+  .wf2-etkHead {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .wf2-etkType {
+    width: fit-content;
+  }
+
+  .wf2-etkHighlightRow {
+    grid-template-columns: 1fr;
+  }
+
+  .wf2-etkGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .wf2-etkFooter {
+    grid-template-columns: 1fr;
+  }
+
+  .wf2-etkContact {
+    text-align: left;
+  }
+
+  .wf2-etkSide {
+    grid-template-columns: 1fr;
+  }
+
+  .wf2-etkQrWrap {
+    grid-column: auto;
   }
 }

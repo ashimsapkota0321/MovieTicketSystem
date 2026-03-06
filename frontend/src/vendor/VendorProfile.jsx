@@ -13,6 +13,7 @@ import {
   Phone,
 } from "lucide-react";
 import "../css/profile.css";
+import { clearAuthSession, getAuthHeaders } from "../lib/authSession";
 
 const STORAGE_KEY = "vendor";
 const UPDATE_EVENT = "mt:vendor-updated";
@@ -268,6 +269,7 @@ export default function VendorProfile() {
         method: "PATCH",
         headers: {
           Accept: "application/json",
+          ...getAuthHeaders(),
         },
       };
 
@@ -332,6 +334,7 @@ export default function VendorProfile() {
   };
 
   const handleLogout = () => {
+    clearAuthSession();
     sessionStorage.removeItem(STORAGE_KEY);
     setVendor(null);
     if (typeof window !== "undefined") {

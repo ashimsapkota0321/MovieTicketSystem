@@ -5,6 +5,7 @@ import HeroImage2 from "../images/balidan.jpg";
 import HeroImage3 from "../images/degreemaila.jpg";
 import HeroImage4 from "../images/avengers.jpg";
 import Logo from "../images/logo.png";
+import { clearAuthSession, clearStoredRoleData, storeAuthSession } from "../lib/authSession";
 
 const LoginPage = () => {
   const [emailOrPhone, setEmailOrPhone] = useState("");
@@ -91,6 +92,9 @@ const LoginPage = () => {
 
       const isAdminLogin = data && (data.role === "admin" || data.admin);
       if (isAdminLogin) {
+        clearStoredRoleData();
+        clearAuthSession();
+        storeAuthSession("admin", data?.access_token || "");
         if (data.admin) {
           localStorage.setItem("admin", JSON.stringify(data.admin));
         }
@@ -102,6 +106,9 @@ const LoginPage = () => {
 
       const isVendorLogin = data && (data.role === "vendor" || data.vendor);
       if (isVendorLogin) {
+        clearStoredRoleData();
+        clearAuthSession();
+        storeAuthSession("vendor", data?.access_token || "");
         if (data.vendor) {
           sessionStorage.setItem("vendor", JSON.stringify(data.vendor));
           if (typeof window !== "undefined") {
@@ -115,6 +122,9 @@ const LoginPage = () => {
       }
 
       if (data && data.user) {
+        clearStoredRoleData();
+        clearAuthSession();
+        storeAuthSession("customer", data?.access_token || "");
         localStorage.setItem("user", JSON.stringify(data.user));
         setTimeout(() => {
           window.location.href = "/";
