@@ -501,6 +501,24 @@ class MovieAdminWriteSerializer(serializers.ModelSerializer):
             "credits",
         ]
 
+    def to_internal_value(self, data):
+        """Accept both camelCase and snake_case payload keys from admin clients."""
+        mutable = data.copy() if hasattr(data, "copy") else dict(data)
+        aliases = {
+            "shortDescription": "short_description",
+            "longDescription": "long_description",
+            "durationMinutes": "duration_minutes",
+            "releaseDate": "release_date",
+            "posterUrl": "poster_url",
+            "trailerUrl": "trailer_url",
+            "isActive": "is_active",
+            "synopsis": "description",
+        }
+        for source_key, target_key in aliases.items():
+            if source_key in mutable and target_key not in mutable:
+                mutable[target_key] = mutable.get(source_key)
+        return super().to_internal_value(mutable)
+
     def _sync_credits(self, movie, credits_data):
         """Synchronize credits for a movie, creating/updating/removing as needed."""
         existing = {credit.id: credit for credit in movie.credits.all()}
