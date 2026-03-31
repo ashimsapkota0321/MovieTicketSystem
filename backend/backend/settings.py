@@ -83,13 +83,13 @@ USE_MYSQL = os.environ.get("USE_MYSQL", "").strip().lower() in ("1", "true", "ye
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME': os.environ.get('DB_NAME', 'movie_db'),
-        'USER': os.environ.get('DB_USER', 'root'),
-        'PASSWORD': os.environ.get('DB_PASSWORD', 'root123'),
-        'HOST': os.environ.get('DB_HOST', 'localhost'),
-        'PORT': os.environ.get('DB_PORT', '3306'),
+        'NAME': 'moviebooking',
+        'USER': 'ashim',
+        'PASSWORD': 'root123',
+        'HOST': 'localhost',
+        'PORT': '3306',
     }
-}
+}  
 
 
 
@@ -131,3 +131,20 @@ STATIC_URL = 'static/'
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+# eSewa (ePay V2) configuration
+ESEWA_PRODUCT_CODE = os.environ.get("ESEWA_PRODUCT_CODE", "EPAYTEST").strip() or "EPAYTEST"
+ESEWA_SECRET_KEY = os.environ.get("ESEWA_SECRET_KEY", "8gBm/:&EnhH.1/q").strip() or "8gBm/:&EnhH.1/q"
+ESEWA_FORM_URL = os.environ.get(
+    "ESEWA_FORM_URL",
+    "https://rc-epay.esewa.com.np/api/epay/main/v2/form",
+).strip() or "https://rc-epay.esewa.com.np/api/epay/main/v2/form"
+ESEWA_STATUS_CHECK_URL = os.environ.get(
+    "ESEWA_STATUS_CHECK_URL",
+    "https://rc.esewa.com.np/api/epay/transaction/status/",
+).strip() or "https://rc.esewa.com.np/api/epay/transaction/status/"
+try:
+    ESEWA_PENDING_TTL_SECONDS = int(os.environ.get("ESEWA_PENDING_TTL_SECONDS", "1800"))
+except (TypeError, ValueError):
+    ESEWA_PENDING_TTL_SECONDS = 1800
+FRONTEND_BASE_URL = os.environ.get("FRONTEND_BASE_URL", "http://localhost:5173").strip() or "http://localhost:5173"
