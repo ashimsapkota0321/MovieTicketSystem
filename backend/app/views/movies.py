@@ -10,15 +10,24 @@ from rest_framework.response import Response
 
 from ..models import Person, Review
 from ..serializers import ReviewWriteSerializer
-from .. import selectors, services
-from ..utils import build_media_url
+from .. import selectors, services, permissions
+from ..utils import build_media_url, coalesce
 
 
 @api_view(["GET", "POST"])
 def movies(request: Any):
     """List or create movies."""
     if request.method == "GET":
-        payload = selectors.list_movies_payload(request)
+        include_all = permissions.is_admin_request(request) or permissions.is_vendor_request(
+            request
+        )
+        # Admin/vendor catalogs should not be narrowed by customer city selection.
+        city = None if include_all else coalesce(request.query_params, "city", "location")
+        payload = selectors.list_movies_payload(
+            request,
+            include_all=include_all,
+            city=city,
+        )
         return Response({"movies": payload}, status=status.HTTP_200_OK)
 
     payload, status_code = services.create_movie(request)

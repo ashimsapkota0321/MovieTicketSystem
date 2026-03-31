@@ -4,12 +4,23 @@ from __future__ import annotations
 
 from typing import Any
 
+from django.http import HttpResponse
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from .. import services
-from ..permissions import admin_required
+from ..models import (
+    BulkTicketBatch,
+    PricingRule,
+    PrivateScreeningRequest,
+    Transaction,
+    VendorCampaign,
+    VendorPromoCode,
+    VendorStaff,
+)
+from ..permissions import admin_required, vendor_required, resolve_vendor, is_vendor_owner
+from ..utils import coalesce
 
 
 @api_view(["GET", "POST"])
@@ -27,5 +38,309 @@ def manage_vendors(request: Any):
 @api_view(["GET"])
 def list_cinemas(request: Any):
     """Return cinema vendors for public listings."""
-    payload = services.list_cinemas_payload(request)
+    city = coalesce(request.query_params, "city", "location")
+    payload = services.list_cinemas_payload(request, city=city)
     return Response({"vendors": payload}, status=status.HTTP_200_OK)
+
+
+@api_view(["GET"])
+@vendor_required
+def vendor_analytics(request: Any):
+    """Get vendor analytics dashboard data."""
+    vendor = resolve_vendor(request)
+    if not vendor:
+        return Response(
+            {"error": "Vendor not found", "message": "Unable to identify vendor"},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    
+    analytics_data = services.get_vendor_analytics(vendor, request)
+    return Response(analytics_data, status=status.HTTP_200_OK)
+
+
+@api_view(["GET", "POST"])
+@vendor_required
+def vendor_pricing_rules(request: Any):
+    """List or create vendor pricing rules for dynamic ticket pricing."""
+    if request.method == "GET":
+        rules = services.list_vendor_pricing_rules(request)
+        return Response({"rules": rules}, status=status.HTTP_200_OK)
+
+    payload, status_code = services.create_vendor_pricing_rule(request)
+    return Response(payload, status=status_code)
+
+
+@api_view(["PATCH", "DELETE"])
+@vendor_required
+def vendor_pricing_rule_detail(request: Any, rule_id: int):
+    """Update or delete a single vendor pricing rule."""
+    vendor = resolve_vendor(request)
+    if not vendor:
+        return Response(
+            {"error": "Vendor not found", "message": "Unable to identify vendor"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    rule = PricingRule.objects.filter(id=rule_id, vendor_id=vendor.id).first()
+    if not rule:
+        return Response({"message": "Pricing rule not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == "PATCH":
+        payload, status_code = services.update_vendor_pricing_rule(request, rule)
+        return Response(payload, status=status_code)
+
+    payload, status_code = services.delete_vendor_pricing_rule(rule)
+    return Response(payload, status=status_code)
+
+
+@api_view(["GET"])
+@vendor_required
+def vendor_wallet_balance(request: Any):
+    """Get authenticated vendor wallet summary and balance."""
+    payload, status_code = services.get_vendor_wallet_balance(request)
+    return Response(payload, status=status_code)
+
+
+@api_view(["POST"])
+@vendor_required
+def vendor_wallet_withdraw(request: Any):
+    """Create a vendor withdrawal request."""
+    payload, status_code = services.create_vendor_withdrawal_request(request)
+    return Response(payload, status=status_code)
+
+
+@api_view(["GET"])
+@vendor_required
+def vendor_wallet_transactions(request: Any):
+    """List vendor wallet transactions."""
+    payload, status_code = services.list_vendor_wallet_transactions(request)
+    return Response(payload, status=status_code)
+
+
+@api_view(["GET"])
+@admin_required
+def admin_withdrawal_requests(request: Any):
+    """List withdrawal requests for admin review."""
+    payload, status_code = services.list_admin_withdrawal_requests(request)
+    return Response(payload, status=status_code)
+
+
+@api_view(["POST"])
+@admin_required
+def admin_withdrawal_approve(request: Any, transaction_id: int):
+    """Approve one pending withdrawal request."""
+    withdrawal_txn = Transaction.objects.filter(id=transaction_id).first()
+    if not withdrawal_txn:
+        return Response({"message": "Withdrawal request not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    payload, status_code = services.approve_admin_withdrawal_request(request, withdrawal_txn)
+    return Response(payload, status=status_code)
+
+
+@api_view(["POST"])
+@admin_required
+def admin_withdrawal_reject(request: Any, transaction_id: int):
+    """Reject one pending withdrawal request."""
+    withdrawal_txn = Transaction.objects.filter(id=transaction_id).first()
+    if not withdrawal_txn:
+        return Response({"message": "Withdrawal request not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    payload, status_code = services.reject_admin_withdrawal_request(request, withdrawal_txn)
+    return Response(payload, status=status_code)
+
+
+@api_view(["GET", "PATCH"])
+@vendor_required
+def vendor_cancellation_policy(request: Any):
+    """Get or update vendor cancellation policy (default or per screen/hall)."""
+    if request.method == "GET":
+        payload, status_code = services.get_vendor_cancellation_policy(request)
+        return Response(payload, status=status_code)
+
+    payload, status_code = services.update_vendor_cancellation_policy(request)
+    return Response(payload, status=status_code)
+
+
+@api_view(["POST"])
+def private_screening_request_submit(request: Any):
+    """Submit a private screening quote request."""
+    payload, status_code = services.create_private_screening_request(request)
+    return Response(payload, status=status_code)
+
+
+@api_view(["GET"])
+@vendor_required
+def vendor_private_screening_requests(request: Any):
+    """List private screening requests assigned to vendor."""
+    payload, status_code = services.list_vendor_private_screening_requests(request)
+    return Response(payload, status=status_code)
+
+
+@api_view(["PATCH"])
+@vendor_required
+def vendor_private_screening_request_detail(request: Any, request_id: int):
+    """Update vendor actions for one private screening request."""
+    vendor = resolve_vendor(request)
+    if not vendor:
+        return Response({"message": "Vendor not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    screening_request = PrivateScreeningRequest.objects.filter(
+        id=request_id,
+        vendor_id=vendor.id,
+    ).first()
+    if not screening_request:
+        return Response({"message": "Private screening request not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    payload, status_code = services.update_vendor_private_screening_request(request, screening_request)
+    return Response(payload, status=status_code)
+
+
+@api_view(["GET", "POST"])
+@vendor_required
+def vendor_bulk_ticket_batches(request: Any):
+    """List or generate bulk ticket batches for vendor."""
+    if request.method == "GET":
+        payload, status_code = services.list_vendor_bulk_ticket_batches(request)
+        return Response(payload, status=status_code)
+
+    payload, status_code = services.create_vendor_bulk_ticket_batch(request)
+    return Response(payload, status=status_code)
+
+
+@api_view(["GET"])
+@vendor_required
+def vendor_bulk_ticket_batch_export(request: Any, batch_id: int):
+    """Export one vendor bulk ticket batch as a downloadable CSV."""
+    vendor = resolve_vendor(request)
+    if not vendor:
+        return Response({"message": "Vendor not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    batch = BulkTicketBatch.objects.filter(id=batch_id, vendor_id=vendor.id).first()
+    if not batch:
+        return Response({"message": "Bulk ticket batch not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    payload, status_code = services.export_vendor_bulk_ticket_batch(request, batch)
+    if status_code != status.HTTP_200_OK:
+        return Response(payload, status=status_code)
+
+    csv_base64 = payload.get("csv_base64") or ""
+    if not csv_base64:
+        return Response({"message": "CSV export is empty."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    try:
+        import base64
+
+        csv_content = base64.b64decode(csv_base64)
+    except Exception:
+        return Response({"message": "Failed to decode export file."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    filename = str(payload.get("filename") or f"bulk_tickets_batch_{batch.id}.csv")
+    response = HttpResponse(csv_content, content_type="text/csv")
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
+
+
+@api_view(["GET", "POST"])
+@vendor_required
+def vendor_staff_accounts(request: Any):
+    """List or create vendor staff sub-accounts."""
+    if not is_vendor_owner(request):
+        return Response(
+            {"message": "Only vendor admin can manage staff accounts."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    if request.method == "GET":
+        payload, status_code = services.list_vendor_staff_accounts(request)
+        return Response(payload, status=status_code)
+
+    payload, status_code = services.create_vendor_staff_account(request)
+    return Response(payload, status=status_code)
+
+
+@api_view(["PATCH"])
+@vendor_required
+def vendor_staff_account_detail(request: Any, staff_id: int):
+    """Update a vendor staff account."""
+    if not is_vendor_owner(request):
+        return Response(
+            {"message": "Only vendor admin can manage staff accounts."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    vendor = resolve_vendor(request)
+    if not vendor:
+        return Response({"message": "Vendor not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    staff = VendorStaff.objects.filter(id=staff_id, vendor_id=vendor.id).first()
+    if not staff:
+        return Response({"message": "Vendor staff account not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    payload, status_code = services.update_vendor_staff_account(request, staff)
+    return Response(payload, status=status_code)
+
+
+@api_view(["GET", "POST"])
+@vendor_required
+def vendor_promo_codes(request: Any):
+    """List or create vendor-specific promo codes."""
+    if request.method == "GET":
+        payload, status_code = services.list_vendor_promo_codes(request)
+        return Response(payload, status=status_code)
+
+    payload, status_code = services.create_vendor_promo_code(request)
+    return Response(payload, status=status_code)
+
+
+@api_view(["PATCH", "DELETE"])
+@vendor_required
+def vendor_promo_code_detail(request: Any, promo_id: int):
+    """Update or delete one vendor promo code."""
+    vendor = resolve_vendor(request)
+    if not vendor:
+        return Response({"message": "Vendor not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    promo = VendorPromoCode.objects.filter(id=promo_id, vendor_id=vendor.id).first()
+    if not promo:
+        return Response({"message": "Vendor promo code not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == "PATCH":
+        payload, status_code = services.update_vendor_promo_code(request, promo)
+        return Response(payload, status=status_code)
+
+    payload, status_code = services.delete_vendor_promo_code(promo)
+    return Response(payload, status=status_code)
+
+
+@api_view(["GET", "POST"])
+@vendor_required
+def vendor_campaigns(request: Any):
+    """List or create targeted vendor marketing campaigns."""
+    if request.method == "GET":
+        payload, status_code = services.list_vendor_campaigns(request)
+        return Response(payload, status=status_code)
+
+    payload, status_code = services.create_vendor_campaign(request)
+    return Response(payload, status=status_code)
+
+
+@api_view(["PATCH", "POST"])
+@vendor_required
+def vendor_campaign_detail(request: Any, campaign_id: int):
+    """Update campaign settings or run campaign immediately."""
+    vendor = resolve_vendor(request)
+    if not vendor:
+        return Response({"message": "Vendor not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    campaign = VendorCampaign.objects.filter(id=campaign_id, vendor_id=vendor.id).select_related(
+        "vendor", "promo_code", "target_movie", "recommended_movie"
+    ).first()
+    if not campaign:
+        return Response({"message": "Campaign not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == "PATCH":
+        payload, status_code = services.update_vendor_campaign(request, campaign)
+        return Response(payload, status=status_code)
+
+    payload, status_code = services.run_vendor_campaign(campaign)
+    return Response(payload, status=status_code)
