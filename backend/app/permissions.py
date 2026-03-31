@@ -12,7 +12,7 @@ from rest_framework import status
 from rest_framework.permissions import SAFE_METHODS, BasePermission
 from rest_framework.response import Response
 
-from .models import Admin, User, Vendor
+from .models import Admin, User, Vendor, VendorStaff
 
 ADMIN_REQUIRED_MESSAGE = "Admin access required."
 SUPER_ADMIN_REQUIRED_MESSAGE = "Super admin access required."
@@ -23,6 +23,8 @@ ROLE_ADMIN = "admin"
 ROLE_VENDOR = "vendor"
 ROLE_CUSTOMER = "customer"
 ROLE_CHOICES = {ROLE_ADMIN, ROLE_VENDOR, ROLE_CUSTOMER}
+STAFF_ROLE_CASHIER = VendorStaff.ROLE_CASHIER
+STAFF_ROLE_MANAGER = VendorStaff.ROLE_MANAGER
 AUTH_TOKEN_SALT = "meroticket.auth.token.v1"
 DEFAULT_TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24 * 7  # 7 days
 
@@ -39,13 +41,15 @@ def _token_max_age_seconds() -> int:
     return max(parsed, 60)
 
 
-def issue_access_token(role: str, user_id: Any) -> str:
+def issue_access_token(role: str, user_id: Any, extras: Optional[dict[str, Any]] = None) -> str:
     """Issue a signed access token containing role and subject ID."""
     normalized_role = str(role or "").strip().lower()
     if normalized_role not in ROLE_CHOICES:
         raise ValueError("Unsupported role")
     subject_id = int(user_id)
     payload = {"role": normalized_role, "user_id": subject_id}
+    if isinstance(extras, dict):
+        payload.update(extras)
     return signing.dumps(payload, salt=AUTH_TOKEN_SALT, compress=True)
 
 
@@ -93,7 +97,15 @@ def _decode_access_token(token: str) -> Optional[dict[str, Any]]:
         return None
     if user_id <= 0:
         return None
-    return {"role": role, "user_id": user_id}
+    decoded = {"role": role, "user_id": user_id}
+    if "staff_id" in payload:
+        try:
+            decoded["staff_id"] = int(payload.get("staff_id"))
+        except (TypeError, ValueError):
+            return None
+    if "staff_role" in payload:
+        decoded["staff_role"] = str(payload.get("staff_role") or "").strip().upper()
+    return decoded
 
 
 def _identity_query(user: Any) -> Optional[Q]:
@@ -119,6 +131,7 @@ def _resolve_identity_from_token(token_payload: dict[str, Any]) -> dict[str, Any
         "role": None,
         "admin": None,
         "vendor": None,
+        "vendor_staff": None,
         "customer": None,
     }
     role = token_payload.get("role")
@@ -137,6 +150,15 @@ def _resolve_identity_from_token(token_payload: dict[str, Any]) -> dict[str, Any
         if vendor:
             identity["role"] = ROLE_VENDOR
             identity["vendor"] = vendor
+            staff_id = token_payload.get("staff_id")
+            if staff_id:
+                staff = VendorStaff.objects.filter(
+                    pk=staff_id,
+                    vendor_id=vendor.id,
+                    is_active=True,
+                ).first()
+                if staff:
+                    identity["vendor_staff"] = staff
     elif role == ROLE_CUSTOMER:
         customer = User.objects.filter(pk=user_id, is_active=True).first()
         if customer:
@@ -151,6 +173,7 @@ def _resolve_identity_from_request_user(request: Any) -> dict[str, Any]:
         "role": None,
         "admin": None,
         "vendor": None,
+        "vendor_staff": None,
         "customer": None,
     }
     user = getattr(request, "user", None)
@@ -217,6 +240,7 @@ def resolve_request_identity(request: Any) -> dict[str, Any]:
         "role": None,
         "admin": None,
         "vendor": None,
+        "vendor_staff": None,
         "customer": None,
     }
     token = _extract_bearer_token(request)
@@ -255,6 +279,59 @@ def resolve_customer(request: Any) -> Optional[Any]:
     return resolve_request_identity(request).get("customer")
 
 
+def resolve_vendor_staff(request: Any) -> Optional[VendorStaff]:
+    """Resolve the vendor staff actor attached to the request, if any."""
+    staff = resolve_request_identity(request).get("vendor_staff")
+    return staff if isinstance(staff, VendorStaff) else None
+
+
+def is_vendor_owner(request: Any) -> bool:
+    """Return True when request is vendor account owner (not staff sub-account)."""
+    return bool(resolve_vendor(request)) and resolve_vendor_staff(request) is None
+
+
+def is_vendor_manager(request: Any) -> bool:
+    """Return True when request is owner vendor or manager sub-account."""
+    if is_vendor_owner(request):
+        return True
+    staff = resolve_vendor_staff(request)
+    return bool(staff and str(staff.role).upper() == STAFF_ROLE_MANAGER)
+
+
+def _staff_can_access_path(staff_role: str, path: str) -> bool:
+    """Restrict vendor staff routes by role."""
+    normalized_path = str(path or "").lower()
+    role = str(staff_role or "").upper()
+
+    cashier_allowed_prefixes = [
+        "/api/vendor/bookings/",
+        "/api/vendor/bookings",
+        "/api/vendor/ticket-validation/",
+        "/api/vendor/ticket-validation",
+        "/api/profile/vendor/",
+    ]
+    manager_extra_prefixes = [
+        "/api/vendor/pricing-rules/",
+        "/api/vendor/pricing-rules",
+        "/api/vendor/seat-layout/",
+        "/api/vendor/seat-layout",
+        "/api/vendor/shows/",
+        "/api/vendor/shows",
+        "/api/vendor/promo-codes/",
+        "/api/vendor/promo-codes",
+        "/api/vendor/campaigns/",
+        "/api/vendor/campaigns",
+    ]
+
+    if any(normalized_path.startswith(prefix) for prefix in cashier_allowed_prefixes):
+        return True
+    if role == STAFF_ROLE_MANAGER and any(
+        normalized_path.startswith(prefix) for prefix in manager_extra_prefixes
+    ):
+        return True
+    return False
+
+
 def is_admin_request(request: Any) -> bool:
     """Return True if the request is authenticated as an admin."""
     return get_request_role(request) == ROLE_ADMIN
@@ -286,6 +363,13 @@ def role_required(*roles: str):
                     {"message": message},
                     status=status.HTTP_403_FORBIDDEN,
                 )
+            if role == ROLE_VENDOR:
+                staff = resolve_vendor_staff(request)
+                if staff and not _staff_can_access_path(staff.role, getattr(request, "path", "")):
+                    return Response(
+                        {"message": "Vendor staff access denied for this operation."},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
             return view_func(request, *args, **kwargs)
 
         return wrapped
