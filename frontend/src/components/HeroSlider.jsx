@@ -5,23 +5,95 @@ import api from "../api/api";
 import "../css/hero-slider.css";
 
 const AUTO_PLAY_MS = 5000;
+const DRAG_THRESHOLD_RATIO = 0.22;
+const DRAG_DISTANCE_PX = 28;
 
-export default function HeroSlider() {
+function parseYear(value) {
+  if (!value) return "";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return parsed.getFullYear();
+}
+
+function mapBannerToSlide(banner) {
+  if (!banner) return null;
+  const movie = banner.movie || null;
+  const image =
+    banner.image ||
+    movie?.bannerImage ||
+    movie?.posterImage ||
+    movie?.posterUrl ||
+    movie?.poster_url ||
+    null;
+  if (!image && !movie) return null;
+
+  const isMovie = banner.banner_type === "MOVIE" && movie?.id;
+  return {
+    id: banner.id,
+    slide_type: isMovie ? "MOVIE" : "PROMO",
+    movie_id: isMovie ? movie.id : null,
+    title: movie?.title || "",
+    subtitle: "",
+    badge_text: isMovie ? "Now Showing" : "",
+    description: movie?.shortDescription || movie?.description || "",
+    image,
+    genre: movie?.genre || "",
+    year: parseYear(movie?.releaseDate),
+    duration: movie?.duration || "",
+    cta_type: isMovie ? "MOVIE_DETAIL" : null,
+    cta_text: isMovie ? "Buy Ticket" : null,
+    external_url: null,
+  };
+}
+
+export default function HeroSlider({ page = "home" }) {
   const navigate = useNavigate();
+  const heroRef = useRef(null);
+  const trackRef = useRef(null);
+  const dragState = useRef({
+    active: false,
+    pointerId: null,
+    startX: 0,
+    lastX: 0,
+    moved: false,
+  });
   const [slides, setSlides] = useState([]);
-  const [activeIndex, setActiveIndex] = useState(0);
-  const [paused, setPaused] = useState(false);
+  // Track index is used for the infinite-loop track. When there are 2+ slides:
+  // loopSlides = [lastClone, ...slides, firstClone] and trackIndex starts at 1.
+  const [trackIndex, setTrackIndex] = useState(0);
+  const [transitionEnabled, setTransitionEnabled] = useState(true);
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragOffset, setDragOffset] = useState(0);
   const autoRef = useRef(null);
+  const wheelLock = useRef(0);
+  const paused = isDragging;
+  const canSlide = slides.length > 1;
 
   useEffect(() => {
     let mounted = true;
     const loadSlides = async () => {
       try {
+        const bannerResponse = await api.get("/api/banners/active/", {
+          params: page ? { page } : undefined,
+        });
+        const banners = bannerResponse?.data?.banners || [];
+        const bannerSlides = banners
+          .map((banner) => mapBannerToSlide(banner))
+          .filter(Boolean);
+        if (!mounted) return;
+        if (bannerSlides.length) {
+          setSlides(bannerSlides);
+          return;
+        }
+      } catch {
+        if (!mounted) return;
+      }
+
+      try {
         const response = await api.get("/api/home/now-showing-slides/");
         const nextSlides = response?.data?.slides || [];
         if (!mounted) return;
         setSlides(nextSlides);
-        setActiveIndex(0);
       } catch {
         if (!mounted) return;
         setSlides([]);
@@ -31,24 +103,56 @@ export default function HeroSlider() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [page]);
 
   useEffect(() => {
-    if (!slides.length || slides.length === 1 || paused) return;
+    // Reset to the first slide whenever the slide list changes.
+    setTransitionEnabled(false);
+    setTrackIndex(slides.length > 1 ? 1 : 0);
+    const id = window.requestAnimationFrame(() => setTransitionEnabled(true));
+    return () => window.cancelAnimationFrame(id);
+  }, [slides]);
+
+  useEffect(() => {
+    if (!slides.length || !canSlide || paused) return;
     autoRef.current = window.setInterval(() => {
-      setActiveIndex((prev) => (prev + 1) % slides.length);
+      // Always advance to the next slide so autoplay moves left continuously.
+      setTrackIndex((prev) => Math.min(slides.length + 1, prev + 1));
     }, AUTO_PLAY_MS);
     return () => window.clearInterval(autoRef.current);
-  }, [slides.length, paused]);
+  }, [slides.length, canSlide, paused]);
 
   const handlePrev = () => {
-    if (!slides.length) return;
-    setActiveIndex((prev) => (prev - 1 + slides.length) % slides.length);
+    if (!canSlide) return;
+    setTrackIndex((prev) => Math.max(0, prev - 1));
   };
 
   const handleNext = () => {
-    if (!slides.length) return;
-    setActiveIndex((prev) => (prev + 1) % slides.length);
+    if (!canSlide) return;
+    setTrackIndex((prev) => Math.min(slides.length + 1, prev + 1));
+  };
+
+  const moveToDot = (targetIndex) => {
+    if (!canSlide || !slides.length) return;
+    const currentIndex = activeRealIndex;
+    const total = slides.length;
+    const safeTarget = Math.max(0, Math.min(total - 1, targetIndex));
+    if (safeTarget === currentIndex) return;
+
+    const forwardSteps =
+      safeTarget >= currentIndex
+        ? safeTarget - currentIndex
+        : total - currentIndex + safeTarget;
+    const backwardSteps =
+      currentIndex >= safeTarget
+        ? currentIndex - safeTarget
+        : currentIndex + (total - safeTarget);
+
+    if (backwardSteps < forwardSteps) {
+      setTrackIndex((prev) => Math.max(0, prev - backwardSteps));
+      return;
+    }
+    setTrackIndex((prev) => Math.min(slides.length + 1, prev + forwardSteps));
   };
 
   const handleCta = (slide) => {
@@ -67,25 +171,160 @@ export default function HeroSlider() {
     navigate(`/movie/${slide.movie_id}`);
   };
 
+  const loopSlides = useMemo(() => {
+    if (!canSlide) return slides;
+    const first = slides[0];
+    const last = slides[slides.length - 1];
+    return [last, ...slides, first];
+  }, [slides, canSlide]);
+
+  const activeRealIndex = useMemo(() => {
+    if (!slides.length) return 0;
+    if (!canSlide) return 0;
+    return (trackIndex - 1 + slides.length) % slides.length;
+  }, [slides.length, canSlide, trackIndex]);
+
   const slideTrackStyle = useMemo(
-    () => ({ transform: `translate3d(-${activeIndex * 100}%, 0, 0)` }),
-    [activeIndex]
+    () => ({
+      transform: `translate3d(calc(-${trackIndex * 100}% + ${dragOffset}px), 0, 0)`,
+      transition: isDragging || !transitionEnabled ? "none" : undefined,
+    }),
+    [trackIndex, dragOffset, isDragging, transitionEnabled]
   );
+
+  const handleTrackTransitionEnd = (event) => {
+    if (!canSlide) return;
+    if (event && event.target !== event.currentTarget) return;
+    if (event && event.propertyName !== "transform") return;
+
+    // Seamless infinite loop: when we reach clones, snap to the matching real slide.
+    const max = slides.length + 1;
+    if (trackIndex !== 0 && trackIndex !== max) return;
+
+    setTransitionEnabled(false);
+    setDragOffset(0);
+    setTrackIndex(trackIndex === 0 ? slides.length : 1);
+    // Wait an extra frame so the clone->real index jump paints with no transition.
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        setTransitionEnabled(true);
+      });
+    });
+  };
+
+  const startDrag = (event) => {
+    if (!canSlide) return;
+    if (event.button !== undefined && event.button !== 0) return;
+    const target = event.target;
+    if (target && target.closest) {
+      if (target.closest("button, a, input, select, textarea")) return;
+    }
+    dragState.current = {
+      active: true,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      lastX: event.clientX,
+      moved: false,
+    };
+    setIsDragging(true);
+    setDragOffset(0);
+    if (event.currentTarget?.setPointerCapture) {
+      try {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      } catch {
+        // ignore capture failures
+      }
+    }
+  };
+
+  const moveDrag = (event) => {
+    if (!dragState.current.active) return;
+    const width = heroRef.current?.clientWidth || 1;
+    const rawDelta = event.clientX - dragState.current.startX;
+    if (!dragState.current.moved && Math.abs(rawDelta) > 6) {
+      dragState.current.moved = true;
+    }
+    const maxDelta = Math.max(20, width * 0.9);
+    const clamped = Math.max(-maxDelta, Math.min(maxDelta, rawDelta));
+    dragState.current.lastX = event.clientX;
+    setDragOffset(clamped);
+    if (dragState.current.moved) {
+      event.preventDefault();
+    }
+  };
+
+  const endDrag = (event) => {
+    if (!dragState.current.active) return;
+    const width = heroRef.current?.clientWidth || 1;
+    const threshold = Math.max(DRAG_DISTANCE_PX, width * DRAG_THRESHOLD_RATIO);
+    const delta =
+      (event?.clientX ?? dragState.current.lastX) - dragState.current.startX;
+
+    dragState.current.active = false;
+    dragState.current.pointerId = null;
+    dragState.current.moved = false;
+
+    setIsDragging(false);
+    setDragOffset(0);
+
+    if (Math.abs(delta) < threshold) return;
+
+    // Manual gesture controls direction:
+    // swipe right => previous slide (moves banner right), swipe left => next slide.
+    if (delta > 0) {
+      handlePrev();
+      return;
+    }
+    handleNext();
+  };
+
+  const handleWheel = (event) => {
+    if (!canSlide) return;
+    if (Math.abs(event.deltaX) < 12 || Math.abs(event.deltaX) <= Math.abs(event.deltaY)) {
+      return;
+    }
+
+    const now = Date.now();
+    if (now - wheelLock.current < 450) return;
+    wheelLock.current = now;
+
+    event.preventDefault();
+    if (event.deltaX > 0) {
+      handleNext();
+      return;
+    }
+    handlePrev();
+  };
 
   if (!slides.length) return null;
 
   return (
     <section
-      className="qfx-hero"
-      onMouseEnter={() => setPaused(true)}
-      onMouseLeave={() => setPaused(false)}
+      className={`qfx-hero ${isDragging ? "qfx-hero-dragging" : ""}`}
+      ref={heroRef}
+      onPointerDown={startDrag}
+      onPointerMove={moveDrag}
+      onPointerUp={endDrag}
+      onPointerCancel={endDrag}
+      onPointerLeave={endDrag}
+      onWheel={handleWheel}
     >
-      <div className="qfx-hero-track" style={slideTrackStyle}>
-        {slides.map((slide, index) => {
+      <div
+        className="qfx-hero-track"
+        ref={trackRef}
+        style={slideTrackStyle}
+        onTransitionEnd={handleTrackTransitionEnd}
+      >
+        {loopSlides.map((slide, index) => {
           const collab = slide.collab_details || null;
           const isCollab = slide.slide_type === "COLLAB";
-          const badge = slide.badge_text || (isCollab ? "Collaboration" : "Now Showing");
-          const ctaLabel = slide.cta_text || (isCollab ? "Learn More" : "Buy Ticket");
+          const isPromo = slide.slide_type === "PROMO";
+          const badge = isPromo
+            ? ""
+            : slide.badge_text || (isCollab ? "Collaboration" : "Now Showing");
+          const ctaLabel = isPromo
+            ? ""
+            : slide.cta_text || (isCollab ? "Learn More" : "Buy Ticket");
           const metaParts = [slide.genre, slide.year, slide.duration].filter(Boolean);
           const slideStyle = {
             "--qfx-bg": slide.image ? `url(${slide.image})` : "none",
@@ -95,13 +334,14 @@ export default function HeroSlider() {
 
           return (
             <article
-              key={slide.id || index}
-              className={`qfx-slide ${isCollab ? "qfx-slide-collab" : ""}`}
+              key={`qfx-slide-${slide.id || "s"}-${index}`}
+              className={`qfx-slide ${isCollab ? "qfx-slide-collab" : ""} ${isPromo ? "qfx-slide-promo" : ""}`}
               style={slideStyle}
             >
               <div className="qfx-slide-bg" />
-              <div className="qfx-slide-overlay" />
-              <div className="qfx-slide-content">
+              {!isPromo ? <div className="qfx-slide-overlay" /> : null}
+              {!isPromo ? (
+                <div className="qfx-slide-content">
                 <div className="qfx-slide-left">
                   <span className="qfx-badge">{badge}</span>
                   {slide.subtitle ? <div className="qfx-subtitle">{slide.subtitle}</div> : null}
@@ -171,7 +411,8 @@ export default function HeroSlider() {
                     </div>
                   </div>
                 ) : null}
-              </div>
+                </div>
+              ) : null}
             </article>
           );
         })}
@@ -200,8 +441,8 @@ export default function HeroSlider() {
               <button
                 key={`dot-${idx}`}
                 type="button"
-                className={`qfx-dot ${idx === activeIndex ? "active" : ""}`}
-                onClick={() => setActiveIndex(idx)}
+                className={`qfx-dot ${idx === activeRealIndex ? "active" : ""}`}
+                onClick={() => moveToDot(idx)}
                 aria-label={`Go to slide ${idx + 1}`}
               />
             ))}

@@ -5,7 +5,15 @@ import { buildMetaLine, isAdultRating, toText } from "../lib/showUtils";
 export default function NowShowingCard({ movie, onBuy }) {
   const title = movie?.title || movie?.name || "Movie Name";
   const poster =
-    movie?.bannerImage || movie?.poster || movie?.posterUrl || movie?.image || gharjwai;
+    movie?.posterImage ||
+    movie?.poster_image ||
+    movie?.poster ||
+    movie?.posterUrl ||
+    movie?.poster_url ||
+    movie?.image ||
+    movie?.bannerImage ||
+    movie?.banner_image ||
+    gharjwai;
   const ratingLabel =
     toText(movie?.censor || movie?.rating || movie?.certificate || movie?.classification) || "PG";
   const metaLine = buildMetaLine(movie);

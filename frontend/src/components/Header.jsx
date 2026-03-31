@@ -1,9 +1,17 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { ChevronDown, Search, User } from "lucide-react";
+import { Bell, ChevronDown, Search, User } from "lucide-react";
 import { useAppContext } from "../context/Appcontext";
 import api from "../api/api";
-import { clearAuthSession } from "../lib/authSession";
+import AdultWarningModal from "./AdultWarningModal";
+import { buildMetaLine, getMovieRatingLabel, isAdultRating, toText } from "../lib/showUtils";
+import { fetchNotifications } from "../lib/catalogApi";
+import {
+  clearAuthSession,
+  clearStoredRoleData,
+  getAuthSession,
+  getStoredRoleData,
+} from "../lib/authSession";
 import logo from "../images/logo.png";
 import "../css/layout.css";
 
@@ -63,9 +71,14 @@ export default function Header() {
   const location = useLocation();
   const path = location.pathname;
   const bookingRef = useRef(null);
+  const searchRef = useRef(null);
+  const ctx = safeUseAppContext();
+  const appSelectedLocation = ctx?.selectedLocation || "";
+  const selectedLocationLabel = appSelectedLocation || "All Cities";
+  const setAppSelectedLocation = ctx?.setSelectedLocation;
+  const contextMovies = ctx?.movies ?? [];
 
   const [scrolled, setScrolled] = useState(false);
-  const [selectedLocation, setSelectedLocation] = useState("Pokhara");
   const [locationOpen, setLocationOpen] = useState(false);
   const [openSelect, setOpenSelect] = useState(null);
   const [bookingMode, setBookingMode] = useState("cinema");
@@ -79,8 +92,17 @@ export default function Header() {
   const [moviesForCinema, setMoviesForCinema] = useState([]);
   const [dateOptions, setDateOptions] = useState([]);
   const [timeOptions, setTimeOptions] = useState([]);
+  const [locationOptions, setLocationOptions] = useState([]);
   const [searchTerm, setSearchTerm] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [activeSearchGenre, setActiveSearchGenre] = useState("all");
   const [storedUser, setStoredUser] = useState(() => getStoredUser());
+  const [notifications, setNotifications] = useState([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [adultConfirmOpen, setAdultConfirmOpen] = useState(false);
+  const [pendingBookingState, setPendingBookingState] = useState(null);
+  const [dismissedNoticeIds, setDismissedNoticeIds] = useState(() => readDismissedNoticeIds());
+  const [showNoticePopup, setShowNoticePopup] = useState(false);
   const isCinemaSelected = Boolean(selectedCinemaId);
   const isMovieSelected = Boolean(selectedMovieId);
   const isDateSelected = Boolean(selectedDate);
@@ -91,18 +113,19 @@ export default function Header() {
   const isBookingReady = Boolean(
     selectedCinemaId && selectedMovieId && selectedDate && selectedTime
   );
+  const showtimes = ctx?.showtimes ?? [];
+  const user = ctx?.user ?? storedUser;
+  const displayName = getUserDisplayName(user);
+  const username = getUserUsername(user);
+  const initials = getUserInitials(displayName || username);
+  const avatarSrc = getUserAvatar(user);
 
-  const locations = [
-    "Kathmandu",
-    "Butwal",
-    "Nepalgunj",
-    "Narayangarh",
-    "Birtamode",
-    "Damauli",
-    "Itahari",
-    "Birgunj",
-    "Pokhara",
-  ];
+  const locations = Array.from(
+    new Set([
+      ...locationOptions,
+      ...(appSelectedLocation ? [appSelectedLocation] : []),
+    ])
+  );
   const cinemaOptions =
     bookingMode === "movie" && selectedMovieId ? cinemasForMovie : allCinemas;
   const movieOptions =
@@ -115,6 +138,68 @@ export default function Header() {
     movieOptions.find((option) => String(option.value) === String(selectedMovieId)) ||
     allMovies.find((option) => String(option.value) === String(selectedMovieId)) ||
     null;
+  const selectedMovieCatalog = useMemo(() => {
+    if (!selectedMovieId) return null;
+    return (
+      contextMovies.find((item) => String(item?.id || item?._id || "") === String(selectedMovieId)) ||
+      null
+    );
+  }, [contextMovies, selectedMovieId]);
+  const normalizedSearchTerm = searchTerm.trim().toLowerCase();
+
+  const searchResults = useMemo(() => {
+    if (!normalizedSearchTerm) return [];
+    return contextMovies
+      .filter((movie) => {
+        const title = String(movie?.title || movie?.name || "").toLowerCase();
+        const genre = toText(movie?.genre || movie?.genres || movie?.category || movie?.type).toLowerCase();
+        const language = toText(movie?.language || movie?.lang).toLowerCase();
+        return (
+          title.includes(normalizedSearchTerm) ||
+          genre.includes(normalizedSearchTerm) ||
+          language.includes(normalizedSearchTerm)
+        );
+      })
+      .slice(0, 12);
+  }, [contextMovies, normalizedSearchTerm]);
+
+  const searchGenres = useMemo(() => {
+    const genreCount = new Map();
+    searchResults.forEach((movie) => {
+      const genreText = toText(movie?.genre || movie?.genres || movie?.category || movie?.type);
+      splitGenres(genreText).forEach((genre) => {
+        const key = genre.toLowerCase();
+        genreCount.set(key, {
+          label: genre,
+          count: (genreCount.get(key)?.count || 0) + 1,
+        });
+      });
+    });
+    return Array.from(genreCount.values())
+      .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
+      .slice(0, 8)
+      .map((genre) => genre.label);
+  }, [searchResults]);
+
+  const visibleSearchResults = useMemo(() => {
+    if (activeSearchGenre === "all") return searchResults;
+    const target = activeSearchGenre.toLowerCase();
+    return searchResults.filter((movie) => {
+      const genreText = toText(movie?.genre || movie?.genres || movie?.category || movie?.type);
+      return splitGenres(genreText).some((genre) => genre.toLowerCase() === target);
+    });
+  }, [searchResults, activeSearchGenre]);
+
+  const shouldShowSearchPanel = searchOpen && Boolean(normalizedSearchTerm);
+  const popupNotification = useMemo(() => {
+    const unread = notifications.filter((item) => !item?.is_read);
+    if (!unread.length) return null;
+    return (
+      unread.find(
+        (item) => String(item?.event_type || "").trim().toUpperCase() === "MARKETING_CAMPAIGN"
+      ) || unread[0]
+    );
+  }, [notifications]);
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 16);
@@ -124,14 +209,51 @@ export default function Header() {
   }, []);
 
   useEffect(() => {
+    let active = true;
+
+    const loadLocationOptions = async () => {
+      try {
+        const response = await api.get("/api/cinemas/");
+        if (!active) return;
+        const vendors = Array.isArray(response?.data?.vendors)
+          ? response.data.vendors
+          : [];
+        const cities = Array.from(
+          new Set(
+            vendors
+              .map((vendor) => String(vendor?.city || "").trim())
+              .filter(Boolean)
+          )
+        ).sort((a, b) => a.localeCompare(b));
+        setLocationOptions(cities);
+      } catch {
+        if (!active) return;
+        setLocationOptions([]);
+      }
+    };
+
+    loadLocationOptions();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     const handleClickOutside = (event) => {
       if (bookingRef.current && !bookingRef.current.contains(event.target)) {
         setOpenSelect(null);
+      }
+      if (searchRef.current && !searchRef.current.contains(event.target)) {
+        setSearchOpen(false);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
+
+  useEffect(() => {
+    setSearchOpen(false);
+  }, [path]);
 
   useEffect(() => {
     const disabledMap = {
@@ -160,8 +282,12 @@ export default function Header() {
     const loadInitialOptions = async () => {
       try {
         const [cinemaResponse, movieResponse] = await Promise.all([
-          api.get("/api/booking/cinemas/"),
-          api.get("/api/booking/movies/"),
+          api.get("/api/booking/cinemas/", {
+            params: appSelectedLocation ? { city: appSelectedLocation } : undefined,
+          }),
+          api.get("/api/booking/movies/", {
+            params: appSelectedLocation ? { city: appSelectedLocation } : undefined,
+          }),
         ]);
         if (!active) return;
         setAllCinemas(mapCinemaOptions(cinemaResponse?.data?.cinemas));
@@ -176,7 +302,7 @@ export default function Header() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [appSelectedLocation]);
 
   useEffect(() => {
     if (bookingMode === "cinema") {
@@ -196,7 +322,10 @@ export default function Header() {
     const loadMoviesForCinema = async () => {
       try {
         const response = await api.get("/api/booking/movies/", {
-          params: { cinema_id: selectedCinemaId },
+          params: {
+            cinema_id: selectedCinemaId,
+            ...(appSelectedLocation ? { city: appSelectedLocation } : {}),
+          },
         });
         if (!active) return;
         setMoviesForCinema(mapMovieOptions(response?.data?.movies));
@@ -209,7 +338,7 @@ export default function Header() {
     return () => {
       active = false;
     };
-  }, [selectedCinemaId, bookingMode]);
+  }, [selectedCinemaId, bookingMode, appSelectedLocation]);
 
   useEffect(() => {
     if (bookingMode === "movie") {
@@ -229,7 +358,10 @@ export default function Header() {
     const loadCinemasForMovie = async () => {
       try {
         const response = await api.get("/api/booking/cinemas/", {
-          params: { movie_id: selectedMovieId },
+          params: {
+            movie_id: selectedMovieId,
+            ...(appSelectedLocation ? { city: appSelectedLocation } : {}),
+          },
         });
         if (!active) return;
         setCinemasForMovie(mapCinemaOptions(response?.data?.cinemas));
@@ -242,7 +374,7 @@ export default function Header() {
     return () => {
       active = false;
     };
-  }, [selectedMovieId, bookingMode]);
+  }, [selectedMovieId, bookingMode, appSelectedLocation]);
 
   useEffect(() => {
     if (!selectedCinemaId || !selectedMovieId) {
@@ -260,6 +392,7 @@ export default function Header() {
           params: {
             cinema_id: selectedCinemaId,
             movie_id: selectedMovieId,
+            ...(appSelectedLocation ? { city: appSelectedLocation } : {}),
           },
         });
         if (!active) return;
@@ -273,7 +406,7 @@ export default function Header() {
     return () => {
       active = false;
     };
-  }, [selectedCinemaId, selectedMovieId]);
+  }, [selectedCinemaId, selectedMovieId, appSelectedLocation]);
 
   useEffect(() => {
     if (!selectedCinemaId || !selectedMovieId || !selectedDate) {
@@ -290,6 +423,7 @@ export default function Header() {
             cinema_id: selectedCinemaId,
             movie_id: selectedMovieId,
             date: selectedDate,
+            ...(appSelectedLocation ? { city: appSelectedLocation } : {}),
           },
         });
         if (!active) return;
@@ -303,7 +437,7 @@ export default function Header() {
     return () => {
       active = false;
     };
-  }, [selectedCinemaId, selectedMovieId, selectedDate]);
+  }, [selectedCinemaId, selectedMovieId, selectedDate, appSelectedLocation]);
 
   useEffect(() => {
     const handleUserUpdate = () => {
@@ -317,21 +451,178 @@ export default function Header() {
     };
   }, []);
 
-  const ctx = safeUseAppContext();
-  const user = ctx?.user ?? storedUser;
-  const displayName = getUserDisplayName(user);
-  const username = getUserUsername(user);
-  const initials = getUserInitials(displayName || username);
-  const avatarSrc = getUserAvatar(user);
+  useEffect(() => {
+    let active = true;
+    const auth = getAuthSession("customer");
+    if (!user || !auth?.token) {
+      setNotifications([]);
+      setUnreadCount(0);
+      return () => {
+        active = false;
+      };
+    }
+
+    const loadNotifications = async () => {
+      try {
+        const payload = await fetchNotifications({ limit: 6 });
+        if (!active) return;
+        setNotifications(Array.isArray(payload?.notifications) ? payload.notifications : []);
+        setUnreadCount(Number(payload?.unread_count || 0));
+      } catch {
+        if (!active) return;
+        setNotifications([]);
+        setUnreadCount(0);
+      }
+    };
+
+    const handleNotificationUpdate = () => {
+      loadNotifications();
+    };
+
+    loadNotifications();
+    window.addEventListener("mt:notifications-updated", handleNotificationUpdate);
+    return () => {
+      active = false;
+      window.removeEventListener("mt:notifications-updated", handleNotificationUpdate);
+    };
+  }, [user, path]);
+
+  useEffect(() => {
+    if (!user || !popupNotification || path.startsWith("/notifications")) {
+      setShowNoticePopup(false);
+      return;
+    }
+
+    const noticeId = Number(popupNotification?.id || 0);
+    if (noticeId > 0 && dismissedNoticeIds.includes(noticeId)) {
+      setShowNoticePopup(false);
+      return;
+    }
+
+    setShowNoticePopup(true);
+  }, [user, popupNotification, dismissedNoticeIds, path]);
+
+  const matchedShowId = useMemo(() => {
+    if (!selectedCinemaId || !selectedMovieId || !selectedDate || !selectedTime) {
+      return null;
+    }
+    return findMatchingShowId(
+      showtimes,
+      selectedCinemaId,
+      selectedMovieId,
+      selectedDate,
+      selectedTime
+    );
+  }, [showtimes, selectedCinemaId, selectedMovieId, selectedDate, selectedTime]);
+
+  useEffect(() => {
+    if (!selectedCinemaId) return;
+    const hasCinema = cinemaOptions.some(
+      (option) => String(option.value) === String(selectedCinemaId)
+    );
+    if (!hasCinema) {
+      setSelectedCinemaId("");
+      setSelectedDate("");
+      setSelectedTime("");
+      setDateOptions([]);
+      setTimeOptions([]);
+    }
+  }, [cinemaOptions, selectedCinemaId]);
+
+  useEffect(() => {
+    if (!selectedMovieId) return;
+    const hasMovie = movieOptions.some(
+      (option) => String(option.value) === String(selectedMovieId)
+    );
+    if (!hasMovie) {
+      setSelectedMovieId("");
+      setSelectedDate("");
+      setSelectedTime("");
+      setDateOptions([]);
+      setTimeOptions([]);
+    }
+  }, [movieOptions, selectedMovieId]);
+
+  useEffect(() => {
+    if (!selectedDate) return;
+    const hasDate = dateOptions.some(
+      (option) => String(option.value) === String(selectedDate)
+    );
+    if (!hasDate) {
+      setSelectedDate("");
+      setSelectedTime("");
+      setTimeOptions([]);
+    }
+  }, [dateOptions, selectedDate]);
+
+  useEffect(() => {
+    if (!selectedTime) return;
+    const hasTime = timeOptions.some(
+      (option) => String(option.value) === String(selectedTime)
+    );
+    if (!hasTime) {
+      setSelectedTime("");
+    }
+  }, [timeOptions, selectedTime]);
 
   const handleLogout = () => {
-    clearAuthSession();
-    localStorage.removeItem("user");
+    const auth = getAuthSession("customer");
+    const scope = auth?.scope === "session" ? "session" : "local";
+    clearAuthSession({ role: "customer", scope });
+    clearStoredRoleData("customer", { scope });
     setStoredUser(null);
     if (typeof window !== "undefined") {
       window.dispatchEvent(new Event("mt:user-updated"));
     }
     navigate("/login");
+  };
+
+  const dismissNoticePopup = () => {
+    const noticeId = Number(popupNotification?.id || 0);
+    if (noticeId > 0) {
+      const next = Array.from(new Set([...dismissedNoticeIds, noticeId]));
+      setDismissedNoticeIds(next);
+      writeDismissedNoticeIds(next);
+    }
+    setShowNoticePopup(false);
+  };
+
+  const navigateToBookingState = (bookingState) => {
+    if (!bookingState) return;
+    navigate("/booking", { state: bookingState });
+  };
+
+  const handleBuyNow = () => {
+    if (!isBookingReady) return;
+
+    const movieState = {
+      id: coerceNumber(selectedMovieId),
+      title: selectedMovieOption?.label || "Movie",
+      rating: selectedMovieCatalog?.rating || "",
+      certificate: selectedMovieCatalog?.certificate || "",
+      censor: selectedMovieCatalog?.censor || "",
+      classification: selectedMovieCatalog?.classification || "",
+      ageRating: selectedMovieCatalog?.ageRating || "",
+    };
+
+    const bookingState = {
+      movie: movieState,
+      vendor: {
+        id: coerceNumber(selectedCinemaId),
+        name: selectedCinemaOption?.label || "Cinema",
+      },
+      showId: matchedShowId,
+      date: selectedDate,
+      time: selectedTime,
+    };
+
+    if (isAdultRating(getMovieRatingLabel(movieState))) {
+      setPendingBookingState(bookingState);
+      setAdultConfirmOpen(true);
+      return;
+    }
+
+    navigateToBookingState(bookingState);
   };
 
   const SelectField = ({ id, label, value, options, onChange, disabled, placeholder }) => {
@@ -415,22 +706,121 @@ export default function Header() {
                   <circle className="wf2-locationDot" cx="19" cy="5" r="3" />
                 </svg>
               </span>
-              <span>{selectedLocation}</span>
+                <span>{selectedLocationLabel}</span>
               <ChevronDown size={18} />
             </button>
           </div>
         </div>
 
         <div className="wf2-headerNav">
-          <div className="wf2-search" role="search">
-            <Search size={18} />
-            <input
-              type="text"
-              placeholder="Movie, Title, Genre..."
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-              aria-label="Search movies"
-            />
+          <div className="wf2-searchArea" ref={searchRef}>
+            <div className="wf2-search" role="search">
+              <Search size={18} />
+              <input
+                type="text"
+                placeholder="Movie, Title, Genre..."
+                value={searchTerm}
+                onFocus={() => setSearchOpen(true)}
+                onChange={(event) => {
+                  setSearchTerm(event.target.value);
+                  setSearchOpen(true);
+                  setActiveSearchGenre("all");
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    setSearchOpen(false);
+                    return;
+                  }
+                  if (event.key === "Enter" && visibleSearchResults[0]) {
+                    const movie = visibleSearchResults[0];
+                    setSearchOpen(false);
+                    navigate(
+                      `/movie/${movie?._id || movie?.id || encodeURIComponent(movie?.title || movie?.name || "")}`,
+                      { state: { movie } }
+                    );
+                  }
+                }}
+                aria-label="Search movies"
+              />
+            </div>
+
+            {shouldShowSearchPanel ? (
+              <div className="wf2-searchPanel" role="dialog" aria-label="Search results">
+                <div className="wf2-searchPanelRow">
+                  <span className="wf2-searchPanelLabel">Search Titles Related To</span>
+                  <div className="wf2-searchGenreChips">
+                    <button
+                      type="button"
+                      className={`wf2-searchGenreChip ${activeSearchGenre === "all" ? "wf2-searchGenreChipActive" : ""}`}
+                      onClick={() => setActiveSearchGenre("all")}
+                    >
+                      All
+                    </button>
+                    {searchGenres.map((genre) => (
+                      <button
+                        key={genre}
+                        type="button"
+                        className={`wf2-searchGenreChip ${activeSearchGenre === genre ? "wf2-searchGenreChipActive" : ""}`}
+                        onClick={() => setActiveSearchGenre(genre)}
+                      >
+                        {genre}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="wf2-searchResultHead">
+                  <div className="wf2-searchResultTitle">Search Result</div>
+                  <div className="wf2-searchResultCount">
+                    {visibleSearchResults.length} {visibleSearchResults.length === 1 ? "Movie" : "Movies"}
+                  </div>
+                </div>
+
+                {visibleSearchResults.length ? (
+                  <div className="wf2-searchResultGrid">
+                    {visibleSearchResults.map((movie) => {
+                      const title = movie?.title || movie?.name || "Untitled Movie";
+                      const ratingLabel =
+                        toText(
+                          movie?.censor ||
+                          movie?.rating ||
+                          movie?.certificate ||
+                          movie?.classification
+                        ) || "PG";
+                      const metaLine = buildMetaLine(movie);
+                      const isAdult = isAdultRating(ratingLabel);
+                      return (
+                        <button
+                          key={movie?._id || movie?.id || title}
+                          type="button"
+                          className="wf2-searchCard"
+                          onClick={() => {
+                            setSearchOpen(false);
+                            navigate(
+                              `/movie/${movie?._id || movie?.id || encodeURIComponent(title)}`,
+                              { state: { movie } }
+                            );
+                          }}
+                        >
+                          <div className="wf2-searchCardPoster">
+                            <img src={getMoviePoster(movie)} alt={title} loading="lazy" decoding="async" />
+                            <div className={`wf2-searchRatingBadge ${isAdult ? "wf2-searchRatingBadgeAdult" : ""}`}>
+                              {ratingLabel}
+                            </div>
+                          </div>
+                          <div className="wf2-searchCardBody">
+                            <div className="wf2-searchCardTitle">{title}</div>
+                            <div className="wf2-searchCardMeta">{metaLine}</div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="wf2-searchEmpty">No matching movies found for "{searchTerm.trim()}".</div>
+                )}
+              </div>
+            ) : null}
           </div>
           <nav className="wf2-navPillsTop">
             <button
@@ -491,48 +881,138 @@ export default function Header() {
             Sign in
           </button>
         ) : (
-          <div className="wf2-navItem wf2-navDropdown wf2-userDropdown">
+          <div className="wf2-userActions">
             <button
-              className="wf2-userBtn"
+              className="wf2-noticeBell"
               type="button"
-              onClick={() => navigate("/profile")}
-              aria-label="Account menu"
-              title={displayName || "Profile"}
+              onClick={() => navigate("/notifications")}
+              aria-label="Notifications"
+              title="Notifications"
             >
-              <span className="wf2-userGreeting">
-                <span className="wf2-userHello">{getTimeGreeting()}</span>
-                <span className="wf2-userName">{username || "User"}</span>
-              </span>
-              <span className="wf2-userAvatar">
-                {avatarSrc ? (
-                  <img src={avatarSrc} alt="Profile avatar" />
-                ) : initials ? (
-                  <span className="wf2-userInitials">{initials}</span>
-                ) : (
-                  <User size={16} />
-                )}
-              </span>
-              <ChevronDown size={18} />
+              <Bell size={18} />
+              {unreadCount > 0 ? (
+                <span className="wf2-noticeBadge">{unreadCount > 99 ? "99+" : unreadCount}</span>
+              ) : null}
             </button>
-            <div className="wf2-navMenu wf2-userMenu" role="menu">
+
+            <div className="wf2-navItem wf2-navDropdown wf2-userDropdown">
               <button
-                className="wf2-navMenuItem"
+                className="wf2-userBtn"
                 type="button"
                 onClick={() => navigate("/profile")}
+                aria-label="Account menu"
+                title={displayName || "Profile"}
               >
-                PROFILE
+                <span className="wf2-userGreeting">
+                  <span className="wf2-userHello">{getTimeGreeting()}</span>
+                  <span className="wf2-userName">{username || "User"}</span>
+                </span>
+                <span className="wf2-userAvatar">
+                  {avatarSrc ? (
+                    <img src={avatarSrc} alt="Profile avatar" />
+                  ) : initials ? (
+                    <span className="wf2-userInitials">{initials}</span>
+                  ) : (
+                    <User size={16} />
+                  )}
+                </span>
+                <ChevronDown size={18} />
               </button>
-              <button
-                className="wf2-navMenuItem"
-                type="button"
-                onClick={handleLogout}
-              >
-                LOGOUT
-              </button>
+              <div className="wf2-navMenu wf2-userMenu" role="menu">
+                <button
+                  className="wf2-navMenuItem"
+                  type="button"
+                  onClick={() => navigate("/profile")}
+                >
+                  PROFILE
+                </button>
+                <button
+                  className="wf2-navMenuItem"
+                  type="button"
+                  onClick={() => navigate("/bookings/history")}
+                >
+                  BOOKING HISTORY
+                </button>
+                <button
+                  className="wf2-navMenuItem"
+                  type="button"
+                  onClick={() => navigate("/notifications")}
+                >
+                  NOTIFICATIONS
+                </button>
+                <button
+                  className="wf2-navMenuItem"
+                  type="button"
+                  onClick={handleLogout}
+                >
+                  LOGOUT
+                </button>
+              </div>
             </div>
           </div>
         )}
       </div>
+
+      {showNoticePopup && popupNotification ? (
+        <div
+          className="wf2-noticeOverlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="New notice"
+          onClick={dismissNoticePopup}
+        >
+          <div className="wf2-noticeModal" onClick={(event) => event.stopPropagation()}>
+            <button
+              type="button"
+              className="wf2-noticeClose"
+              onClick={dismissNoticePopup}
+              aria-label="Close notice"
+            >
+              x
+            </button>
+            <div className="wf2-noticeType">{formatNotificationType(popupNotification?.event_type)}</div>
+            <h3 className="wf2-noticeTitle">
+              {popupNotification?.title || "New notification"}
+            </h3>
+            <p className="wf2-noticeMessage">
+              {popupNotification?.message || "Please check your latest notice."}
+            </p>
+            <div className="wf2-noticeActions">
+              <button
+                type="button"
+                className="wf2-noticeActionPrimary"
+                onClick={() => {
+                  dismissNoticePopup();
+                  navigate("/notifications");
+                }}
+              >
+                View details
+              </button>
+              <button
+                type="button"
+                className="wf2-noticeActionGhost"
+                onClick={dismissNoticePopup}
+              >
+                Later
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <AdultWarningModal
+        open={adultConfirmOpen}
+        onCancel={() => {
+          setAdultConfirmOpen(false);
+          setPendingBookingState(null);
+        }}
+        onConfirm={() => {
+          const next = pendingBookingState;
+          setAdultConfirmOpen(false);
+          setPendingBookingState(null);
+          navigateToBookingState(next);
+        }}
+      />
 
       {locationOpen ? (
         <div className="wf2-locationOverlay" onClick={() => setLocationOpen(false)}>
@@ -548,13 +1028,27 @@ export default function Header() {
             <div className="wf2-locationTitle">Cities</div>
             <div className="wf2-locationRule" />
             <div className="wf2-locationGrid">
+              <button
+                type="button"
+                className={`wf2-locationCity ${!appSelectedLocation ? "wf2-locationCityActive" : ""}`}
+                onClick={() => {
+                  if (setAppSelectedLocation) {
+                    setAppSelectedLocation("");
+                  }
+                  setLocationOpen(false);
+                }}
+              >
+                All Cities
+              </button>
               {locations.map((loc) => (
                 <button
                   key={loc}
                   type="button"
-                  className={`wf2-locationCity ${selectedLocation === loc ? "wf2-locationCityActive" : ""}`}
+                  className={`wf2-locationCity ${appSelectedLocation === loc ? "wf2-locationCityActive" : ""}`}
                   onClick={() => {
-                    setSelectedLocation(loc);
+                    if (setAppSelectedLocation) {
+                      setAppSelectedLocation(loc);
+                    }
                     setLocationOpen(false);
                   }}
                 >
@@ -675,23 +1169,7 @@ export default function Header() {
               className="wf2-buyNowBtn"
               type="button"
               disabled={!isBookingReady}
-              onClick={() => {
-                if (!isBookingReady) return;
-                navigate("/booking", {
-                  state: {
-                    movie: {
-                      id: coerceNumber(selectedMovieId),
-                      title: selectedMovieOption?.label || "Movie",
-                    },
-                    vendor: {
-                      id: coerceNumber(selectedCinemaId),
-                      name: selectedCinemaOption?.label || "Cinema",
-                    },
-                    date: selectedDate,
-                    time: selectedTime,
-                  },
-                });
-              }}
+              onClick={handleBuyNow}
             >
               Buy Now
             </button>
@@ -715,20 +1193,104 @@ function coerceNumber(value) {
   return Number.isInteger(parsed) ? parsed : null;
 }
 
+function findMatchingShowId(showtimes, cinemaId, movieId, dateValue, timeValue) {
+  const targetCinema = coerceNumber(cinemaId);
+  const targetMovie = coerceNumber(movieId);
+  const targetDate = normalizeIsoDate(dateValue);
+  const targetTime = normalizeClockTime(timeValue);
+  if (!targetCinema || !targetMovie || !targetDate || !targetTime) return null;
+
+  const list = Array.isArray(showtimes) ? showtimes : [];
+  const matched = list.find((show) => {
+    const showCinema = coerceNumber(show?.vendor_id || show?.vendorId || show?.vendor);
+    const showMovie = coerceNumber(show?.movie_id || show?.movieId || show?.movie);
+    const showDate = normalizeIsoDate(show?.show_date || show?.date || show?.showDate);
+    const showTime = normalizeClockTime(show?.start_time || show?.start || show?.startTime);
+
+    return (
+      showCinema === targetCinema &&
+      showMovie === targetMovie &&
+      showDate === targetDate &&
+      showTime === targetTime
+    );
+  });
+
+  return coerceNumber(matched?.id || matched?.show_id || matched?.showId);
+}
+
+function normalizeIsoDate(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) return "";
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, "0");
+  const day = String(parsed.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function normalizeClockTime(value) {
+  const text = String(value || "").trim().toUpperCase();
+  if (!text) return "";
+
+  const hour24 = text.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (hour24) {
+    const hour = Number(hour24[1]);
+    const minute = Number(hour24[2]);
+    if (Number.isNaN(hour) || Number.isNaN(minute)) return "";
+    return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  }
+
+  const ampm = text.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/);
+  if (!ampm) return "";
+  let hour = Number(ampm[1]) % 12;
+  const minute = Number(ampm[2]);
+  if (Number.isNaN(hour) || Number.isNaN(minute)) return "";
+  if (ampm[3] === "PM") hour += 12;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function formatNotificationType(eventType) {
+  const key = String(eventType || "").trim().toUpperCase();
+  if (key === "MARKETING_CAMPAIGN") return "NEW OFFER";
+  if (key === "NEW_BOOKING") return "BOOKING";
+  if (key === "PAYMENT_SUCCESS") return "PAYMENT";
+  if (key === "SHOW_UPDATE") return "SHOW";
+  return "NOTICE";
+}
+
+function readDismissedNoticeIds() {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.sessionStorage.getItem("mt_notice_dismissed_ids");
+    const parsed = JSON.parse(raw || "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item) => Number(item))
+      .filter((item) => Number.isInteger(item) && item > 0);
+  } catch {
+    return [];
+  }
+}
+
+function writeDismissedNoticeIds(ids) {
+  if (typeof window === "undefined") return;
+  const safeIds = Array.isArray(ids)
+    ? ids.filter((item) => Number.isInteger(item) && item > 0)
+    : [];
+  window.sessionStorage.setItem("mt_notice_dismissed_ids", JSON.stringify(safeIds));
+}
+
 function isActive(path, target) {
   if (target === "/") return path === "/" || path === "/home" || path === "/dashboard";
   return path.startsWith(target);
 }
 
 function getStoredUser() {
-  if (typeof window === "undefined") return null;
-  const raw = localStorage.getItem("user");
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
+  return getStoredRoleData("customer");
 }
 
 function getUserDisplayName(user) {
@@ -771,6 +1333,26 @@ function getTimeGreeting() {
   if (hour < 12) return "Good Morning,";
   if (hour < 18) return "Good Afternoon,";
   return "Good Evening,";
+}
+
+function splitGenres(value) {
+  return String(value || "")
+    .split(/[|,/]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function getMoviePoster(movie) {
+  return (
+    movie?.posterImage ||
+    movie?.poster_image ||
+    movie?.poster ||
+    movie?.posterUrl ||
+    movie?.poster_url ||
+    movie?.image ||
+    movie?.thumbnail ||
+    logo
+  );
 }
 
 function getUserAvatar(user) {
