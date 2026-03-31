@@ -1,14 +1,28 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { Bell, Menu, ChevronDown, User } from "lucide-react";
-import { clearAuthSession } from "../lib/authSession";
+import { useLocation, useNavigate } from "react-router-dom";
+import { Bell, Menu, ChevronDown, User, Moon, Sun } from "lucide-react";
+import {
+  clearAuthSession,
+  clearStoredRoleData,
+  getAuthSession,
+  getVendorStaffRole,
+  isVendorOwner,
+} from "../lib/authSession";
 
-export default function VendorTopbar({ onToggleSidebar }) {
+export default function VendorTopbar({ onToggleSidebar, onToggleTheme, theme = "light" }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const menuRef = useRef(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [vendor, setVendor] = useState(() => getStoredVendor());
+  const [searchTerm, setSearchTerm] = useState("");
   const displayName = vendor?.name || vendor?.username || "Vendor";
+  const staffRole = getVendorStaffRole();
+  const actorLabel = isVendorOwner()
+    ? "Vendor Admin"
+    : staffRole === "MANAGER"
+      ? "Manager"
+      : "Cashier";
   const greeting = getTimeGreeting();
   const avatarSrc = getAvatar(vendor);
   const initial = getInitial(displayName || vendor?.username || "V");
@@ -32,9 +46,25 @@ export default function VendorTopbar({ onToggleSidebar }) {
     return () => document.removeEventListener("mousedown", handleOutside);
   }, []);
 
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    setSearchTerm(params.get("q") || "");
+  }, [location.search]);
+
+  const handleSearchSubmit = () => {
+    const term = searchTerm.trim();
+    if (!term) return;
+    const targetPath = getVendorSearchTarget(term);
+    const params = new URLSearchParams();
+    params.set("q", term);
+    navigate(`${targetPath}?${params.toString()}`);
+  };
+
   const handleLogout = () => {
-    clearAuthSession();
-    sessionStorage.removeItem("vendor");
+    const auth = getAuthSession("vendor");
+    const scope = auth?.scope === "session" ? "session" : "local";
+    clearAuthSession({ role: "vendor", scope });
+    clearStoredRoleData("vendor", { scope });
     if (typeof window !== "undefined") {
       window.dispatchEvent(new Event("mt:vendor-updated"));
     }
@@ -51,9 +81,28 @@ export default function VendorTopbar({ onToggleSidebar }) {
         <h2>{displayName}!</h2>
       </div>
       <div className="vendor-search">
-        <input type="text" placeholder="Search orders, shows, or customers" />
+        <input
+          type="text"
+          placeholder="Search orders, shows, or customers"
+          value={searchTerm}
+          onChange={(event) => setSearchTerm(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              handleSearchSubmit();
+            }
+          }}
+        />
       </div>
       <div className="vendor-topbar-actions">
+        <button
+          type="button"
+          className="vendor-icon-btn"
+          title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          onClick={onToggleTheme}
+        >
+          {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+        </button>
         <button type="button" className="vendor-icon-btn" title="Notifications">
           <Bell size={18} />
         </button>
@@ -76,7 +125,7 @@ export default function VendorTopbar({ onToggleSidebar }) {
             </span>
             <div>
               <div className="vendor-profile-name">{displayName}</div>
-              <small>Vendor</small>
+              <small>{actorLabel}</small>
             </div>
             <ChevronDown size={16} />
           </button>
@@ -113,7 +162,7 @@ export default function VendorTopbar({ onToggleSidebar }) {
 function getStoredVendor() {
   if (typeof window === "undefined") return null;
   try {
-    const raw = sessionStorage.getItem("vendor");
+    const raw = sessionStorage.getItem("vendor") || localStorage.getItem("vendor");
     return JSON.parse(raw || "null");
   } catch {
     return null;
@@ -144,4 +193,35 @@ function getTimeGreeting(now = new Date()) {
   if (hour < 12) return "Good Morning";
   if (hour < 18) return "Good Afternoon";
   return "Good Evening";
+}
+
+function getVendorSearchTarget(term) {
+  const value = String(term || "").toLowerCase();
+  if (
+    value.includes("booking") ||
+    value.includes("ticket") ||
+    value.includes("order") ||
+    value.includes("customer")
+  ) {
+    return "/vendor/bookings";
+  }
+  if (value.includes("show") || value.includes("movie") || value.includes("schedule")) {
+    return "/vendor/shows";
+  }
+  if (value.includes("corporate") || value.includes("bulk") || value.includes("invoice") || value.includes("quote")) {
+    return "/vendor/corporate-bulk";
+  }
+  if (
+    value.includes("promo") ||
+    value.includes("campaign") ||
+    value.includes("sms") ||
+    value.includes("push") ||
+    value.includes("discount")
+  ) {
+    return "/vendor/campaigns-promos";
+  }
+  if (value.includes("staff") || value.includes("cashier") || value.includes("manager") || value.includes("role")) {
+    return "/vendor/staff-accounts";
+  }
+  return "/vendor/shows";
 }

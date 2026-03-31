@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import "../css/seatSelection.css";
 import {
   fetchVendorSeatLayout,
   saveVendorSeatLayout,
@@ -7,6 +8,13 @@ import {
 import { useAppContext } from "../context/Appcontext";
 
 const CATEGORY_KEYS = ["normal", "executive", "premium", "vip"];
+const defaultSeatGroups = [
+  { key: "normal", label: "Normal", rows: ["A", "B", "C", "D"] },
+  { key: "executive", label: "Executive", rows: ["E", "F", "G", "H"] },
+  { key: "premium", label: "Premium", rows: ["I", "J"] },
+  { key: "vip", label: "VIP", rows: ["K", "L"] },
+];
+const defaultSeatCols = Array.from({ length: 15 }, (_, i) => i + 1);
 
 export default function VendorSeats() {
   const ctx = safeUseAppContext();
@@ -34,12 +42,139 @@ export default function VendorSeats() {
   const [message, setMessage] = useState("");
   const [rows, setRows] = useState(10);
   const [columns, setColumns] = useState(15);
+  const [soldSeatSet, setSoldSeatSet] = useState(() => new Set());
+  const [unavailableSeatSet, setUnavailableSeatSet] = useState(() => new Set());
+  const [reservedSeatSet, setReservedSeatSet] = useState(() => new Set());
+  const [dynamicSeatGroups, setDynamicSeatGroups] = useState(defaultSeatGroups);
+  const [dynamicSeatCols, setDynamicSeatCols] = useState(defaultSeatCols);
   const [categoryRows, setCategoryRows] = useState({
     normal: 3,
     executive: 3,
     premium: 2,
     vip: 2,
   });
+  const [layoutDirty, setLayoutDirty] = useState(false);
+  const layoutDirtyRef = useRef(false);
+
+  useEffect(() => {
+    layoutDirtyRef.current = layoutDirty;
+  }, [layoutDirty]);
+
+  const seatMapStyle = useMemo(() => {
+    const colCount = dynamicSeatCols.length || Number(layout?.total_columns) || 0;
+    const inferredRowCount = Array.isArray(dynamicSeatGroups)
+      ? dynamicSeatGroups.reduce(
+          (sum, group) => sum + (Array.isArray(group?.rows) ? group.rows.length : 0),
+          0
+        )
+      : 0;
+    const rowCount = Number(layout?.total_rows) || inferredRowCount || 0;
+
+    let seatSize = 42;
+    let seatGap = 10;
+
+    if (colCount > 15) {
+      seatSize = 38;
+      seatGap = 9;
+    }
+    if (colCount > 18) {
+      seatSize = 34;
+      seatGap = 8;
+    }
+    if (colCount > 21) {
+      seatSize = 30;
+      seatGap = 7;
+    }
+    if (colCount > 26) {
+      seatSize = 26;
+      seatGap = 6;
+    }
+    if (colCount > 32) {
+      seatSize = 22;
+      seatGap = 5;
+    }
+
+    if (rowCount > 18) {
+      seatSize = Math.min(seatSize, 30);
+      seatGap = Math.min(seatGap, 7);
+    }
+    if (rowCount > 24) {
+      seatSize = Math.min(seatSize, 26);
+      seatGap = Math.min(seatGap, 6);
+    }
+
+    return {
+      "--seat-count": dynamicSeatCols.length,
+      "--seat-size": `${seatSize}px`,
+      "--seat-gap": `${seatGap}px`,
+    };
+  }, [dynamicSeatCols.length, dynamicSeatGroups, layout?.total_columns, layout?.total_rows]);
+
+  const applyLayoutData = (data, options = {}) => {
+    const forceConfig = Boolean(options.forceConfig);
+    const canUpdateConfig = forceConfig || !layoutDirtyRef.current;
+
+    setLayout(data);
+    if (canUpdateConfig) {
+      if (data?.hall) setSelectedHall(data.hall);
+      if (Number.isInteger(data?.total_rows) && data.total_rows > 0) {
+        setRows(data.total_rows);
+      }
+      if (Number.isInteger(data?.total_columns) && data.total_columns > 0) {
+        setColumns(data.total_columns);
+      }
+      const inferred = inferCategoryRows(data?.seat_groups || []);
+      if (Object.values(inferred).some((value) => value > 0)) {
+        setCategoryRows(inferred);
+      }
+    }
+
+    const groups =
+      Array.isArray(data?.seat_groups) && data.seat_groups.length
+        ? data.seat_groups
+        : defaultSeatGroups;
+    const columns =
+      Array.isArray(data?.seat_columns) && data.seat_columns.length
+        ? data.seat_columns
+            .map((value) => Number(value))
+            .filter((value) => Number.isInteger(value) && value > 0)
+        : defaultSeatCols;
+    const seatItems = Array.isArray(data?.seats) ? data.seats : [];
+    const soldSeats = Array.isArray(data?.sold_seats) ? data.sold_seats : [];
+    const unavailableSeats = Array.isArray(data?.unavailable_seats)
+      ? data.unavailable_seats
+      : [];
+    const reservedSeats = Array.isArray(data?.reserved_seats)
+      ? data.reserved_seats
+      : Array.isArray(data?.reservedSeats)
+        ? data.reservedSeats
+        : [];
+    const soldFromSeats = seatItems
+      .filter((seat) => String(seat?.status || "").toLowerCase() === "booked")
+      .map((seat) => seat.label);
+    const unavailableFromSeats = seatItems
+      .filter((seat) => String(seat?.status || "").toLowerCase() === "unavailable")
+      .map((seat) => seat.label);
+    const nextSoldSet = new Set(
+      [...soldSeats, ...soldFromSeats]
+        .map((seat) => normalizeSeatLabel(seat))
+        .filter(Boolean)
+    );
+    const nextUnavailableSet = new Set(
+      [...unavailableSeats, ...unavailableFromSeats]
+        .map((seat) => normalizeSeatLabel(seat))
+        .filter(Boolean)
+    );
+    const nextReservedSet = new Set(
+      reservedSeats.map((seat) => normalizeSeatLabel(seat)).filter(Boolean)
+    );
+
+    setDynamicSeatGroups(groups);
+    setDynamicSeatCols(columns.length ? columns : defaultSeatCols);
+    setSoldSeatSet(nextSoldSet);
+    setUnavailableSeatSet(nextUnavailableSet);
+    setReservedSeatSet(nextReservedSet);
+  };
 
   useEffect(() => {
     if (!vendorShows.length) return;
@@ -60,30 +195,28 @@ export default function VendorSeats() {
         const data = await fetchVendorSeatLayout(params);
         if (!active) return;
 
-        setLayout(data);
-        if (data?.hall) setSelectedHall(data.hall);
-        if (Number.isInteger(data?.total_rows) && data.total_rows > 0) {
-          setRows(data.total_rows);
-        }
-        if (Number.isInteger(data?.total_columns) && data.total_columns > 0) {
-          setColumns(data.total_columns);
-        }
-        const inferred = inferCategoryRows(data?.seat_groups || []);
-        if (Object.values(inferred).some((value) => value > 0)) {
-          setCategoryRows(inferred);
-        }
+        applyLayoutData(data);
       } catch (error) {
         if (!active) return;
         setLayout(null);
         setMessage(error.message || "Failed to load seat layout.");
+        setSoldSeatSet(new Set());
+        setUnavailableSeatSet(new Set());
+        setReservedSeatSet(new Set());
+        setDynamicSeatGroups(defaultSeatGroups);
+        setDynamicSeatCols(defaultSeatCols);
       } finally {
         if (active) setLoading(false);
       }
     };
 
     loadLayout();
+    const intervalId = setInterval(() => {
+      loadLayout();
+    }, 8000);
     return () => {
       active = false;
+      clearInterval(intervalId);
     };
   }, [vendorId, selectedShowId, selectedHall]);
 
@@ -92,11 +225,23 @@ export default function VendorSeats() {
     setSavingLayout(true);
     setMessage("");
     try {
+      const categoryTotal = CATEGORY_KEYS.reduce((sum, key) => {
+        const value = Number(categoryRows[key]) || 0;
+        return sum + value;
+      }, 0);
+      const rowsValue = Number(rows) || 10;
+      if (categoryTotal > 0 && rowsValue !== categoryTotal) {
+        setMessage(
+          `Total rows (${rowsValue}) must equal the sum of category rows (${categoryTotal}). Update the category rows to match.`
+        );
+        return;
+      }
+
       const payload = {
         vendor_id: vendorId,
         show_id: selectedShowId || undefined,
         hall: selectedHall || "Hall A",
-        rows: Number(rows) || 10,
+        rows: rowsValue,
         columns: Number(columns) || 15,
         category_rows: {
           normal: Number(categoryRows.normal) || 0,
@@ -106,7 +251,9 @@ export default function VendorSeats() {
         },
       };
       const data = await saveVendorSeatLayout(payload);
-      setLayout(data);
+      layoutDirtyRef.current = false;
+      setLayoutDirty(false);
+      applyLayoutData(data, { forceConfig: true });
       setMessage(data?.message || "Seat layout saved.");
     } catch (error) {
       setMessage(error.message || "Failed to save seat layout.");
@@ -123,7 +270,8 @@ export default function VendorSeats() {
     }
     if (String(seat.status).toLowerCase() === "booked") return;
 
-    const targetStatus = statusMode === "Unavailable" ? "Unavailable" : "Available";
+    const targetStatus =
+      statusMode === "Unavailable" ? "Unavailable" : "Available";
     const currentStatus = String(seat.status || "").toLowerCase();
     if (
       (targetStatus === "Unavailable" && currentStatus === "unavailable") ||
@@ -142,7 +290,7 @@ export default function VendorSeats() {
         status: targetStatus,
         seat_labels: [seat.label],
       });
-      setLayout(data);
+      applyLayoutData(data);
       setMessage(data?.message || "Seat updated.");
     } catch (error) {
       setMessage(error.message || "Failed to update seat.");
@@ -151,10 +299,7 @@ export default function VendorSeats() {
     }
   };
 
-  const { rowLabels, seatColumns, seatMap } = useMemo(
-    () => buildSeatGrid(layout),
-    [layout]
-  );
+  const seatMap = useMemo(() => buildSeatMap(layout), [layout]);
 
   return (
     <div className="vendor-dashboard">
@@ -185,6 +330,7 @@ export default function VendorSeats() {
               value={selectedShowId}
               onChange={(event) => {
                 const value = event.target.value;
+                setLayoutDirty(false);
                 setSelectedShowId(value);
                 const selectedShow = vendorShows.find(
                   (show) => String(show.id) === String(value)
@@ -205,7 +351,10 @@ export default function VendorSeats() {
             <input
               className="form-control"
               value={selectedHall}
-              onChange={(event) => setSelectedHall(event.target.value)}
+              onChange={(event) => {
+                setLayoutDirty(true);
+                setSelectedHall(event.target.value);
+              }}
             />
           </div>
           <div className="col-md-2">
@@ -216,7 +365,10 @@ export default function VendorSeats() {
               max="52"
               className="form-control"
               value={rows}
-              onChange={(event) => setRows(event.target.value)}
+              onChange={(event) => {
+                setLayoutDirty(true);
+                setRows(event.target.value);
+              }}
             />
           </div>
           <div className="col-md-2">
@@ -227,7 +379,10 @@ export default function VendorSeats() {
               max="40"
               className="form-control"
               value={columns}
-              onChange={(event) => setColumns(event.target.value)}
+              onChange={(event) => {
+                setLayoutDirty(true);
+                setColumns(event.target.value);
+              }}
             />
           </div>
           {CATEGORY_KEYS.map((key) => (
@@ -239,12 +394,13 @@ export default function VendorSeats() {
                 max="52"
                 className="form-control"
                 value={categoryRows[key]}
-                onChange={(event) =>
+                onChange={(event) => {
+                  setLayoutDirty(true);
                   setCategoryRows((prev) => ({
                     ...prev,
                     [key]: event.target.value,
-                  }))
-                }
+                  }));
+                }}
               />
             </div>
           ))}
@@ -266,7 +422,7 @@ export default function VendorSeats() {
         <div className="vendor-card-header">
           <div>
             <h3>Seat Availability</h3>
-            <p>Booked seats are locked. Toggle available/unavailable for maintenance.</p>
+            <p>Booked seats are locked. Use Unavailable for maintenance/repairs.</p>
           </div>
           <div className="vendor-seatMode">
             <label className="form-label mb-0">Click Action</label>
@@ -280,57 +436,100 @@ export default function VendorSeats() {
             </select>
           </div>
         </div>
-
-        <div className="vendor-seatLegend">
-          <span><i className="dot normal" /> Normal</span>
-          <span><i className="dot executive" /> Executive</span>
-          <span><i className="dot premium" /> Premium</span>
-          <span><i className="dot vip" /> VIP</span>
-          <span><i className="dot booked" /> Booked</span>
-          <span><i className="dot unavailable" /> Unavailable</span>
-        </div>
-
-        <div className="vendor-seatCanvas">
-          <div className="vendor-screen">SCREEN</div>
-          {loading ? (
-            <div className="text-muted">Loading layout...</div>
-          ) : (
-            <div className="vendor-seatGrid">
-              {rowLabels.map((rowLabel) => (
-                <div className="vendor-seatRow" key={rowLabel}>
-                  <div className="vendor-seatRowLabel">{rowLabel}</div>
-                  <div className="vendor-seatRowCells">
-                    {seatColumns.map((col) => {
-                      const label = `${rowLabel}${col}`;
-                      const seat = seatMap.get(label) || null;
-                      const seatType = normalizeSeatType(seat?.seat_type);
-                      const seatStatus = String(seat?.status || "available").toLowerCase();
-                      const isBooked = seatStatus === "booked";
-                      const isUnavailable = seatStatus === "unavailable";
-                      const className = `vendor-seatCell ${seatType} ${
-                        isBooked ? "booked" : isUnavailable ? "unavailable" : ""
-                      }`;
-                      return (
-                        <button
-                          key={label}
-                          type="button"
-                          className={className}
-                          disabled={isBooked || updatingSeat === label}
-                          onClick={() => handleSeatToggle(seat || { label, seat_type: seatType })}
-                          title={label}
-                        >
-                          {label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-              {!rowLabels.length ? (
-                <div className="text-muted">No seat layout found for this hall.</div>
-              ) : null}
+        <div className="seat-layout seat-layout--fullwidth">
+          <div>
+            <div className="seat-mapHeader">
+              <div className="seat-mapLabel">Seat Layout</div>
+              <div className="seat-screen">
+                <span>SCREEN</span>
+                <div className="seat-curve" />
+              </div>
             </div>
-          )}
+
+            <div className="seat-mapCard">
+              <div className="seat-map" style={seatMapStyle}>
+                {loading ? (
+                  <div className="text-muted">Loading layout...</div>
+                ) : (
+                  dynamicSeatGroups.map((group) => (
+                    <div className={`seat-group seat-group--${group.key}`} key={group.label}>
+                      <div className="seat-groupTitle">{group.label}</div>
+                      <div className="seat-groupRows">
+                        {(group.rows || []).map((row) => (
+                          <div className="seat-row" key={row}>
+                            <div className="seat-rowLabel">{row}</div>
+                            <div className="seat-rowSeats">
+                              {dynamicSeatCols.map((col) => {
+                                const key = `${row}${col}`;
+                                const seat = seatMap.get(normalizeSeatLabel(key)) || null;
+                                const status = getVendorSeatStatus(
+                                  key,
+                                  seat,
+                                  soldSeatSet,
+                                  unavailableSeatSet,
+                                  reservedSeatSet
+                                );
+                                const isBlocked =
+                                  status === "seat--sold" || status === "seat--reserved";
+                                return (
+                                  <Fragment key={key}>
+                                    <button
+                                      type="button"
+                                      className={`seat seat--cat-${group.key} ${status}`}
+                                      aria-label={`Seat ${key}`}
+                                      disabled={isBlocked || updatingSeat === key}
+                                      onClick={() =>
+                                        handleSeatToggle(seat || { label: key, seat_type: group.key })
+                                      }
+                                    >
+                                      {key}
+                                    </button>
+                                  </Fragment>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))
+                )}
+
+                <div className="seat-colLabels">
+                  <div className="seat-colSpacer" />
+                  {dynamicSeatCols.map((col) => (
+                    <Fragment key={`col-${col}`}>
+                      <div className="seat-colLabel">{col}</div>
+                    </Fragment>
+                  ))}
+                </div>
+              </div>
+
+              <div className="seat-categoryLegend">
+                <span className="seat-categoryLegendTitle">Seat Categories</span>
+                {dynamicSeatGroups.map((group) => (
+                  <span className="seat-legendItem" key={`cat-${group.key}`}>
+                    <span className={`seat-legendBox category ${group.key}`} /> {group.label}
+                  </span>
+                ))}
+              </div>
+
+              <div className="seat-legend">
+                <span className="seat-legendItem">
+                  <span className="seat-legendBox available" /> Available
+                </span>
+                <span className="seat-legendItem">
+                  <span className="seat-legendBox reserved" /> Reserved
+                </span>
+                <span className="seat-legendItem">
+                  <span className="seat-legendBox sold" /> Booked
+                </span>
+                <span className="seat-legendItem">
+                  <span className="seat-legendBox unavailable" /> Unavailable
+                </span>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -358,52 +557,16 @@ function inferCategoryRows(groups) {
   return output;
 }
 
-function buildSeatGrid(layout) {
+function buildSeatMap(layout) {
   const seats = Array.isArray(layout?.seats) ? layout.seats : [];
-  const rowLabels = Array.from(
-    new Set(
-      seats
-        .map((seat) => String(seat.row_label || "").trim().toUpperCase())
-        .filter(Boolean)
-    )
-  ).sort(sortRowLabels);
-
-  const seatColumns = Array.from(
-    new Set(
-      seats
-        .map((seat) => Number(seat.seat_number))
-        .filter((value) => Number.isInteger(value) && value > 0)
-    )
-  ).sort((a, b) => a - b);
-
   const seatMap = new Map();
   seats.forEach((seat) => {
     const row = String(seat.row_label || "").trim().toUpperCase();
     const column = String(seat.seat_number || "").trim();
     if (!row || !column) return;
-    seatMap.set(`${row}${column}`, seat);
+    seatMap.set(normalizeSeatLabel(`${row}${column}`), seat);
   });
-
-  return { rowLabels, seatColumns, seatMap };
-}
-
-function sortRowLabels(a, b) {
-  return rowScore(a) - rowScore(b);
-}
-
-function rowScore(value) {
-  return String(value || "")
-    .toUpperCase()
-    .split("")
-    .reduce((score, char) => score * 26 + (char.charCodeAt(0) - 64), 0);
-}
-
-function normalizeSeatType(value) {
-  const text = String(value || "").toLowerCase();
-  if (text.includes("vip")) return "vip";
-  if (text.includes("prem")) return "premium";
-  if (text.includes("exec")) return "executive";
-  return "normal";
+  return seatMap;
 }
 
 function capitalize(value) {
@@ -412,10 +575,30 @@ function capitalize(value) {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+function normalizeSeatLabel(value) {
+  return String(value || "")
+    .replace(/\s+/g, "")
+    .toUpperCase()
+    .trim();
+}
+
+function getVendorSeatStatus(key, seat, soldSeatSet, unavailableSeatSet, reservedSeatSet) {
+  const normalized = normalizeSeatLabel(key);
+  const seatStatus = String(seat?.status || "").toLowerCase();
+  if (soldSeatSet.has(normalized) || seatStatus === "booked") return "seat--sold";
+  if (unavailableSeatSet.has(normalized) || seatStatus === "unavailable") {
+    return "seat--unavailable";
+  }
+  if (reservedSeatSet?.has?.(normalized) || seatStatus === "reserved") {
+    return "seat--reserved";
+  }
+  return "seat--available";
+}
+
 function getStoredVendor() {
   if (typeof window === "undefined") return null;
   try {
-    const raw = sessionStorage.getItem("vendor");
+    const raw = sessionStorage.getItem("vendor") || localStorage.getItem("vendor");
     return JSON.parse(raw || "null");
   } catch {
     return null;

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import {
   AtSign,
@@ -13,7 +14,14 @@ import {
   Phone,
 } from "lucide-react";
 import "../css/profile.css";
-import { clearAuthSession, getAuthHeaders } from "../lib/authSession";
+import {
+  clearAuthSession,
+  clearStoredRoleData,
+  getAuthHeaders,
+  getAuthSession,
+  getStoredRoleData,
+  storeRoleData,
+} from "../lib/authSession";
 
 const STORAGE_KEY = "vendor";
 const UPDATE_EVENT = "mt:vendor-updated";
@@ -33,14 +41,7 @@ const EMPTY_PROFILE = {
 };
 
 const getStoredVendor = () => {
-  if (typeof window === "undefined") return null;
-  const raw = sessionStorage.getItem(STORAGE_KEY);
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
+  return getStoredRoleData("vendor");
 };
 
 const getDefaultUsername = (user) => {
@@ -314,7 +315,9 @@ export default function VendorProfile() {
       };
 
       revokePreviewUrl(formData.avatar);
-      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(updatedVendor));
+      const auth = getAuthSession("vendor");
+      const scope = auth?.scope === "session" ? "session" : "local";
+      storeRoleData("vendor", updatedVendor, { scope });
       setVendor(updatedVendor);
       setFormData(deriveProfile(updatedVendor));
       setAvatarFile(null);
@@ -334,8 +337,10 @@ export default function VendorProfile() {
   };
 
   const handleLogout = () => {
-    clearAuthSession();
-    sessionStorage.removeItem(STORAGE_KEY);
+    const auth = getAuthSession("vendor");
+    const scope = auth?.scope === "session" ? "session" : "local";
+    clearAuthSession({ role: "vendor", scope });
+    clearStoredRoleData("vendor", { scope });
     setVendor(null);
     if (typeof window !== "undefined") {
       window.dispatchEvent(new Event(UPDATE_EVENT));
@@ -347,6 +352,37 @@ export default function VendorProfile() {
 
   const displayName = getDisplayName(formData);
   const initials = getInitials(displayName);
+  const imageModalMarkup =
+    isImageOpen && formData.avatar && typeof document !== "undefined"
+      ? createPortal(
+          <div
+            className="wf2-profileImageModal"
+            role="dialog"
+            aria-modal="true"
+            onClick={handleAvatarClose}
+          >
+            <div
+              className="wf2-profileImageDialog"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <button
+                className="wf2-profileImageClose"
+                type="button"
+                onClick={handleAvatarClose}
+                aria-label="Close image"
+              >
+                ×
+              </button>
+              <img
+                className="wf2-profileImageFull"
+                src={formData.avatar}
+                alt="Profile full size"
+              />
+            </div>
+          </div>,
+          document.body
+        )
+      : null;
 
   return (
     <form
@@ -665,33 +701,7 @@ export default function VendorProfile() {
         </div>
       </section>
 
-      {isImageOpen && formData.avatar ? (
-        <div
-          className="wf2-profileImageModal"
-          role="dialog"
-          aria-modal="true"
-          onClick={handleAvatarClose}
-        >
-          <div
-            className="wf2-profileImageDialog"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <button
-              className="wf2-profileImageClose"
-              type="button"
-              onClick={handleAvatarClose}
-              aria-label="Close image"
-            >
-              x
-            </button>
-            <img
-              className="wf2-profileImageFull"
-              src={formData.avatar}
-              alt="Profile full size"
-            />
-          </div>
-        </div>
-      ) : null}
+      {imageModalMarkup}
     </form>
   );
 }

@@ -1,72 +1,59 @@
-import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
 import {
   LayoutGrid,
   CalendarDays,
+  UtensilsCrossed,
   Armchair,
   Ticket,
+  BadgeDollarSign,
+  ShieldCheck,
+  Building2,
   Users,
-  Store,
-  Package,
-  FileText,
-  KeyRound,
-  HelpCircle,
-  Settings,
+  Megaphone,
 } from "lucide-react";
+import logo from "../images/logo.png";
+import { canAccessVendorFeature, isVendorOwner } from "../lib/authSession";
 
 const navItems = [
-  { label: "Dashboard", icon: LayoutGrid, to: "/vendor/dashboard" },
-  { label: "Shows", icon: CalendarDays, to: "/vendor/shows" },
-  { label: "Seats", icon: Armchair, to: "/vendor/seats" },
-  { label: "Orders", icon: Ticket, disabled: true },
-  { label: "Seller List", icon: Store, disabled: true },
-  { label: "Customers", icon: Users, disabled: true },
-  { label: "Products", icon: Package, disabled: true },
-  { label: "Invoices", icon: FileText, disabled: true },
-  { label: "Authentication", icon: KeyRound, disabled: true },
-  { label: "Help", icon: HelpCircle, disabled: true },
-  { label: "Settings", icon: Settings, disabled: true },
+  { label: "Dashboard", icon: LayoutGrid, to: "/vendor/dashboard", feature: "dashboard" },
+  { label: "Shows", icon: CalendarDays, to: "/vendor/shows", feature: "shows" },
+  { label: "Food Items", icon: UtensilsCrossed, to: "/vendor/food", feature: "food" },
+  { label: "Seats", icon: Armchair, to: "/vendor/seats", feature: "seats" },
+  { label: "Pricing", icon: BadgeDollarSign, to: "/vendor/pricing", feature: "pricing" },
+  {
+    label: "Campaigns & Promos",
+    icon: Megaphone,
+    to: "/vendor/campaigns-promos",
+    feature: "campaigns-promos",
+  },
+  { label: "Bookings", icon: Ticket, to: "/vendor/bookings", feature: "bookings" },
+  { label: "Corporate & Bulk", icon: Building2, to: "/vendor/corporate-bulk", feature: "corporate-bulk" },
+  { label: "Ticket Validation", icon: ShieldCheck, to: "/vendor/ticket-validation", feature: "ticket-validation" },
+  {
+    label: "Staff Accounts",
+    icon: Users,
+    to: "/vendor/staff-accounts",
+    feature: "staff-accounts",
+    ownerOnly: true,
+  },
 ];
 
 export default function VendorSidebar({ onNavigate }) {
-  const [vendor, setVendor] = useState(() => getStoredVendor());
-  const displayName = vendor?.name || vendor?.username || "Vendor Admin";
-  const displayEmail = vendor?.email || "vendor@meroticket.com";
-  const avatarSrc = getAvatar(vendor);
-  const initials = getInitials(displayName);
-
-  useEffect(() => {
-    const handleUpdate = () => setVendor(getStoredVendor());
-    window.addEventListener("storage", handleUpdate);
-    window.addEventListener("mt:vendor-updated", handleUpdate);
-    return () => {
-      window.removeEventListener("storage", handleUpdate);
-      window.removeEventListener("mt:vendor-updated", handleUpdate);
-    };
-  }, []);
+  const visibleItems = navItems.filter((item) => {
+    if (item.ownerOnly && !isVendorOwner()) return false;
+    return canAccessVendorFeature(item.feature);
+  });
 
   return (
     <aside className="vendor-sidebar">
       <div className="vendor-brand">
-        <span className="vendor-brand-mark">B</span>
-        <div>
-          <div className="vendor-brand-name">Biko</div>
-          <small className="vendor-brand-sub">Vendor Console</small>
-        </div>
+        <img src={logo} alt="Mero Ticket Logo" className="vendor-brand-logo" />
       </div>
 
       <nav className="vendor-nav">
         <div className="vendor-nav-label">Main</div>
-        {navItems.map((item) => {
+        {visibleItems.map((item) => {
           const Icon = item.icon;
-          if (item.disabled) {
-            return (
-              <button key={item.label} type="button" className="vendor-nav-link disabled" disabled>
-                <Icon size={18} />
-                {item.label}
-              </button>
-            );
-          }
           return (
             <NavLink
               key={item.label}
@@ -82,20 +69,6 @@ export default function VendorSidebar({ onNavigate }) {
           );
         })}
       </nav>
-
-      <div className="vendor-sidebar-footer">
-        <div className="vendor-avatar">
-          {avatarSrc ? (
-            <img src={avatarSrc} alt="Profile avatar" />
-          ) : (
-            initials
-          )}
-        </div>
-        <div>
-          <div className="vendor-user">{displayName}</div>
-          <small className="vendor-email">{displayEmail}</small>
-        </div>
-      </div>
     </aside>
   );
 }
@@ -103,7 +76,7 @@ export default function VendorSidebar({ onNavigate }) {
 function getStoredVendor() {
   if (typeof window === "undefined") return null;
   try {
-    const raw = sessionStorage.getItem("vendor");
+    const raw = sessionStorage.getItem("vendor") || localStorage.getItem("vendor");
     return JSON.parse(raw || "null");
   } catch {
     return null;
