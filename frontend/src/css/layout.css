@@ -76,6 +76,11 @@ main > *{
   gap: 18px;
 }
 
+.wf2-searchArea{
+  position: relative;
+  z-index: 90;
+}
+
 .wf2-brandImg{
   width: 180px;
   height: 80px;
@@ -695,21 +700,20 @@ main > *{
 
 .wf2-search{
   position: relative;
-  width: 46px;
+  width: clamp(220px, 24vw, 360px);
   height: 40px;
   border-radius: 999px;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 8px;
-  padding: 0 12px;
-  background: rgba(20, 22, 28, 0.6);
-  border: 1px solid rgba(255,255,255,0.12);
+  padding: 0 16px;
+  background: linear-gradient(180deg, rgba(15, 20, 30, 0.84), rgba(11, 14, 22, 0.9));
+  border: 1px solid rgba(255,255,255,0.16);
   box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04);
   cursor: text;
-  transition: width 0.25s ease, padding 0.25s ease, background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
   line-height: 0;
-  overflow: hidden;
 }
 
 .wf2-search svg{
@@ -719,8 +723,8 @@ main > *{
 }
 
 .wf2-search input{
-  width: 0;
-  opacity: 0;
+  width: 100%;
+  opacity: 1;
   border: 0;
   outline: none;
   background: transparent;
@@ -729,8 +733,8 @@ main > *{
   font-family: var(--font-hero);
   font-weight: 600;
   letter-spacing: 0.03em;
-  transition: width 0.25s ease, opacity 0.2s ease;
-  pointer-events: none;
+  transition: color 0.2s ease;
+  pointer-events: auto;
 }
 
 .wf2-search input::placeholder{
@@ -739,19 +743,178 @@ main > *{
 
 .wf2-search:hover,
 .wf2-search:focus-within{
-  width: 220px;
-  padding: 0 16px;
-  justify-content: flex-start;
   transform: translateY(-1px);
-  border-color: rgba(255,255,255,0.22);
-  background: #20242c;
+  border-color: rgba(68, 203, 255, 0.65);
+  background: linear-gradient(180deg, rgba(16, 28, 45, 0.92), rgba(12, 20, 35, 0.96));
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.32), 0 0 0 1px rgba(68, 203, 255, 0.25);
 }
 
 .wf2-search:hover input,
 .wf2-search:focus-within input{
-  width: 150px;
-  opacity: 1;
-  pointer-events: auto;
+  color: rgba(234,240,255,0.98);
+}
+
+.wf2-searchPanel{
+  position: absolute;
+  top: calc(100% + 12px);
+  left: 0;
+  width: min(760px, 80vw);
+  max-height: min(72vh, 720px);
+  overflow-y: auto;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background:
+    radial-gradient(110% 85% at 20% 0%, rgba(59, 103, 198, 0.2), transparent 60%),
+    linear-gradient(180deg, rgba(26, 29, 43, 0.96), rgba(17, 19, 30, 0.97));
+  backdrop-filter: blur(10px);
+  box-shadow: 0 28px 60px rgba(0,0,0,0.5);
+  padding: 18px 18px 16px;
+}
+
+.wf2-searchPanelRow{
+  display: grid;
+  gap: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+
+.wf2-searchPanelLabel{
+  color: rgba(234,240,255,0.92);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.wf2-searchGenreChips{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.wf2-searchGenreChip{
+  border: 1px solid rgba(68, 203, 255, 0.65);
+  background: rgba(11, 20, 35, 0.45);
+  color: rgba(229, 246, 255, 0.95);
+  border-radius: 999px;
+  font-size: 13px;
+  line-height: 1;
+  padding: 8px 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.wf2-searchGenreChip:hover{
+  border-color: rgba(68, 203, 255, 0.95);
+  background: rgba(31, 120, 185, 0.3);
+}
+
+.wf2-searchGenreChipActive{
+  background: rgba(0, 184, 255, 0.25);
+  border-color: rgba(0, 200, 255, 0.95);
+  box-shadow: 0 8px 20px rgba(0, 184, 255, 0.25);
+}
+
+.wf2-searchResultHead{
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-top: 14px;
+  margin-bottom: 10px;
+}
+
+.wf2-searchResultTitle{
+  font-size: 30px;
+  font-weight: 800;
+  color: rgba(236, 243, 255, 0.97);
+  letter-spacing: 0.01em;
+}
+
+.wf2-searchResultCount{
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(203, 217, 240, 0.88);
+}
+
+.wf2-searchResultGrid{
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 14px;
+}
+
+.wf2-searchCard{
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(22, 24, 35, 0.8);
+  border-radius: 14px;
+  padding: 10px;
+  cursor: pointer;
+  text-align: left;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.wf2-searchCard:hover{
+  transform: translateY(-2px);
+  border-color: rgba(66, 203, 255, 0.8);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.38);
+}
+
+.wf2-searchCardPoster{
+  position: relative;
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(0,0,0,0.3);
+  aspect-ratio: 2 / 3;
+}
+
+.wf2-searchCardPoster img{
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.wf2-searchRatingBadge{
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 800;
+  color: rgba(18, 41, 10, 0.9);
+  background: rgba(180, 255, 158, 0.95);
+}
+
+.wf2-searchRatingBadgeAdult{
+  color: #0f2d3f;
+  background: rgba(111, 245, 255, 0.95);
+}
+
+.wf2-searchCardBody{
+  margin-top: 10px;
+  display: grid;
+  gap: 4px;
+}
+
+.wf2-searchCardTitle{
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1.25;
+  color: rgba(236, 243, 255, 0.97);
+}
+
+.wf2-searchCardMeta{
+  font-size: 13px;
+  color: rgba(187, 203, 229, 0.9);
+}
+
+.wf2-searchEmpty{
+  margin-top: 14px;
+  border-radius: 10px;
+  border: 1px dashed rgba(255,255,255,0.22);
+  padding: 14px;
+  font-size: 14px;
+  color: rgba(187, 203, 229, 0.95);
+  background: rgba(0,0,0,0.2);
 }
 
 
@@ -852,6 +1015,51 @@ main > *{
   border-radius: 12px;
 }
 
+.wf2-userActions{
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-right: 26px;
+}
+
+.wf2-noticeBell{
+  position: relative;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.2);
+  background: rgba(8, 11, 18, 0.35);
+  color: rgba(234,240,255,0.92);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: all 0.2s ease;
+}
+
+.wf2-noticeBell:hover{
+  border-color: rgba(31, 182, 216, 0.9);
+  background: rgba(31, 182, 216, 0.18);
+}
+
+.wf2-noticeBadge{
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: #f59e0b;
+  color: #111318;
+  font-size: 10px;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+  border: 1px solid rgba(9, 10, 13, 0.95);
+}
+
 .wf2-userBtn{
   display: inline-flex;
   align-items: center;
@@ -865,7 +1073,7 @@ main > *{
   font-size: 13px;
   cursor: pointer;
   transition: all 0.2s ease;
-  margin-right: 28px;
+  margin-right: 0;
 }
 
 .wf2-userBtn:hover{
@@ -948,6 +1156,123 @@ main > *{
   visibility: visible;
   transform: translateY(0);
   pointer-events: auto;
+}
+
+.wf2-noticeOverlay{
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 9, 14, 0.58);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 260;
+}
+
+.wf2-noticeModal{
+  width: min(560px, 95vw);
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,0.2);
+  background:
+    linear-gradient(150deg, rgba(248, 190, 48, 0.95) 0%, rgba(245, 158, 11, 0.92) 42%, rgba(25, 31, 48, 0.98) 43%, rgba(15, 19, 32, 0.98) 100%),
+    radial-gradient(120% 95% at 50% 5%, rgba(255,255,255,0.22), transparent 70%);
+  box-shadow: 0 34px 70px rgba(0,0,0,0.55);
+  padding: 20px 20px 18px;
+  position: relative;
+  color: rgba(242, 247, 255, 0.98);
+}
+
+.wf2-noticeClose{
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.35);
+  background: rgba(9, 11, 18, 0.42);
+  color: rgba(240, 246, 255, 0.95);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 0;
+}
+
+.wf2-noticeClose:hover{
+  background: rgba(9, 11, 18, 0.62);
+}
+
+.wf2-noticeType{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 4px 10px;
+  border: 1px solid rgba(14, 19, 33, 0.2);
+  background: rgba(255,255,255,0.2);
+  color: rgba(13, 20, 37, 0.92);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.wf2-noticeTitle{
+  margin: 12px 0 0;
+  font-size: clamp(24px, 4vw, 36px);
+  line-height: 1.1;
+  color: rgba(255, 248, 230, 0.98);
+  font-weight: 800;
+  max-width: 88%;
+}
+
+.wf2-noticeMessage{
+  margin: 14px 0 0;
+  max-width: 92%;
+  color: rgba(232, 239, 255, 0.94);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.wf2-noticeActions{
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.wf2-noticeActionPrimary{
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.32);
+  background: rgba(11, 18, 33, 0.82);
+  color: rgba(241, 247, 255, 0.98);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 9px 14px;
+}
+
+.wf2-noticeActionPrimary:hover{
+  border-color: rgba(255,255,255,0.48);
+  background: rgba(11, 18, 33, 0.95);
+}
+
+.wf2-noticeActionGhost{
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.26);
+  background: rgba(255,255,255,0.08);
+  color: rgba(231, 239, 255, 0.95);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 9px 14px;
+}
+
+.wf2-noticeActionGhost:hover{
+  background: rgba(255,255,255,0.15);
 }
 
 .wf2-btnGhost{
@@ -1068,10 +1393,26 @@ main > *{
     justify-content: flex-start;
     flex-wrap: wrap;
   }
+  .wf2-searchArea{
+    width: 100%;
+    max-width: 460px;
+  }
+  .wf2-search{
+    width: 100%;
+  }
+  .wf2-searchPanel{
+    width: min(92vw, 680px);
+  }
   .wf2-navPillsTop{
     flex-wrap: wrap;
     gap: 16px;
     justify-content: flex-start;
+  }
+  .wf2-userActions{
+    margin-right: 0;
+  }
+  .wf2-noticeOverlay{
+    padding: 16px;
   }
   .wf2-bookingBar{ align-items: flex-start; }
   .wf2-bookingControls{ gap: 16px; }
@@ -1080,5 +1421,33 @@ main > *{
 }
 
 @media (max-width:640px){
+  .wf2-searchResultTitle{
+    font-size: 24px;
+  }
+  .wf2-searchResultGrid{
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .wf2-noticeModal{
+    padding: 16px 14px 14px;
+  }
+  .wf2-noticeTitle{
+    font-size: 24px;
+  }
+  .wf2-noticeMessage{
+    font-size: 14px;
+    max-width: 100%;
+  }
   .wf2-footerGrid{ grid-template-columns: 1fr; }
+}
+
+@media (max-width:480px){
+  .wf2-searchPanel{
+    width: 92vw;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 14px;
+  }
+  .wf2-searchResultGrid{
+    grid-template-columns: 1fr;
+  }
 }

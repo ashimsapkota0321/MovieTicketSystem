@@ -231,6 +231,8 @@
   max-width:720px;
   color:var(--text);
   text-shadow: 0 6px 18px rgba(0,0,0,0.55);
+  /* Keep banner (badge/meta/desc/button) typography consistent */
+  font-size: 13px;
 }
 
 .wf2-heroBadge{ display:inline-block; padding:6px 14px; background: rgba(255,59,107,0.92); border-radius:20px; font-weight:700; letter-spacing:0.5px; margin-bottom:16px; }
@@ -244,7 +246,18 @@
   font-family: var(--font-hero);
 }
 
-.wf2-bodyHeroDesc{ opacity:0.95; color: rgba(234,240,255,0.95); margin-bottom:18px; max-width:600px; }
+.wf2-bodyHeroDesc{
+  opacity:0.95;
+  color: rgba(234,240,255,0.95);
+  margin-bottom:18px;
+  max-width:600px;
+  line-height: 1.7;
+}
+
+/* Match CTA button text size with other banner text */
+.wf2-bodyHeroContent .wf2-btnPill{
+  font-size: inherit;
+}
 
 .wf2-bodyHeroMeta{
   color: rgba(234,240,255,0.95);
