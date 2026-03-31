@@ -24,6 +24,7 @@ export default function AdminPeople() {
   const [showConfirm, setShowConfirm] = useState(false);
   const [personToDelete, setPersonToDelete] = useState(null);
   const [form, setForm] = useState(buildEmptyPerson());
+  const [searchTerm, setSearchTerm] = useState("");
 
   const loadPeople = async () => {
     setLoading(true);
@@ -52,7 +53,24 @@ export default function AdminPeople() {
     }
   }, [selectedId, people]);
 
-  const filteredPeople = useMemo(() => people, [people]);
+  const filteredPeople = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    if (!term) return people;
+
+    return people.filter((person) => {
+      const haystack = [
+        person.full_name || person.fullName,
+        person.nationality,
+        person.slug,
+        person.instagram,
+        person.imdb,
+        person.facebook,
+      ]
+        .map((value) => String(value || "").toLowerCase())
+        .join(" ");
+      return haystack.includes(term);
+    });
+  }, [people, searchTerm]);
 
   const openAdd = () => {
     setEditingPerson(null);
@@ -121,8 +139,13 @@ export default function AdminPeople() {
 
       <section className="admin-card">
         <div className="d-flex flex-wrap gap-2 justify-content-between align-items-center mb-3">
-          <div className="d-flex gap-2 flex-wrap">
-            <input className="form-control" placeholder="Search person" />
+          <div className="d-flex gap-2 flex-wrap admin-filter-row">
+            <input
+              className="form-control"
+              placeholder="Search person"
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+            />
           </div>
           <div className="text-muted small">
             {loading ? "Loading..." : `${filteredPeople.length} people`}

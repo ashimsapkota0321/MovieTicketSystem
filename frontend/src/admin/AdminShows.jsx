@@ -18,6 +18,7 @@ export default function AdminShows() {
   const [showModal, setShowModal] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [showToDelete, setShowToDelete] = useState(null);
+  const [editingShow, setEditingShow] = useState(null);
   const [form, setForm] = useState(() => buildEmptyShow(movies, vendors));
 
   useEffect(() => {
@@ -64,15 +65,36 @@ export default function AdminShows() {
 
     try {
       await createShow(payload);
+      if (editingShow?.id) {
+        await deleteShow(editingShow.id);
+      }
       await refreshCatalog();
       setShowModal(false);
-      pushToast({ title: "Show created", message: "Show scheduled successfully." });
+      setEditingShow(null);
+      pushToast({
+        title: editingShow ? "Show updated" : "Show created",
+        message: editingShow
+          ? "Show schedule updated successfully."
+          : "Show scheduled successfully.",
+      });
     } catch (error) {
       pushToast({
-        title: "Create failed",
-        message: error.message || "Unable to create show.",
+        title: editingShow ? "Update failed" : "Create failed",
+        message: error.message || "Unable to save show.",
       });
     }
+  };
+
+  const openCreateModal = () => {
+    setEditingShow(null);
+    setForm(buildEmptyShow(movies, vendors));
+    setShowModal(true);
+  };
+
+  const openEditModal = (show) => {
+    setEditingShow(show);
+    setForm(buildFormFromShow(show, movies, vendors));
+    setShowModal(true);
   };
 
   const handleDelete = async () => {
@@ -99,10 +121,7 @@ export default function AdminShows() {
         <button
           type="button"
           className="btn btn-primary admin-btn"
-          onClick={() => {
-            setForm(buildEmptyShow(movies, vendors));
-            setShowModal(true);
-          }}
+          onClick={openCreateModal}
         >
           <CalendarPlus size={16} className="me-2" />
           Create Show
@@ -111,7 +130,7 @@ export default function AdminShows() {
 
       <section className="admin-card">
         <div className="d-flex flex-wrap gap-2 justify-content-between align-items-center mb-3">
-          <div className="d-flex gap-2 flex-wrap">
+          <div className="d-flex gap-2 flex-wrap admin-filter-row">
             <select className="form-select">
               <option>Vendor</option>
               {vendors.map((vendor) => (
@@ -175,7 +194,11 @@ export default function AdminShows() {
                   </td>
                   <td>
                     <div className="d-flex gap-2">
-                      <button type="button" className="btn btn-outline-light btn-sm" disabled>
+                      <button
+                        type="button"
+                        className="btn btn-outline-light btn-sm"
+                        onClick={() => openEditModal(show)}
+                      >
                         <Pencil size={16} />
                       </button>
                       <button
@@ -212,15 +235,25 @@ export default function AdminShows() {
 
       <AdminModal
         show={showModal}
-        title="Create Show"
-        onClose={() => setShowModal(false)}
+        title={editingShow ? "Edit Show" : "Create Show"}
+        onClose={() => {
+          setShowModal(false);
+          setEditingShow(null);
+        }}
         footer={
           <>
-            <button type="button" className="btn btn-outline-light" onClick={() => setShowModal(false)}>
+            <button
+              type="button"
+              className="btn btn-outline-light"
+              onClick={() => {
+                setShowModal(false);
+                setEditingShow(null);
+              }}
+            >
               Cancel
             </button>
             <button type="button" className="btn btn-primary" onClick={handleSave}>
-              Save Show
+              {editingShow ? "Update Show" : "Save Show"}
             </button>
           </>
         }
@@ -384,6 +417,24 @@ function buildEmptyShow(movies, vendors) {
     price: "450",
     status: "Open",
     listingStatus: "Now Showing",
+  };
+}
+
+function buildFormFromShow(show, movies, vendors) {
+  const movieId = show?.movieId || movies.find((movie) => movie.title === show?.movie)?.id || "";
+  const vendorId = show?.vendorId || vendors.find((vendor) => vendor.name === show?.vendor)?.id || "";
+  return {
+    movieId,
+    vendorId,
+    hall: show?.hall || "Hall A",
+    date: show?.date || new Date().toISOString().slice(0, 10),
+    slot: show?.slot || guessSlot(show?.start),
+    start: show?.start || "18:30",
+    end: show?.end || "20:30",
+    screenType: show?.screenType || "Standard",
+    price: String(show?.price ?? "450"),
+    status: show?.status || "Open",
+    listingStatus: show?.listingStatus || "Now Showing",
   };
 }
 

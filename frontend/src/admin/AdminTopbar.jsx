@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { Bell, Menu, ChevronDown, User } from "lucide-react";
-import { clearAuthSession } from "../lib/authSession";
+import { useLocation, useNavigate } from "react-router-dom";
+import { Bell, Menu, ChevronDown, User, Moon, Sun } from "lucide-react";
+import { clearAuthSession, clearStoredRoleData, getAuthSession } from "../lib/authSession";
 
-export default function AdminTopbar({ onToggleSidebar }) {
+export default function AdminTopbar({ onToggleSidebar, onToggleTheme, theme = "light" }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const menuRef = useRef(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [admin, setAdmin] = useState(() => getStoredAdmin());
+  const [searchTerm, setSearchTerm] = useState("");
   const displayName =
     admin?.full_name || admin?.fullName || admin?.name || admin?.username || "Admin";
   const greeting = getTimeGreeting();
@@ -33,9 +35,25 @@ export default function AdminTopbar({ onToggleSidebar }) {
     return () => document.removeEventListener("mousedown", handleOutside);
   }, []);
 
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    setSearchTerm(params.get("q") || "");
+  }, [location.search]);
+
+  const handleSearchSubmit = () => {
+    const term = searchTerm.trim();
+    if (!term) return;
+    const targetPath = getAdminSearchTarget(term);
+    const params = new URLSearchParams();
+    params.set("q", term);
+    navigate(`${targetPath}?${params.toString()}`);
+  };
+
   const handleLogout = () => {
-    clearAuthSession();
-    localStorage.removeItem("admin");
+    const auth = getAuthSession("admin");
+    const scope = auth?.scope === "session" ? "session" : "local";
+    clearAuthSession({ role: "admin", scope });
+    clearStoredRoleData("admin", { scope });
     if (typeof window !== "undefined") {
       window.dispatchEvent(new Event("mt:admin-updated"));
     }
@@ -54,10 +72,29 @@ export default function AdminTopbar({ onToggleSidebar }) {
       </div>
 
       <div className="admin-search">
-        <input type="text" placeholder="Search movies, vendors, users, bookings" />
+        <input
+          type="text"
+          placeholder="Search movies, vendors, users, bookings"
+          value={searchTerm}
+          onChange={(event) => setSearchTerm(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              handleSearchSubmit();
+            }
+          }}
+        />
       </div>
 
       <div className="admin-topbar-actions">
+        <button
+          type="button"
+          className="admin-icon-btn"
+          title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          onClick={onToggleTheme}
+        >
+          {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+        </button>
         <button type="button" className="admin-icon-btn" title="Notifications">
           <Bell size={18} />
         </button>
@@ -117,7 +154,7 @@ export default function AdminTopbar({ onToggleSidebar }) {
 function getStoredAdmin() {
   if (typeof window === "undefined") return null;
   try {
-    return JSON.parse(localStorage.getItem("admin") || "null");
+    return JSON.parse(sessionStorage.getItem("admin") || localStorage.getItem("admin") || "null");
   } catch {
     return null;
   }
@@ -147,4 +184,23 @@ function getTimeGreeting(now = new Date()) {
   if (hour < 12) return "Good Morning";
   if (hour < 18) return "Good Afternoon";
   return "Good Evening";
+}
+
+function getAdminSearchTarget(term) {
+  const value = String(term || "").toLowerCase();
+  if (value.includes("vendor") || value.includes("cinema") || value.includes("theatre")) {
+    return "/admin/vendors";
+  }
+  if (value.includes("user") || value.includes("customer") || value.includes("account")) {
+    return "/admin/users";
+  }
+  if (
+    value.includes("booking") ||
+    value.includes("ticket") ||
+    value.includes("order") ||
+    value.includes("refund")
+  ) {
+    return "/admin/bookings";
+  }
+  return "/admin/movies";
 }

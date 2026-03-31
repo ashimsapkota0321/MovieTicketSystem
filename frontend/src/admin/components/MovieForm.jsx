@@ -104,13 +104,19 @@ export default function MovieForm({ value, onChange, onEditPerson, loading = fal
         />
       </div>
       <div className="col-md-6">
-        <label className="form-label">Poster URL</label>
+        <label className="form-label">Poster Image</label>
         <input
+          type="file"
           className="form-control"
-          value={value.posterUrl}
-          onChange={(event) => updateField("posterUrl", event.target.value)}
+          accept="image/*"
+          onChange={(event) => updateField("posterFile", event.target.files?.[0] || null)}
           disabled={loading}
         />
+        {value.posterFile ? (
+          <small className="text-muted">Selected: {value.posterFile.name}</small>
+        ) : value.posterPreview ? (
+          <small className="text-muted">Current poster already set.</small>
+        ) : null}
       </div>
       <div className="col-md-6">
         <label className="form-label">Trailer URL</label>
@@ -183,8 +189,9 @@ export default function MovieForm({ value, onChange, onEditPerson, loading = fal
 
 function CreditRow({ credit, type, onChange, onRemove, disabled, onEditPerson }) {
   const roleLabel = type === "CAST" ? "Role (character name)" : "Role (job title)";
+  const currentImage = credit.photoUrl || "";
   return (
-    <div className="border rounded p-3 bg-dark bg-opacity-25">
+    <div className="border rounded p-3 admin-credit-row">
       <div className="row g-2 align-items-end">
         <div className="col-md-5">
           <label className="form-label">Name</label>
@@ -217,6 +224,38 @@ function CreditRow({ credit, type, onChange, onRemove, disabled, onEditPerson })
           </button>
         </div>
       </div>
+      <div className="row g-2 mt-1 align-items-end">
+        <div className="col-md-8">
+          <label className="form-label">Image URL (optional)</label>
+          <input
+            type="url"
+            className="form-control"
+            placeholder="https://example.com/photo.jpg"
+            value={credit.photoUrl || ""}
+            onChange={(event) => onChange({ photoUrl: event.target.value })}
+            disabled={disabled}
+          />
+        </div>
+        <div className="col-md-4">
+          <label className="form-label">Choose Image (optional)</label>
+          <input
+            type="file"
+            className="form-control"
+            accept="image/*"
+            onChange={(event) =>
+              onChange({
+                photoFile: event.target.files?.[0] || null,
+              })
+            }
+            disabled={disabled}
+          />
+        </div>
+      </div>
+      {credit.photoFile ? (
+        <div className="mt-2 text-muted small">Selected image: {credit.photoFile.name}</div>
+      ) : currentImage ? (
+        <div className="mt-2 text-muted small">Current image is set.</div>
+      ) : null}
       {credit.personId ? (
         <button
           type="button"
@@ -240,6 +279,8 @@ function buildEmptyCredit(type) {
     personId: "",
     name: "",
     role: "",
+    photoUrl: "",
+    photoFile: null,
     position: "",
   };
 }

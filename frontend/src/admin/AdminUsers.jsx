@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Eye, Pencil, Plus, ShieldAlert, Trash2 } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
 import AdminPageHeader from "./components/AdminPageHeader";
 import AdminModal from "./components/AdminModal";
 import ConfirmModal from "./components/ConfirmModal";
@@ -37,6 +38,12 @@ export default function AdminUsers() {
   const [roleFilter, setRoleFilter] = useState("Role");
   const [statusFilter, setStatusFilter] = useState("Status");
   const [isSaving, setIsSaving] = useState(false);
+  const [searchParams] = useSearchParams();
+  const queryFromUrl = String(searchParams.get("q") || "");
+
+  useEffect(() => {
+    setSearchTerm(queryFromUrl);
+  }, [queryFromUrl]);
 
   const formatDate = (value) => {
     if (!value) return "-";
@@ -210,7 +217,7 @@ export default function AdminUsers() {
 
       <section className="admin-card">
         <div className="d-flex flex-wrap gap-2 justify-content-between align-items-center mb-3">
-          <div className="d-flex gap-2 flex-wrap">
+          <div className="d-flex gap-2 flex-wrap admin-filter-row">
             <input
               className="form-control"
               placeholder="Search user"

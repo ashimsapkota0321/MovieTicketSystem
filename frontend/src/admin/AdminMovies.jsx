@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Eye, Pencil, Plus, Trash2 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import AdminPageHeader from "./components/AdminPageHeader";
 import AdminModal from "./components/AdminModal";
 import ConfirmModal from "./components/ConfirmModal";
@@ -10,6 +10,7 @@ import { createMovie, deleteMovie, fetchMovieById, updateMovie } from "../lib/ca
 import { useAppContext } from "../context/Appcontext";
 
 export default function AdminMovies() {
+  const PAGE_SIZE = 8;
   const { pushToast } = useAdminToast();
   const ctx = safeUseAppContext();
   const movies = ctx?.movies ?? [];
@@ -22,6 +23,52 @@ export default function AdminMovies() {
   const [movieToDelete, setMovieToDelete] = useState(null);
   const [form, setForm] = useState(() => buildEmptyMovie());
   const [formLoading, setFormLoading] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [statusFilter, setStatusFilter] = useState("Status");
+  const [languageFilter, setLanguageFilter] = useState("Language");
+  const [searchParams] = useSearchParams();
+  const queryFromUrl = String(searchParams.get("q") || "");
+
+  useEffect(() => {
+    setSearchTerm(queryFromUrl);
+  }, [queryFromUrl]);
+
+  const filteredMovies = useMemo(() => {
+    let list = [...movies];
+
+    if (searchTerm.trim()) {
+      const term = searchTerm.trim().toLowerCase();
+      list = list.filter((movie) =>
+        String(movie.title || "").toLowerCase().includes(term)
+      );
+    }
+
+    if (statusFilter !== "Status") {
+      list = list.filter((movie) => {
+        const label = formatStatusLabel(movie.status);
+        return label === statusFilter;
+      });
+    }
+
+    if (languageFilter !== "Language") {
+      list = list.filter(
+        (movie) => String(movie.language || "") === languageFilter
+      );
+    }
+
+    return list;
+  }, [movies, searchTerm, statusFilter, languageFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredMovies.length / PAGE_SIZE));
+  const paginatedMovies = useMemo(() => {
+    const start = (currentPage - 1) * PAGE_SIZE;
+    return filteredMovies.slice(start, start + PAGE_SIZE);
+  }, [filteredMovies, currentPage]);
+
+  useEffect(() => {
+    setCurrentPage((prev) => Math.min(prev, totalPages));
+  }, [totalPages]);
 
 
   const openAdd = () => {
@@ -61,19 +108,7 @@ export default function AdminMovies() {
       return;
     }
 
-    const payload = {
-      title: form.title.trim(),
-      duration: form.duration.trim(),
-      genre: form.genre.trim(),
-      language: form.language.trim(),
-      rating: form.rating.trim(),
-      releaseDate: form.releaseDate,
-      status: form.status || "COMING_SOON",
-      synopsis: form.synopsis?.trim() || "",
-      posterUrl: form.posterUrl?.trim() || "",
-      trailerUrl: form.trailerUrl?.trim() || "",
-    };
-    payload.credits = buildCreditsPayload(form);
+    const payload = buildMovieFormData(form);
 
     try {
       if (editingMovie?.id) {
@@ -124,9 +159,18 @@ export default function AdminMovies() {
 
       <section className="admin-card">
         <div className="d-flex flex-wrap gap-2 justify-content-between align-items-center mb-3">
-          <div className="d-flex gap-2 flex-wrap">
-            <input className="form-control" placeholder="Search by title" />
-            <select className="form-select">
+          <div className="d-flex gap-2 flex-wrap admin-filter-row">
+            <input
+              className="form-control"
+              placeholder="Search by title"
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+            />
+            <select
+              className="form-select"
+              value={statusFilter}
+              onChange={(event) => setStatusFilter(event.target.value)}
+            >
               <option>Status</option>
               <option>Now Showing</option>
               <option>Coming Soon</option>
@@ -134,14 +178,18 @@ export default function AdminMovies() {
               <option>Ending Soon</option>
               <option>Archived</option>
             </select>
-            <select className="form-select">
+            <select
+              className="form-select"
+              value={languageFilter}
+              onChange={(event) => setLanguageFilter(event.target.value)}
+            >
               <option>Language</option>
               <option>Nepali</option>
               <option>English</option>
               <option>Hindi</option>
             </select>
           </div>
-          <div className="text-muted small">Showing {movies.length} movies</div>
+          <div className="text-muted small">Showing {filteredMovies.length} movies</div>
         </div>
         <div className="table-responsive">
           <table className="table admin-table">
@@ -159,7 +207,7 @@ export default function AdminMovies() {
               </tr>
             </thead>
             <tbody>
-              {movies.map((movie) => (
+              {paginatedMovies.map((movie) => (
                 <tr key={movie.id}>
                   <td>
                     <div className="admin-poster" style={{ background: movie.posterTone || pickPosterTone() }}>
@@ -186,7 +234,11 @@ export default function AdminMovies() {
                   </td>
                   <td>
                     <div className="d-flex gap-2">
-                      <button type="button" className="btn btn-outline-light btn-sm">
+                      <button
+                        type="button"
+                        className="btn btn-outline-light btn-sm"
+                        onClick={() => openEdit(movie)}
+                      >
                         <Eye size={16} />
                       </button>
                       <button
@@ -210,7 +262,7 @@ export default function AdminMovies() {
                   </td>
                 </tr>
               ))}
-              {movies.length === 0 ? (
+              {filteredMovies.length === 0 ? (
                 <tr>
                   <td colSpan="9">No movies added yet.</td>
                 </tr>
@@ -219,11 +271,39 @@ export default function AdminMovies() {
           </table>
         </div>
         <nav className="d-flex justify-content-between align-items-center mt-3">
-          <span className="text-muted small">Page 1 of 1</span>
+          <span className="text-muted small">Page {currentPage} of {totalPages}</span>
           <ul className="pagination mb-0">
-            <li className="page-item disabled"><span className="page-link">Prev</span></li>
-            <li className="page-item active"><span className="page-link">1</span></li>
-            <li className="page-item disabled"><span className="page-link">Next</span></li>
+            <li className={`page-item ${currentPage === 1 ? "disabled" : ""}`}>
+              <button
+                type="button"
+                className="page-link"
+                onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                disabled={currentPage === 1}
+              >
+                Prev
+              </button>
+            </li>
+            {Array.from({ length: totalPages }, (_, idx) => idx + 1).map((page) => (
+              <li key={page} className={`page-item ${currentPage === page ? "active" : ""}`}>
+                <button
+                  type="button"
+                  className="page-link"
+                  onClick={() => setCurrentPage(page)}
+                >
+                  {page}
+                </button>
+              </li>
+            ))}
+            <li className={`page-item ${currentPage === totalPages ? "disabled" : ""}`}>
+              <button
+                type="button"
+                className="page-link"
+                onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                disabled={currentPage === totalPages}
+              >
+                Next
+              </button>
+            </li>
           </ul>
         </nav>
       </section>
@@ -283,7 +363,8 @@ function buildEmptyMovie() {
     releaseDate: "",
     status: "COMING_SOON",
     synopsis: "",
-    posterUrl: "",
+    posterFile: null,
+    posterPreview: "",
     trailerUrl: "",
     cast: [],
     crew: [],
@@ -306,11 +387,38 @@ function buildFormFromMovie(movie) {
     releaseDate: movie?.releaseDate || movie?.release_date || "",
     status: movie?.status || "COMING_SOON",
     synopsis: movie?.description || movie?.synopsis || "",
-    posterUrl: movie?.posterUrl || movie?.poster_url || "",
+    posterFile: null,
+    posterPreview: movie?.posterImage || movie?.poster_image || movie?.posterUrl || movie?.poster_url || "",
     trailerUrl: movie?.trailerUrl || movie?.trailer_url || "",
     cast,
     crew,
   };
+}
+
+function buildMovieFormData(form) {
+  const payload = new FormData();
+  payload.append("title", form.title.trim());
+  payload.append("duration", form.duration.trim());
+  payload.append("genre", form.genre.trim());
+  payload.append("language", form.language.trim());
+  payload.append("rating", form.rating.trim());
+  payload.append("release_date", form.releaseDate || "");
+  payload.append("status", form.status || "COMING_SOON");
+  payload.append("description", form.synopsis?.trim() || "");
+  payload.append("trailer_url", form.trailerUrl?.trim() || "");
+  let photoCounter = 0;
+  const appendPersonPhoto = (credit) => {
+    if (!credit?.photoFile) return undefined;
+    const key = `credit_person_photo_${photoCounter}`;
+    photoCounter += 1;
+    payload.append(key, credit.photoFile);
+    return key;
+  };
+  payload.append("credits", JSON.stringify(buildCreditsPayload(form, appendPersonPhoto)));
+  if (form.posterFile) {
+    payload.append("poster_image", form.posterFile);
+  }
+  return payload;
 }
 
 function toCreditForm(credit, index, roleType) {
@@ -328,17 +436,26 @@ function toCreditForm(credit, index, roleType) {
     credit?.department ||
     credit?.role ||
     "";
+  const photoUrl =
+    person?.photoUrl ||
+    person?.photo_url ||
+    person?.photo ||
+    credit?.photoUrl ||
+    credit?.photo_url ||
+    "";
   return {
     id: credit?.id,
     position: credit?.position ?? credit?.order ?? index + 1,
     personId: person?.id || credit?.personId || "",
     name,
     role,
+    photoUrl,
+    photoFile: null,
     roleType: credit?.roleType || credit?.creditType || roleType,
   };
 }
 
-function buildCreditsPayload(form) {
+function buildCreditsPayload(form, appendPersonPhoto) {
   const buildPayload = (items = [], roleType) =>
     items.map((credit, index) => {
       const position = Number(credit.position) || index + 1;
@@ -361,6 +478,8 @@ function buildCreditsPayload(form) {
         position,
         person: {
           full_name: name,
+          photo_url: String(credit.photoUrl || "").trim() || undefined,
+          photo_upload_key: appendPersonPhoto?.(credit),
         },
       };
     });

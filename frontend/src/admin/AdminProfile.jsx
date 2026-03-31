@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import {
   AtSign,
@@ -11,7 +12,14 @@ import {
   Phone,
 } from "lucide-react";
 import "../css/profile.css";
-import { clearAuthSession, getAuthHeaders } from "../lib/authSession";
+import {
+  clearAuthSession,
+  clearStoredRoleData,
+  getAuthHeaders,
+  getAuthSession,
+  getStoredRoleData,
+  storeRoleData,
+} from "../lib/authSession";
 
 const STORAGE_KEY = "admin";
 const UPDATE_EVENT = "mt:admin-updated";
@@ -28,14 +36,7 @@ const EMPTY_PROFILE = {
 };
 
 const getStoredAdmin = () => {
-  if (typeof window === "undefined") return null;
-  const raw = localStorage.getItem(STORAGE_KEY);
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
+  return getStoredRoleData("admin");
 };
 
 const getDefaultUsername = (user) => {
@@ -290,7 +291,9 @@ export default function AdminProfile() {
       };
 
       revokePreviewUrl(formData.avatar);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedAdmin));
+      const auth = getAuthSession("admin");
+      const scope = auth?.scope === "session" ? "session" : "local";
+      storeRoleData("admin", updatedAdmin, { scope });
       setAdmin(updatedAdmin);
       setFormData(deriveProfile(updatedAdmin));
       setAvatarFile(null);
@@ -310,8 +313,10 @@ export default function AdminProfile() {
   };
 
   const handleLogout = () => {
-    clearAuthSession();
-    localStorage.removeItem(STORAGE_KEY);
+    const auth = getAuthSession("admin");
+    const scope = auth?.scope === "session" ? "session" : "local";
+    clearAuthSession({ role: "admin", scope });
+    clearStoredRoleData("admin", { scope });
     setAdmin(null);
     if (typeof window !== "undefined") {
       window.dispatchEvent(new Event(UPDATE_EVENT));
@@ -323,6 +328,37 @@ export default function AdminProfile() {
 
   const displayName = getDisplayName(formData);
   const initials = getInitials(displayName);
+  const imageModalMarkup =
+    isImageOpen && formData.avatar && typeof document !== "undefined"
+      ? createPortal(
+          <div
+            className="wf2-profileImageModal"
+            role="dialog"
+            aria-modal="true"
+            onClick={handleAvatarClose}
+          >
+            <div
+              className="wf2-profileImageDialog"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <button
+                className="wf2-profileImageClose"
+                type="button"
+                onClick={handleAvatarClose}
+                aria-label="Close image"
+              >
+                ×
+              </button>
+              <img
+                className="wf2-profileImageFull"
+                src={formData.avatar}
+                alt="Profile full size"
+              />
+            </div>
+          </div>,
+          document.body
+        )
+      : null;
 
   return (
     <form
@@ -581,33 +617,7 @@ export default function AdminProfile() {
         </div>
       </section>
 
-      {isImageOpen && formData.avatar ? (
-        <div
-          className="wf2-profileImageModal"
-          role="dialog"
-          aria-modal="true"
-          onClick={handleAvatarClose}
-        >
-          <div
-            className="wf2-profileImageDialog"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <button
-              className="wf2-profileImageClose"
-              type="button"
-              onClick={handleAvatarClose}
-              aria-label="Close image"
-            >
-              x
-            </button>
-            <img
-              className="wf2-profileImageFull"
-              src={formData.avatar}
-              alt="Profile full size"
-            />
-          </div>
-        </div>
-      ) : null}
+      {imageModalMarkup}
     </form>
   );
 }
