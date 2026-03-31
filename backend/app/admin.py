@@ -18,6 +18,13 @@ from .models import (
     Person,
     MovieCredit,
     Review,
+    Coupon,
+    Notification,
+    Combo,
+    ComboItem,
+    Order,
+    OrderItem,
+    TicketValidationScan,
 )
 
 SMALL_IMAGE_HEIGHT = 32
@@ -224,3 +231,79 @@ class CollaboratorAdmin(admin.ModelAdmin):
 class CollabDetailsAdmin(admin.ModelAdmin):
     list_display = ("id", "partner_name", "slide")
     search_fields = ("partner_name",)
+
+
+@admin.register(Coupon)
+class CouponAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "code",
+        "discount_type",
+        "discount_value",
+        "min_booking_amount",
+        "expiry_date",
+        "usage_limit",
+        "usage_count",
+        "is_active",
+    )
+    search_fields = ("code",)
+    list_filter = ("discount_type", "is_active")
+    ordering = ("-created_at",)
+
+
+@admin.register(Notification)
+class NotificationAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "recipient_role",
+        "recipient_id",
+        "event_type",
+        "channel",
+        "is_read",
+        "created_at",
+    )
+    search_fields = ("title", "message", "recipient_email")
+    list_filter = ("recipient_role", "event_type", "channel", "is_read")
+    ordering = ("-created_at",)
+
+
+class ComboItemInline(admin.TabularInline):
+    model = ComboItem
+    extra = 1
+
+
+@admin.register(Combo)
+class ComboAdmin(admin.ModelAdmin):
+    list_display = ("id", "name", "vendor", "hall", "combo_price", "is_available", "created_at")
+    search_fields = ("name", "vendor__name")
+    list_filter = ("is_available", "vendor")
+    inlines = [ComboItemInline]
+
+
+class OrderItemInline(admin.TabularInline):
+    model = OrderItem
+    extra = 0
+
+
+@admin.register(Order)
+class OrderAdmin(admin.ModelAdmin):
+    list_display = ("id", "booking", "user", "vendor", "status", "total_amount", "created_at")
+    search_fields = ("id", "user__email", "vendor__name")
+    list_filter = ("status", "vendor")
+    inlines = [OrderItemInline]
+
+
+@admin.register(TicketValidationScan)
+class TicketValidationScanAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "reference",
+        "status",
+        "vendor",
+        "booking",
+        "fraud_score",
+        "scanned_at",
+    )
+    search_fields = ("reference", "reason")
+    list_filter = ("status", "vendor")
+    ordering = ("-scanned_at",)
