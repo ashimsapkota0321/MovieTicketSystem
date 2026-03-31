@@ -45,6 +45,8 @@ export default function Schedules() {
       const key = `${movieKey}__${vendorName.toLowerCase()}`;
 
       const group = grouped.get(key) || {
+        movieId: movie?.id || movie?._id || show.movieId || show.movie_id || null,
+        movieSlug: movie?.slug || show.movieSlug || show.movie_slug || null,
         title: movieTitle,
         language: movie?.language || movie?.lang || "Nepali",
         genre: movie?.genre || movie?.category || "",
@@ -53,6 +55,11 @@ export default function Schedules() {
         director: movie?.director || "",
         desc: movie?.description || movie?.overview || movie?.synopsis || "",
         poster:
+          show?.posterImage ||
+          show?.poster_image ||
+          show?.posterUrl ||
+          show?.poster_url ||
+          show?.poster ||
           movie?.posterImage ||
           movie?.poster_image ||
           movie?.poster ||
@@ -99,6 +106,22 @@ export default function Schedules() {
     return scheduleItems.filter((item) => item.cinemaSlug === vendorSlug);
   }, [scheduleItems, vendorSlug]);
 
+  const openInfo = (item) => {
+    if (!item) return;
+    const movieId = String(item.movieId || "").trim();
+    const movieSlug = String(item.movieSlug || "").trim();
+
+    if (movieId) {
+      navigate(`/movie/${movieId}`, { state: { movie: item } });
+      return;
+    }
+    if (movieSlug) {
+      navigate(`/movie/${encodeURIComponent(movieSlug)}`, { state: { movie: item } });
+      return;
+    }
+    navigate("/movies");
+  };
+
   return (
     <div className="schedule-page">
       <div className="schedule-wrap">
@@ -130,7 +153,13 @@ export default function Schedules() {
                 <div className="schedule-posterWrap">
                   <div className="schedule-ribbon">Advance</div>
                   <div className="schedule-poster">
-                    <img src={item.poster} alt={item.title} />
+                    {resolvePosterUrl(item) ? (
+                      <img src={resolvePosterUrl(item)} alt={item.title} />
+                    ) : (
+                      <div className="schedule-posterFallback" aria-label={`${item.title} poster unavailable`}>
+                        <span>{shortTitle(item.title)}</span>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -153,7 +182,13 @@ export default function Schedules() {
                   </button>
                   <span>{item.language}</span>
                 </div>
-                <button className="schedule-infoBtn" type="button">Info</button>
+                <button
+                  className="schedule-infoBtn"
+                  type="button"
+                  onClick={() => openInfo(item)}
+                >
+                  Info
+                </button>
               </div>
 
               <div className="schedule-right">
@@ -216,7 +251,7 @@ export default function Schedules() {
               onClick={closeTrailer}
               aria-label="Close trailer"
             >
-              x
+              ×
             </button>
             <div className="schedule-modalFrame">
               <iframe
@@ -344,4 +379,20 @@ function toMinutes(value) {
   }
 
   return null;
+}
+
+function resolvePosterUrl(item) {
+  return String(item?.poster || "").trim();
+}
+
+function shortTitle(value) {
+  const text = String(value || "").trim();
+  if (!text) return "MOVIE";
+  return text
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join("")
+    .toUpperCase();
 }

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import {
   AtSign,
@@ -11,7 +12,15 @@ import {
   Phone,
 } from "lucide-react";
 import "../css/profile.css";
-import { clearAuthSession, getAuthHeaders } from "../lib/authSession";
+import {
+  clearAuthSession,
+  clearStoredRoleData,
+  getAuthHeaders,
+  getAuthSession,
+  getStoredRoleData,
+  storeRoleData,
+} from "../lib/authSession";
+import { fetchCustomerBookingHistory } from "../lib/catalogApi";
 
 const EMPTY_PROFILE = {
   first_name: "",
@@ -25,14 +34,7 @@ const EMPTY_PROFILE = {
 };
 
 const getStoredUser = () => {
-  if (typeof window === "undefined") return null;
-  const raw = localStorage.getItem("user");
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
+  return getStoredRoleData("customer");
 };
 
 const getDefaultUsername = (user) => {
@@ -133,6 +135,9 @@ export default function Profile() {
   const [avatarFile, setAvatarFile] = useState(null);
   const [removeAvatar, setRemoveAvatar] = useState(false);
   const [isImageOpen, setImageOpen] = useState(false);
+  const [bookingHistory, setBookingHistory] = useState([]);
+  const [bookingHistoryLoading, setBookingHistoryLoading] = useState(false);
+  const [bookingHistoryError, setBookingHistoryError] = useState("");
 
   useEffect(() => {
     if (!user) {
@@ -144,6 +149,35 @@ export default function Profile() {
     if (user) {
       setFormData(deriveProfile(user));
     }
+  }, [user]);
+
+  useEffect(() => {
+    let active = true;
+
+    const loadBookingHistory = async () => {
+      if (!user) {
+        setBookingHistory([]);
+        return;
+      }
+      setBookingHistoryLoading(true);
+      setBookingHistoryError("");
+      try {
+        const history = await fetchCustomerBookingHistory();
+        if (!active) return;
+        setBookingHistory(Array.isArray(history) ? history : []);
+      } catch (err) {
+        if (!active) return;
+        setBookingHistory([]);
+        setBookingHistoryError(err.message || "Unable to load booking history.");
+      } finally {
+        if (active) setBookingHistoryLoading(false);
+      }
+    };
+
+    loadBookingHistory();
+    return () => {
+      active = false;
+    };
   }, [user]);
 
   useEffect(() => {
@@ -298,7 +332,9 @@ export default function Profile() {
       };
 
       revokePreviewUrl(formData.avatar);
-      localStorage.setItem("user", JSON.stringify(updatedUser));
+      const auth = getAuthSession("customer");
+      const scope = auth?.scope === "session" ? "session" : "local";
+      storeRoleData("customer", updatedUser, { scope });
       setUser(updatedUser);
       setFormData(deriveProfile(updatedUser));
       setAvatarFile(null);
@@ -318,8 +354,10 @@ export default function Profile() {
   };
 
   const handleLogout = () => {
-    clearAuthSession();
-    localStorage.removeItem("user");
+    const auth = getAuthSession("customer");
+    const scope = auth?.scope === "session" ? "session" : "local";
+    clearAuthSession({ role: "customer", scope });
+    clearStoredRoleData("customer", { scope });
     setUser(null);
     if (typeof window !== "undefined") {
       window.dispatchEvent(new Event("mt:user-updated"));
@@ -331,6 +369,37 @@ export default function Profile() {
 
   const displayName = getDisplayName(formData);
   const initials = getInitials(displayName);
+  const imageModalMarkup =
+    isImageOpen && formData.avatar && typeof document !== "undefined"
+      ? createPortal(
+          <div
+            className="wf2-profileImageModal"
+            role="dialog"
+            aria-modal="true"
+            onClick={handleAvatarClose}
+          >
+            <div
+              className="wf2-profileImageDialog"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <button
+                className="wf2-profileImageClose"
+                type="button"
+                onClick={handleAvatarClose}
+                aria-label="Close image"
+              >
+                ×
+              </button>
+              <img
+                className="wf2-profileImageFull"
+                src={formData.avatar}
+                alt="Profile full size"
+              />
+            </div>
+          </div>,
+          document.body
+        )
+      : null;
 
   return (
     <form
@@ -614,34 +683,78 @@ export default function Profile() {
         </div>
       </section>
 
-      {isImageOpen && formData.avatar ? (
-        <div
-          className="wf2-profileImageModal"
-          role="dialog"
-          aria-modal="true"
-          onClick={handleAvatarClose}
-        >
-          <div
-            className="wf2-profileImageDialog"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <button
-              className="wf2-profileImageClose"
-              type="button"
-              onClick={handleAvatarClose}
-              aria-label="Close image"
-            >
-              x
-            </button>
-            <img
-              className="wf2-profileImageFull"
-              src={formData.avatar}
-              alt="Profile full size"
-            />
-          </div>
+      <section className="wf2-profileHistory">
+        <div className="wf2-profileHistoryHeader">
+          <h2>Booking history</h2>
+          <p>All your bookings with payment status and amount.</p>
         </div>
-      ) : null}
+
+        {bookingHistoryError ? (
+          <div className="wf2-profileHistoryError">{bookingHistoryError}</div>
+        ) : null}
+
+        <div className="wf2-profileHistoryTableWrap">
+          <table className="wf2-profileHistoryTable">
+            <thead>
+              <tr>
+                <th>Movie</th>
+                <th>Show time</th>
+                <th>Seats</th>
+                <th>Payment</th>
+                <th>Status</th>
+                <th>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {bookingHistory.map((booking) => (
+                <tr key={booking.id}>
+                  <td>{booking.movie || "-"}</td>
+                  <td>{formatHistoryDateTime(booking.showTime)}</td>
+                  <td>{booking.seats || "-"}</td>
+                  <td>{formatPaymentCell(booking)}</td>
+                  <td>{booking.status || "Pending"}</td>
+                  <td>{formatCurrency(booking.total)}</td>
+                </tr>
+              ))}
+              {!bookingHistoryLoading && bookingHistory.length === 0 ? (
+                <tr>
+                  <td colSpan="6">No bookings yet.</td>
+                </tr>
+              ) : null}
+              {bookingHistoryLoading ? (
+                <tr>
+                  <td colSpan="6">Loading booking history...</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {imageModalMarkup}
 
     </form>
   );
+}
+
+function formatHistoryDateTime(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString();
+}
+
+function formatCurrency(value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "-";
+  return `NPR ${amount.toLocaleString()}`;
+}
+
+function formatPaymentCell(booking) {
+  const method = String(booking?.paymentMethod || "").trim();
+  const status = String(booking?.paymentStatus || "").trim();
+  if (method && status) return `${method} (${status})`;
+  if (method) return method;
+  if (status) return status;
+  return "Not recorded";
 }

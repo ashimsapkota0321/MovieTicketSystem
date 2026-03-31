@@ -5,7 +5,7 @@ import { Clock3, Film } from "lucide-react";
 import { useAppContext } from "../context/Appcontext";
 import HeroSlider from "../components/HeroSlider";
 import NowShowingCard from "../components/NowShowingCard";
-import { getComingSoon, getNowShowing } from "../lib/showUtils";
+import { getComingSoon, getNowShowing, resolveMoviesByShowListing } from "../lib/showUtils";
 import gharjwai from "../images/gharjwai.jpg";
 import balidan from "../images/balidan.jpg";
 import degreemaila from "../images/degreemaila.jpg";
@@ -15,14 +15,44 @@ export default function Movies() {
   const navigate = useNavigate();
   const location = useLocation();
   const ctx = safeUseAppContext();
-  const movies = ctx?.movies ?? ctx?.shows ?? fallbackShows;
+  const movies = ctx?.movies ?? [];
+  const showtimes = ctx?.showtimes ?? [];
   const initialTab =
     location?.state?.filter === "soon" || location?.hash === "#coming-soon" ? "soon" : "now";
   const [activeTab, setActiveTab] = useState(initialTab);
   const hideTabs = Boolean(location?.state?.hideTabs);
 
-  const nowShowing = useMemo(() => getNowShowing(movies), [movies]);
-  const comingSoon = useMemo(() => getComingSoon(movies), [movies]);
+  // Build set of movie IDs that have active shows
+  const moviesWithActiveShows = useMemo(() => {
+    if (!Array.isArray(showtimes) || showtimes.length === 0) return new Set();
+    const movieIds = new Set();
+    showtimes.forEach((show) => {
+      const movieId = String(show.movieId || show.movie_id || "").trim();
+      if (movieId) movieIds.add(movieId);
+    });
+    return movieIds;
+  }, [showtimes]);
+
+  // Filter movies to only those with active shows
+  const moviesWithShows = useMemo(() => {
+    return movies.filter((movie) => {
+      const id = String(movie?.id || "").trim();
+      return moviesWithActiveShows.has(id);
+    });
+  }, [movies, moviesWithActiveShows]);
+
+  const showBuckets = useMemo(
+    () => resolveMoviesByShowListing(moviesWithShows, showtimes),
+    [moviesWithShows, showtimes]
+  );
+  const nowShowing = useMemo(() => {
+    if (showBuckets.nowShowing.length) return showBuckets.nowShowing;
+    return getNowShowing(moviesWithShows);
+  }, [showBuckets, moviesWithShows]);
+  const comingSoon = useMemo(() => {
+    if (showBuckets.comingSoon.length) return showBuckets.comingSoon;
+    return getComingSoon(moviesWithShows);
+  }, [showBuckets, moviesWithShows]);
   useEffect(() => {
     if (location?.state?.filter) {
       setActiveTab(location.state.filter === "soon" ? "soon" : "now");
@@ -86,7 +116,8 @@ export default function Movies() {
                   movie={movie}
                   onBuy={() =>
                     navigate(
-                      `/movie/${movie?._id || movie?.id || encodeURIComponent(movie?.title || movie?.name || "")}`
+                      `/movie/${movie?._id || movie?.id || encodeURIComponent(movie?.title || movie?.name || "")}`,
+                      { state: { movie } }
                     )
                   }
                 />
@@ -108,7 +139,7 @@ export default function Movies() {
                     onBuy={() =>
                       navigate(
                         `/movie/${movie?._id || movie?.id || encodeURIComponent(movie?.title || movie?.name || "")}`,
-                        { state: { variant: "soon" } }
+                        { state: { movie, variant: "soon" } }
                       )
                     }
                   />
@@ -121,7 +152,7 @@ export default function Movies() {
                     onBuy={() =>
                       navigate(
                         `/movie/${movie?._id || movie?.id || encodeURIComponent(movie?.title || movie?.name || "")}`,
-                        { state: { variant: "soon" } }
+                        { state: { movie, variant: "soon" } }
                       )
                     }
                   />

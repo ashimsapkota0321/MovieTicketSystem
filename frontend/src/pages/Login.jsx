@@ -1,19 +1,29 @@
 import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import "../css/Login.css";
 import HeroImage1 from "../images/gharjwai.jpg";
 import HeroImage2 from "../images/balidan.jpg";
 import HeroImage3 from "../images/degreemaila.jpg";
 import HeroImage4 from "../images/avengers.jpg";
 import Logo from "../images/logo.png";
-import { clearAuthSession, clearStoredRoleData, storeAuthSession } from "../lib/authSession";
+import {
+  getStoredRoleData,
+  storeAuthSession,
+  storeRoleData,
+} from "../lib/authSession";
+
+const API_BASE =
+  import.meta.env.VITE_BASE_URL?.replace(/\/$/, "") || "http://localhost:8000";
 
 const LoginPage = () => {
+  const navigate = useNavigate();
   const [emailOrPhone, setEmailOrPhone] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
 
   // hero images array
   const heroImages = [HeroImage1, HeroImage2, HeroImage3,HeroImage4];
@@ -53,14 +63,14 @@ const LoginPage = () => {
         return;
       }
     } else if (!validatePhone(emailOrPhone) && !validateUsername(emailOrPhone)) {
-      setError("Enter a valid email, phone number, or vendor ID");
+      setError("Enter a valid email, phone number, or username");
       return;
     }
 
     setLoading(true);
 
     try {
-      const response = await fetch("http://localhost:8000/api/login/", {
+      const response = await fetch(`${API_BASE}/api/auth/login/`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -92,42 +102,54 @@ const LoginPage = () => {
 
       const isAdminLogin = data && (data.role === "admin" || data.admin);
       if (isAdminLogin) {
-        clearStoredRoleData();
-        clearAuthSession();
-        storeAuthSession("admin", data?.access_token || "");
-        if (data.admin) {
-          localStorage.setItem("admin", JSON.stringify(data.admin));
+        const scope = rememberMe ? "local" : "session";
+        storeAuthSession("admin", data?.access_token || "", { scope });
+        if (data.admin) storeRoleData("admin", data.admin, { scope });
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new Event("mt:admin-updated"));
         }
         setTimeout(() => {
-          window.location.href = "/admin";
+          navigate("/admin", { replace: true });
         }, 1500);
         return;
       }
 
       const isVendorLogin = data && (data.role === "vendor" || data.vendor);
       if (isVendorLogin) {
-        clearStoredRoleData();
-        clearAuthSession();
-        storeAuthSession("vendor", data?.access_token || "");
-        if (data.vendor) {
-          sessionStorage.setItem("vendor", JSON.stringify(data.vendor));
-          if (typeof window !== "undefined") {
-            window.dispatchEvent(new Event("mt:vendor-updated"));
-          }
+        const scope = rememberMe ? "local" : "session";
+        const vendorPayload = {
+          ...(data.vendor || {}),
+          vendor_staff: data?.vendor_staff || null,
+          staff: data?.vendor_staff || null,
+          staff_role: String(data?.vendor_staff?.role || "").toUpperCase() || null,
+          is_owner: !data?.vendor_staff,
+        };
+        storeAuthSession("vendor", data?.access_token || "", { scope });
+        if (data.vendor) storeRoleData("vendor", vendorPayload, { scope });
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new Event("mt:vendor-updated"));
         }
         setTimeout(() => {
-          window.location.href = "/vendor";
+          navigate("/vendor", { replace: true });
         }, 1500);
         return;
       }
 
       if (data && data.user) {
-        clearStoredRoleData();
-        clearAuthSession();
-        storeAuthSession("customer", data?.access_token || "");
-        localStorage.setItem("user", JSON.stringify(data.user));
+        const existingGlobalUser = getStoredRoleData("customer", { scope: "local" });
+        const existingKey = getAccountKey(existingGlobalUser);
+        const nextKey = getAccountKey(data.user);
+        const scopeByAccountIsolation =
+          existingKey && nextKey && existingKey !== nextKey ? "session" : "local";
+        const scope = rememberMe ? scopeByAccountIsolation : "session";
+
+        storeAuthSession("customer", data?.access_token || "", { scope });
+        storeRoleData("customer", data.user, { scope });
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new Event("mt:user-updated"));
+        }
         setTimeout(() => {
-          window.location.href = "/";
+          navigate("/", { replace: true });
         }, 1500);
       }
     } catch (err) {
@@ -207,6 +229,8 @@ const LoginPage = () => {
               <label className="mt-remember">
                 <input
                   type="checkbox"
+                  checked={rememberMe}
+                  onChange={(event) => setRememberMe(event.target.checked)}
                   disabled={loading}
                 />
                 <span>Remember me</span>
@@ -216,7 +240,7 @@ const LoginPage = () => {
                 type="button"
                 className="mt-link-btn"
                 disabled={loading}
-                onClick={() => (window.location.href = "/forgot-password")}
+                onClick={() => navigate("/forgot-password")}
               >
                 Forget Password?
               </button>
@@ -241,7 +265,7 @@ const LoginPage = () => {
               <button
                 type="button"
                 className="mt-cta"
-                onClick={() => (window.location.href = "/register")}
+                onClick={() => navigate("/register")}
                 disabled={loading}
               >
                 Create an account
@@ -284,3 +308,16 @@ const LoginPage = () => {
 };
 
 export default LoginPage;
+
+function getAccountKey(user) {
+  if (!user) return "";
+  const key =
+    user.id ||
+    user._id ||
+    user.user_id ||
+    user.email ||
+    user.username ||
+    user.phone_number ||
+    user.phone;
+  return String(key || "").trim().toLowerCase();
+}

@@ -1,8 +1,13 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import "../css/orderConfirm.css";
 import gharjwai from "../images/gharjwai.jpg";
+import {
+  applyBookingCoupon,
+  createBookingResumeNotification,
+  createTestBookingSuccess,
+} from "../lib/catalogApi";
 
 const DEFAULT_ORDER = {
   movie: {
@@ -32,16 +37,20 @@ const DEFAULT_ORDER = {
   ],
 };
 
-const API_BASE_URL =
-  `${import.meta.env.VITE_BASE_URL?.replace(/\/$/, "") || "http://localhost:8000"}/api`;
-
 export default function OrderConfirm() {
   const navigate = useNavigate();
   const location = useLocation();
   const state = location?.state || {};
 
   const order = useMemo(() => {
-    const items = Array.isArray(state.items) ? state.items : DEFAULT_ORDER.items;
+    const hasBookingPayload = Boolean(
+      state.movie || state.ticketTotal || state.selectedSeats || state.bookingContext
+    );
+    const items = Array.isArray(state.items)
+      ? state.items
+      : hasBookingPayload
+        ? []
+        : DEFAULT_ORDER.items;
     const ticketTotal =
       typeof state.ticketTotal === "number" ? state.ticketTotal : DEFAULT_ORDER.ticketTotal;
     const movie = state.movie || DEFAULT_ORDER.movie;
@@ -64,104 +73,147 @@ export default function OrderConfirm() {
     };
   }, [state]);
 
+  const [couponCode, setCouponCode] = useState(
+    String(state?.coupon?.code || state?.couponCode || "").toUpperCase()
+  );
+  const [couponResult, setCouponResult] = useState(
+    state?.coupon && state?.discountAmount != null
+      ? {
+          coupon: state.coupon,
+          discount_amount: Number(state.discountAmount || 0),
+          final_total: Number(state.ticketTotal || 0),
+        }
+      : null
+  );
+  const [couponError, setCouponError] = useState("");
+  const [applyingCoupon, setApplyingCoupon] = useState(false);
+
   const foodTotal = order.items.reduce((sum, item) => sum + item.price * item.qty, 0);
   const foodCount = order.items.reduce((sum, item) => sum + (item.qty || 0), 0);
-  const orderTotal = order.ticketTotal + foodTotal;
+  const couponDiscount = Number(couponResult?.discount_amount || 0);
+  const ticketPayable = Math.max(Number(order.ticketTotal || 0) - couponDiscount, 0);
+  const orderTotal = ticketPayable + foodTotal;
   const formatPrice = (value) => `Npr ${value}`;
   const [isPaying, setIsPaying] = useState(false);
-  const [payError, setPayError] = useState("");
+  const [isCreatingTestBooking, setIsCreatingTestBooking] = useState(false);
+  const [testBookingError, setTestBookingError] = useState("");
+  const skipResumeNoticeOnUnmountRef = useRef(false);
 
-  const handlePayNow = async () => {
-    if (isPaying) return;
-    setIsPaying(true);
-    setPayError("");
-    try {
-      const bookingPayload = {
-        showId: order.bookingContext?.showId,
-        movieId: order.bookingContext?.movieId || order.movie.movieId,
-        cinemaId: order.bookingContext?.cinemaId || order.movie.cinemaId,
-        hall: order.bookingContext?.hall || order.movie.hall,
-        date: order.bookingContext?.date,
-        time: order.bookingContext?.time,
-        selectedSeats: order.selectedSeats,
-        userId:
-          order.bookingContext?.userId || getStoredUser()?.id || null,
-      };
-      const hasCompleteBookingContext = Boolean(
-        bookingPayload.movieId &&
-          bookingPayload.cinemaId &&
-          bookingPayload.date &&
-          bookingPayload.time &&
-          Array.isArray(bookingPayload.selectedSeats) &&
-          bookingPayload.selectedSeats.length
-      );
+  useEffect(() => {
+    return () => {
+      if (skipResumeNoticeOnUnmountRef.current) return;
+      const selectedSeats = Array.isArray(order.selectedSeats) ? order.selectedSeats : [];
+      if (!selectedSeats.length) return;
 
+      const context = order?.bookingContext || {};
       const payload = {
-        order: {
-          movie: {
-            title: order.movie.title,
-            seat: order.movie.seat,
-            venue: order.movie.venue,
-            cinemaName: order.movie.cinemaName,
-            cinemaLocation: order.movie.cinemaLocation,
-            language: order.movie.language,
-            runtime: order.movie.runtime,
-            hall: order.movie.hall || order.bookingContext?.hall,
-            theater: order.movie.theater || order.bookingContext?.hall,
-            showDate: order.movie.showDate || order.bookingContext?.date,
-            showTime: order.movie.showTime || order.bookingContext?.time,
-            movieId: order.movie.movieId || order.bookingContext?.movieId,
-            cinemaId: order.movie.cinemaId || order.bookingContext?.cinemaId,
-          },
-          ticketTotal: order.ticketTotal,
-          foodTotal,
-          total: orderTotal,
-          ...(hasCompleteBookingContext
-            ? {
-                selectedSeats: order.selectedSeats,
-                booking: bookingPayload,
-              }
-            : {}),
-          items: order.items.map((item) => ({
-            name: item.name,
-            qty: item.qty,
-            price: item.price,
-          })),
+        movie_id: context.movieId || context.movie_id || order?.movie?.movieId,
+        cinema_id: context.cinemaId || context.cinema_id || order?.movie?.cinemaId,
+        show_id: context.showId || context.show_id,
+        date: context.date || context.showDate || order?.movie?.showDate,
+        time: context.time || context.showTime || order?.movie?.showTime,
+        hall: context.hall || order?.movie?.hall,
+        selected_seats: selectedSeats,
+      };
+      createBookingResumeNotification(payload).catch(() => {});
+    };
+  }, [order]);
+
+  const buildCheckoutOrder = () => ({
+    movie: order.movie,
+    ticketTotal: ticketPayable,
+    originalTicketTotal: Number(order.ticketTotal || 0),
+    couponCode: couponResult?.coupon?.code || null,
+    coupon: couponResult?.coupon || null,
+    discountAmount: couponDiscount,
+    items: order.items,
+    foodTotal,
+    total: orderTotal,
+    selectedSeats: order.selectedSeats,
+    bookingContext: order.bookingContext,
+  });
+
+  const handleApplyCoupon = async () => {
+    const normalizedCode = String(couponCode || "").trim().toUpperCase();
+    if (!normalizedCode) {
+      setCouponError("Enter a coupon code.");
+      return;
+    }
+
+    setApplyingCoupon(true);
+    setCouponError("");
+    try {
+      const payload = {
+        coupon_code: normalizedCode,
+        ticket_total: Number(order.ticketTotal || 0),
+        booking: {
+          movie_id: order?.bookingContext?.movieId,
+          cinema_id: order?.bookingContext?.cinemaId,
+          show_id: order?.bookingContext?.showId,
+          date: order?.bookingContext?.date,
+          time: order?.bookingContext?.time,
+          hall: order?.bookingContext?.hall,
+          selected_seats: order?.selectedSeats || order?.bookingContext?.selectedSeats || [],
         },
       };
+      const result = await applyBookingCoupon(payload);
+      setCouponResult(result || null);
+      setCouponCode(String(result?.coupon?.code || normalizedCode));
+    } catch (error) {
+      setCouponResult(null);
+      setCouponError(error.message || "Unable to apply coupon.");
+    } finally {
+      setApplyingCoupon(false);
+    }
+  };
 
-      const response = await fetch(`${API_BASE_URL}/payment/qr/`, {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
+  const handlePayWithEsewa = () => {
+    if (isPaying || isCreatingTestBooking) return;
+    setIsPaying(true);
+    skipResumeNoticeOnUnmountRef.current = true;
+    const checkoutOrder = buildCheckoutOrder();
+    navigate("/esewa/checkout", {
+      state: {
+        amount: orderTotal,
+        order: checkoutOrder,
+      },
+    });
+  };
 
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data?.message || "Failed to generate QR code.");
-      }
+  const handleTestBookingSuccess = async () => {
+    if (isPaying || isCreatingTestBooking) return;
+    const selectedSeats = Array.isArray(order.selectedSeats) ? order.selectedSeats : [];
+    const context = order?.bookingContext || {};
+    const hasShowContext = Boolean(
+      context?.showId || (context?.movieId && context?.cinemaId && context?.date && context?.time)
+    );
+    if (!selectedSeats.length || !hasShowContext) {
+      setTestBookingError("Select a valid show and seats before test booking.");
+      return;
+    }
 
-      setIsPaying(false);
+    setTestBookingError("");
+    setIsCreatingTestBooking(true);
+    try {
+      skipResumeNoticeOnUnmountRef.current = true;
+      const checkoutOrder = buildCheckoutOrder();
+      const result = await createTestBookingSuccess({ order: checkoutOrder });
       navigate("/thank-you", {
         state: {
-          order: {
-            movie: order.movie,
-            ticketTotal: order.ticketTotal,
-            items: order.items,
-            foodTotal,
-            total: orderTotal,
-            selectedSeats: order.selectedSeats,
-            bookingContext: order.bookingContext,
+          order: checkoutOrder,
+          ticket: {
+            reference: result?.reference || "",
+            qr_code: result?.qr_code || "",
+            ticket_image: result?.ticket_image || "",
+            download_url: result?.download_url || "",
+            details_url: result?.details_url || "",
           },
-          ticket: data,
         },
       });
-    } catch (err) {
-      setIsPaying(false);
-      setPayError(err?.message || "Failed to generate QR code.");
+    } catch (error) {
+      setTestBookingError(error?.message || "Unable to create test booking.");
+    } finally {
+      setIsCreatingTestBooking(false);
     }
   };
 
@@ -240,6 +292,35 @@ export default function OrderConfirm() {
               <span>Ticket Total</span>
               <span>{formatPrice(order.ticketTotal)}</span>
             </div>
+            <div className="wf2-orderSummaryRow" style={{ gap: 10 }}>
+              <span style={{ flex: 1 }}>Coupon</span>
+              <input
+                type="text"
+                className="form-control"
+                value={couponCode}
+                onChange={(event) => {
+                  setCouponCode(event.target.value.toUpperCase());
+                  setCouponError("");
+                }}
+                placeholder="ENTER CODE"
+                style={{ maxWidth: 180 }}
+              />
+              <button
+                type="button"
+                className="btn btn-outline-light btn-sm"
+                onClick={handleApplyCoupon}
+                disabled={applyingCoupon}
+              >
+                {applyingCoupon ? "Applying..." : "Apply"}
+              </button>
+            </div>
+            {couponError ? <div className="text-danger small mb-2">{couponError}</div> : null}
+            {couponResult?.coupon?.code ? (
+              <div className="wf2-orderSummaryRow text-success">
+                <span>Discount ({couponResult.coupon.code})</span>
+                <span>-{formatPrice(couponDiscount)}</span>
+              </div>
+            ) : null}
             <div className="wf2-orderSummaryRow">
               <span>Food Subtotal</span>
               <span>{formatPrice(foodTotal)}</span>
@@ -255,12 +336,20 @@ export default function OrderConfirm() {
             <button
               className="wf2-orderPayBtn"
               type="button"
-              onClick={handlePayNow}
-              disabled={isPaying}
+              onClick={handlePayWithEsewa}
+              disabled={isPaying || isCreatingTestBooking}
             >
-              {isPaying ? "Processing..." : "Pay Now"}
+              {isPaying ? "Redirecting..." : "Pay with eSewa"}
             </button>
-            {payError ? <div className="wf2-orderQrError">{payError}</div> : null}
+            <button
+              className="wf2-orderGhostBtn"
+              type="button"
+              onClick={handleTestBookingSuccess}
+              disabled={isPaying || isCreatingTestBooking}
+            >
+              {isCreatingTestBooking ? "Creating booking..." : "Test Booking Success"}
+            </button>
+            {testBookingError ? <div className="wf2-orderQrError">{testBookingError}</div> : null}
           </section>
         </aside>
       </div>
@@ -274,15 +363,4 @@ function extractSeatsFromLabel(value) {
   const matches = text.match(/[A-Za-z]+\s*\d+/g);
   if (!matches) return [];
   return matches.map((item) => item.replace(/\s+/g, "").toUpperCase());
-}
-
-function getStoredUser() {
-  if (typeof window === "undefined") return null;
-  const raw = localStorage.getItem("user");
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
 }

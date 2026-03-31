@@ -1,28 +1,31 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ChevronLeft, Play } from "lucide-react";
 import "../css/seatSelection.css";
 
 import { useAppContext } from "../context/Appcontext";
+import {
+  createBookingResumeNotification,
+  fetchFoodItemsByVendor,
+  releaseBookingSeats,
+  reserveBookingSeats,
+} from "../lib/catalogApi";
 import gharjwai from "../images/gharjwai.jpg";
 import avengers from "../images/avengers.jpg";
 import degreemaila from "../images/degreemaila.jpg";
 import balidan from "../images/balidan.jpg";
 
 const defaultSeatGroups = [
-  { key: "normal", label: "Normal", rows: ["A", "B", "C"] },
-  { key: "executive", label: "Executive", rows: ["D", "E", "F"] },
-  { key: "premium", label: "Premium", rows: ["G", "H"] },
-  { key: "vip", label: "VIP", rows: ["I", "J"] },
+  { key: "normal", label: "Normal", rows: ["A", "B", "C", "D"] },
+  { key: "executive", label: "Executive", rows: ["E", "F", "G", "H"] },
+  { key: "premium", label: "Premium", rows: ["I", "J"] },
+  { key: "vip", label: "VIP", rows: ["K", "L"] },
 ];
 const defaultSeatCols = Array.from({ length: 15 }, (_, i) => i + 1);
-const aisleBreaks = new Set([5, 10]);
 const MAX_SELECTION = 5;
 const API_BASE =
   import.meta.env.VITE_BASE_URL?.replace(/\/$/, "") || "http://localhost:8000";
-
-const reservedSeats = new Set();
 
 export default function SeatSelection() {
   const navigate = useNavigate();
@@ -33,14 +36,18 @@ export default function SeatSelection() {
   const selection = location?.state || {};
   const selectedMovieState = selection.movie || null;
   const selectedVendorState = selection.vendor || null;
+  const selectedShowState = selection.show || null;
   const selectedDateState =
-    selection.date || selection.showDate || selection.show_date || "";
+    selection.date || selection.showDate || selection.show_date || selectedShowState?.date || selectedShowState?.show_date || "";
   const selectedTimeState =
-    selection.time || selection.start || selection.start_time || "";
+    selection.time || selection.start || selection.start_time || selectedShowState?.start || selectedShowState?.start_time || "";
   const movie = useMemo(() => shows?.[0] ?? fallbackShows[0], [shows]);
   const displayMovie = useMemo(
     () => selectedMovieState || movie,
     [selectedMovieState, movie]
+  );
+  const [selectedDate, setSelectedDate] = useState(() =>
+    normalizeDateValue(selectedDateState)
   );
   const [selectedTime, setSelectedTime] = useState(() =>
     formatTime(selectedTimeState)
@@ -49,14 +56,51 @@ export default function SeatSelection() {
     () =>
       buildSeatShowtimes(
         showtimes,
-        selectedMovieState,
+        selectedMovieState || displayMovie,
         selectedVendorState,
-        selectedDateState,
-        selectedTimeState
+        selectedDate,
+        null
       ),
-    [showtimes, selectedMovieState, selectedVendorState, selectedDateState, selectedTimeState]
+    [showtimes, selectedMovieState, displayMovie, selectedVendorState, selectedDate]
   );
-  const [selectedSeats, setSelectedSeats] = useState([]);
+
+  useEffect(() => {
+    const nextDate = normalizeDateValue(showtimeInfo?.activeDate);
+    if (!nextDate) return;
+    setSelectedDate((prev) => {
+      const current = normalizeDateValue(prev);
+      if (
+        current &&
+        Array.isArray(showtimeInfo?.dates) &&
+        showtimeInfo.dates.includes(current)
+      ) {
+        return prev;
+      }
+      return nextDate;
+    });
+  }, [showtimeInfo?.activeDate, showtimeInfo?.dates]);
+
+  useEffect(() => {
+    if (!Array.isArray(showtimeInfo?.times) || !showtimeInfo.times.length) {
+      return;
+    }
+    setSelectedTime((prev) => {
+      const current = formatTime(prev);
+      if (current && showtimeInfo.times.includes(current)) {
+        return prev;
+      }
+      return showtimeInfo.times[0];
+    });
+  }, [showtimeInfo?.times]);
+  const initialSelectedSeats = useMemo(() => {
+    if (!Array.isArray(selection?.selectedSeats)) return [];
+    const normalized = selection.selectedSeats
+      .map((seat) => normalizeSeatLabel(seat))
+      .filter(Boolean);
+    return Array.from(new Set(normalized));
+  }, [selection?.selectedSeats]);
+
+  const [selectedSeats, setSelectedSeats] = useState(() => initialSelectedSeats);
   const [toastMessage, setToastMessage] = useState("");
   const [toastOpen, setToastOpen] = useState(false);
   const [toastVisible, setToastVisible] = useState(false);
@@ -65,8 +109,13 @@ export default function SeatSelection() {
   const [ticketCounts, setTicketCounts] = useState({ senior: 0, child: 0 });
   const [soldSeatSet, setSoldSeatSet] = useState(() => new Set());
   const [unavailableSeatSet, setUnavailableSeatSet] = useState(() => new Set());
+  const [reservedSeatSet, setReservedSeatSet] = useState(() => new Set());
+  const [pendingSeatSet, setPendingSeatSet] = useState(() => new Set());
   const [dynamicSeatGroups, setDynamicSeatGroups] = useState(defaultSeatGroups);
   const [dynamicSeatCols, setDynamicSeatCols] = useState(defaultSeatCols);
+  const [proceeding, setProceeding] = useState(false);
+  const selectedSeatsRef = useRef([]);
+  const skipReleaseOnUnmountRef = useRef(false);
 
   const title = displayMovie?.title || displayMovie?.name || "Hami Teen Bhai";
   const poster =
@@ -86,19 +135,21 @@ export default function SeatSelection() {
   const discount = Math.max(basePrice - totalPrice, 0);
   const selectedShow = useMemo(
     () =>
+      selectedShowState ||
       findMatchingShow(
         showtimes,
         selectedMovieState || displayMovie,
         selectedVendorState,
-        selectedDateState,
+        selectedDate,
         selectedTime
       ),
     [
+      selectedShowState,
       showtimes,
       selectedMovieState,
       displayMovie,
       selectedVendorState,
-      selectedDateState,
+      selectedDate,
       selectedTime,
     ]
   );
@@ -135,25 +186,73 @@ export default function SeatSelection() {
   const bookingDateValue = useMemo(
     () =>
       normalizeDateValue(
-        selectedDateState || selectedShow?.date || selectedShow?.show_date
+        selectedDate || selectedShow?.date || selectedShow?.show_date
       ),
-    [selectedDateState, selectedShow]
+    [selectedDate, selectedShow]
   );
   const bookingTimeValue = useMemo(
     () =>
       toApiTime(
         selectedTime ||
-          selectedTimeState ||
           selectedShow?.start ||
           selectedShow?.start_time ||
           selectedShow?.startTime
       ),
-    [selectedTime, selectedTimeState, selectedShow]
+    [selectedTime, selectedShow]
   );
   const selectedSeatLabels = useMemo(
     () => [...selectedSeats].sort((a, b) => seatSortKey(a) - seatSortKey(b)),
     [selectedSeats]
   );
+
+  const applySeatPayload = useCallback((data) => {
+    const groups = Array.isArray(data?.seat_groups) && data.seat_groups.length
+      ? data.seat_groups
+      : defaultSeatGroups;
+    const uniqueGroups = ensureUniqueGroupRows(groups);
+    const columns = Array.isArray(data?.seat_columns) && data.seat_columns.length
+      ? data.seat_columns
+          .map((value) => Number(value))
+          .filter((value) => Number.isInteger(value) && value > 0)
+      : defaultSeatCols;
+    const soldSeats = Array.isArray(data?.sold_seats)
+      ? data.sold_seats
+      : Array.isArray(data?.soldSeats)
+        ? data.soldSeats
+        : [];
+    const unavailableSeats = Array.isArray(data?.unavailable_seats)
+      ? data.unavailable_seats
+      : Array.isArray(data?.unavailableSeats)
+        ? data.unavailableSeats
+        : [];
+    const reservedSeats = Array.isArray(data?.reserved_seats)
+      ? data.reserved_seats
+      : Array.isArray(data?.reservedSeats)
+        ? data.reservedSeats
+        : [];
+
+    const nextSoldSet = new Set(
+      soldSeats.map((seat) => normalizeSeatLabel(seat)).filter(Boolean)
+    );
+    const nextUnavailableSet = new Set(
+      unavailableSeats.map((seat) => normalizeSeatLabel(seat)).filter(Boolean)
+    );
+    const nextReservedSet = new Set(
+      reservedSeats.map((seat) => normalizeSeatLabel(seat)).filter(Boolean)
+    );
+
+    setDynamicSeatGroups(uniqueGroups);
+    setDynamicSeatCols(columns.length ? columns : defaultSeatCols);
+    setSoldSeatSet(nextSoldSet);
+    setUnavailableSeatSet(nextUnavailableSet);
+    setReservedSeatSet(nextReservedSet);
+    setSelectedSeats((prev) =>
+      prev.filter((seat) => {
+        const label = normalizeSeatLabel(seat);
+        return !nextSoldSet.has(label) && !nextUnavailableSet.has(label);
+      })
+    );
+  }, []);
 
   const dismissToast = () => {
     setToastOpen(false);
@@ -216,90 +315,108 @@ export default function SeatSelection() {
     });
   }, [totalSeats]);
 
+  const fetchSeatLayout = useCallback(async () => {
+    if (!bookingMovieId || !bookingCinemaId || !bookingDateValue || !bookingTimeValue) {
+      setSoldSeatSet(new Set());
+      setUnavailableSeatSet(new Set());
+      setReservedSeatSet(new Set());
+      setDynamicSeatGroups(defaultSeatGroups);
+      setDynamicSeatCols(defaultSeatCols);
+      return;
+    }
+
+    const params = new URLSearchParams();
+    params.set("movie_id", String(bookingMovieId));
+    params.set("cinema_id", String(bookingCinemaId));
+    params.set("date", bookingDateValue);
+    params.set("time", bookingTimeValue);
+    if (bookingShowId) params.set("show_id", String(bookingShowId));
+    if (bookingHall) params.set("hall", bookingHall);
+
+    const response = await fetch(
+      `${API_BASE}/api/booking/seat-layout/?${params.toString()}`,
+      {
+        headers: {
+          Accept: "application/json",
+        },
+      }
+    );
+    if (!response.ok) {
+      throw new Error("Failed to load seat layout");
+    }
+    const data = await response.json();
+
+    applySeatPayload(data);
+  }, [
+    bookingMovieId,
+    bookingCinemaId,
+    bookingDateValue,
+    bookingTimeValue,
+    bookingShowId,
+    bookingHall,
+    applySeatPayload,
+  ]);
+
   useEffect(() => {
     let active = true;
-
-    const loadSeatLayout = async () => {
-      if (!bookingMovieId || !bookingCinemaId || !bookingDateValue || !bookingTimeValue) {
-        if (!active) return;
-        setSoldSeatSet(new Set());
-        setUnavailableSeatSet(new Set());
-        setDynamicSeatGroups(defaultSeatGroups);
-        setDynamicSeatCols(defaultSeatCols);
-        return;
-      }
-
-      const params = new URLSearchParams();
-      params.set("movie_id", String(bookingMovieId));
-      params.set("cinema_id", String(bookingCinemaId));
-      params.set("date", bookingDateValue);
-      params.set("time", bookingTimeValue);
-      if (bookingShowId) params.set("show_id", String(bookingShowId));
-      if (bookingHall) params.set("hall", bookingHall);
-
+    const load = async () => {
       try {
-        const response = await fetch(
-          `${API_BASE}/api/booking/seat-layout/?${params.toString()}`,
-          {
-            headers: {
-              Accept: "application/json",
-            },
-          }
-        );
-        if (!response.ok) {
-          throw new Error("Failed to load seat layout");
-        }
-        const data = await response.json();
-        if (!active) return;
-
-        const groups = Array.isArray(data?.seat_groups) && data.seat_groups.length
-          ? data.seat_groups
-          : defaultSeatGroups;
-        const columns = Array.isArray(data?.seat_columns) && data.seat_columns.length
-          ? data.seat_columns
-              .map((value) => Number(value))
-              .filter((value) => Number.isInteger(value) && value > 0)
-          : defaultSeatCols;
-        const soldSeats = Array.isArray(data?.sold_seats)
-          ? data.sold_seats
-          : Array.isArray(data?.soldSeats)
-            ? data.soldSeats
-            : [];
-        const unavailableSeats = Array.isArray(data?.unavailable_seats)
-          ? data.unavailable_seats
-          : Array.isArray(data?.unavailableSeats)
-            ? data.unavailableSeats
-            : [];
-
-        const nextSoldSet = new Set(
-          soldSeats.map((seat) => normalizeSeatLabel(seat)).filter(Boolean)
-        );
-        const nextUnavailableSet = new Set(
-          unavailableSeats.map((seat) => normalizeSeatLabel(seat)).filter(Boolean)
-        );
-
-        setDynamicSeatGroups(groups);
-        setDynamicSeatCols(columns.length ? columns : defaultSeatCols);
-        setSoldSeatSet(nextSoldSet);
-        setUnavailableSeatSet(nextUnavailableSet);
-        setSelectedSeats((prev) =>
-          prev.filter((seat) => {
-            const label = normalizeSeatLabel(seat);
-            return !nextSoldSet.has(label) && !nextUnavailableSet.has(label);
-          })
-        );
+        await fetchSeatLayout();
       } catch {
         if (!active) return;
         setSoldSeatSet(new Set());
         setUnavailableSeatSet(new Set());
+        setReservedSeatSet(new Set());
         setDynamicSeatGroups(defaultSeatGroups);
         setDynamicSeatCols(defaultSeatCols);
       }
     };
 
-    loadSeatLayout();
+    load();
     return () => {
       active = false;
+    };
+  }, [fetchSeatLayout]);
+
+  useEffect(() => {
+    selectedSeatsRef.current = selectedSeats;
+  }, [selectedSeats]);
+
+  useEffect(() => {
+    if (!bookingMovieId || !bookingCinemaId || !bookingDateValue || !bookingTimeValue) {
+      return;
+    }
+    const intervalId = setInterval(() => {
+      fetchSeatLayout().catch(() => {});
+    }, 8000);
+    return () => clearInterval(intervalId);
+  }, [fetchSeatLayout, bookingMovieId, bookingCinemaId, bookingDateValue, bookingTimeValue]);
+
+  useEffect(() => {
+    return () => {
+      if (skipReleaseOnUnmountRef.current) {
+        return;
+      }
+      if (
+        !bookingMovieId ||
+        !bookingCinemaId ||
+        !bookingDateValue ||
+        !bookingTimeValue
+      ) {
+        return;
+      }
+      const seatsToRelease = selectedSeatsRef.current || [];
+      if (!seatsToRelease.length) return;
+      const payload = buildBookingPayload(
+        bookingMovieId,
+        bookingCinemaId,
+        bookingDateValue,
+        bookingTimeValue,
+        bookingShowId,
+        bookingHall,
+        seatsToRelease
+      );
+      createBookingResumeNotification(payload).catch(() => {});
     };
   }, [
     bookingMovieId,
@@ -310,18 +427,48 @@ export default function SeatSelection() {
     bookingHall,
   ]);
 
-  const toggleSeat = (key) => {
+  const toggleSeat = async (key) => {
     const normalizedSeat = normalizeSeatLabel(key);
-    if (
-      reservedSeats.has(key) ||
-      soldSeatSet.has(normalizedSeat) ||
-      unavailableSeatSet.has(normalizedSeat)
-    ) {
+    if (selectedSeats.includes(key)) {
+      if (!bookingMovieId || !bookingCinemaId || !bookingDateValue || !bookingTimeValue) {
+        setSelectedSeats(selectedSeats.filter((seat) => seat !== key));
+        return;
+      }
+      setPendingSeatSet((prev) => {
+        const next = new Set(prev);
+        next.add(key);
+        return next;
+      });
+      try {
+        const payload = buildBookingPayload(
+          bookingMovieId,
+          bookingCinemaId,
+          bookingDateValue,
+          bookingTimeValue,
+          bookingShowId,
+          bookingHall,
+          [key]
+        );
+        const data = await releaseBookingSeats(payload);
+        applySeatPayload(data);
+        setSelectedSeats((prev) => prev.filter((seat) => seat !== key));
+      } catch (error) {
+        showToast(error.message || "Failed to release seat.");
+      } finally {
+        setPendingSeatSet((prev) => {
+          const next = new Set(prev);
+          next.delete(key);
+          return next;
+        });
+      }
       return;
     }
 
-    if (selectedSeats.includes(key)) {
-      setSelectedSeats(selectedSeats.filter((seat) => seat !== key));
+    if (
+      reservedSeatSet.has(normalizedSeat) ||
+      soldSeatSet.has(normalizedSeat) ||
+      unavailableSeatSet.has(normalizedSeat)
+    ) {
       return;
     }
 
@@ -330,7 +477,48 @@ export default function SeatSelection() {
       return;
     }
 
-    setSelectedSeats([...selectedSeats, key]);
+    if (!bookingMovieId || !bookingCinemaId || !bookingDateValue || !bookingTimeValue) {
+      setSelectedSeats([...selectedSeats, key]);
+      return;
+    }
+
+    setPendingSeatSet((prev) => {
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
+    try {
+      const payload = buildBookingPayload(
+        bookingMovieId,
+        bookingCinemaId,
+        bookingDateValue,
+        bookingTimeValue,
+        bookingShowId,
+        bookingHall,
+        [key]
+      );
+      const data = await reserveBookingSeats(payload);
+      applySeatPayload(data);
+      const conflicts = data?.conflicts || {};
+      if (
+        (conflicts.sold && conflicts.sold.length) ||
+        (conflicts.unavailable && conflicts.unavailable.length) ||
+        (conflicts.reserved && conflicts.reserved.length) ||
+        (conflicts.invalid && conflicts.invalid.length)
+      ) {
+        showToast("Seat is no longer available.");
+        return;
+      }
+      setSelectedSeats((prev) => [...prev, key]);
+    } catch (error) {
+      showToast(error.message || "Failed to reserve seat.");
+    } finally {
+      setPendingSeatSet((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+    }
   };
 
   const increaseCount = (type) => {
@@ -382,7 +570,71 @@ export default function SeatSelection() {
     return <span className="seat-empty">Tap seats to add up to {MAX_SELECTION}.</span>;
   };
 
-  const handleProceed = () => {
+  const handleDateChange = (dateValue) => {
+    const nextDate = normalizeDateValue(dateValue);
+    if (!nextDate || nextDate === bookingDateValue) return;
+
+    if (
+      selectedSeats.length &&
+      bookingMovieId &&
+      bookingCinemaId &&
+      bookingDateValue &&
+      bookingTimeValue
+    ) {
+      const payload = buildBookingPayload(
+        bookingMovieId,
+        bookingCinemaId,
+        bookingDateValue,
+        bookingTimeValue,
+        bookingShowId,
+        bookingHall,
+        selectedSeats
+      );
+      releaseBookingSeats(payload).catch(() => {});
+    }
+
+    const nextInfo = buildSeatShowtimes(
+      showtimes,
+      selectedMovieState || displayMovie,
+      selectedVendorState,
+      nextDate,
+      null
+    );
+    const nextTime =
+      Array.isArray(nextInfo?.times) && nextInfo.times.length ? nextInfo.times[0] : "";
+
+    setSelectedDate(nextDate);
+    setSelectedTime(nextTime);
+    setSelectedSeats([]);
+    setTicketCounts({ senior: 0, child: 0 });
+  };
+
+  const handleTimeChange = (time) => {
+    if (!time || time === selectedTime) return;
+    if (
+      selectedSeats.length &&
+      bookingMovieId &&
+      bookingCinemaId &&
+      bookingDateValue &&
+      bookingTimeValue
+    ) {
+      const payload = buildBookingPayload(
+        bookingMovieId,
+        bookingCinemaId,
+        bookingDateValue,
+        bookingTimeValue,
+        bookingShowId,
+        bookingHall,
+        selectedSeats
+      );
+      releaseBookingSeats(payload).catch(() => {});
+    }
+    setSelectedTime(time);
+    setSelectedSeats([]);
+    setTicketCounts({ senior: 0, child: 0 });
+  };
+
+  const handleProceed = async () => {
     if (!selectedSeatLabels.length) {
       showToast("Select seats first.");
       return;
@@ -396,7 +648,7 @@ export default function SeatSelection() {
       showtimeInfo.venueLabel || resolveVendorLabel(selectedVendorState) || "QFX Cinemas";
     const venueDate = bookingDateValue
       ? formatVenueDate(bookingDateValue)
-      : normalizeDateValue(selectedDateState);
+      : formatVenueDate(selectedDate);
     const venueTime = selectedTime || formatTime(bookingTimeValue);
     const cinemaLocation = [
       selectedShow?.theatre || selectedVendorState?.theatre || "",
@@ -408,39 +660,53 @@ export default function SeatSelection() {
     const seatText = `Seat No: ${selectedSeatLabels.join(", ")}`;
     const currentUser = getStoredUser();
 
-    navigate("/food", {
-      state: {
-        movie: {
-          title,
-          language: displayMovie?.language || "Nepali",
-          runtime: displayMovie?.duration || "2h 10m",
-          seat: seatText,
-          venue: venueText,
-          cinemaName: venueName,
-          cinemaLocation: cinemaLocation || "Location not provided",
-          showDate: bookingDateValue,
-          showTime: venueTime,
-          hall: bookingHall,
-          theater: bookingHall,
-          poster,
-          movieId: bookingMovieId,
-          cinemaId: bookingCinemaId,
-        },
-        ticketTotal: totalPrice,
-        selectedSeats: selectedSeatLabels,
-        ticketCounts,
-        bookingContext: {
-          showId: bookingShowId,
-          movieId: bookingMovieId,
-          cinemaId: bookingCinemaId,
-          hall: bookingHall,
-          date: bookingDateValue,
-          time: bookingTimeValue,
-          selectedSeats: selectedSeatLabels,
-          userId: currentUser?.id || null,
-        },
+    const nextState = {
+      movie: {
+        title,
+        language: displayMovie?.language || "Nepali",
+        runtime: displayMovie?.duration || "2h 10m",
+        seat: seatText,
+        venue: venueText,
+        cinemaName: venueName,
+        cinemaLocation: cinemaLocation || "Location not provided",
+        showDate: bookingDateValue,
+        showTime: venueTime,
+        hall: bookingHall,
+        theater: bookingHall,
+        poster,
+        movieId: bookingMovieId,
+        cinemaId: bookingCinemaId,
       },
-    });
+      ticketTotal: totalPrice,
+      selectedSeats: selectedSeatLabels,
+      ticketCounts,
+      bookingContext: {
+        showId: bookingShowId,
+        movieId: bookingMovieId,
+        cinemaId: bookingCinemaId,
+        hall: bookingHall,
+        date: bookingDateValue,
+        time: bookingTimeValue,
+        selectedSeats: selectedSeatLabels,
+        userId: currentUser?.id || null,
+      },
+    };
+
+    setProceeding(true);
+    try {
+      const vendorItems = await fetchFoodItemsByVendor({
+        vendorId: bookingCinemaId,
+        hall: bookingHall || "",
+      });
+      const hasFood = Array.isArray(vendorItems) && vendorItems.length > 0;
+      skipReleaseOnUnmountRef.current = true;
+      navigate(hasFood ? "/food" : "/order-confirm", { state: nextState });
+    } catch {
+      skipReleaseOnUnmountRef.current = true;
+      navigate("/order-confirm", { state: nextState });
+    } finally {
+      setProceeding(false);
+    }
   };
 
   const toastMarkup =
@@ -501,16 +767,31 @@ export default function SeatSelection() {
             <div className="seat-cardSub">
               {showtimeInfo.subtitle || "Shows Today, Seat Challenge"}
             </div>
+            {Array.isArray(showtimeInfo.dates) && showtimeInfo.dates.length ? (
+              <div className="seat-showdates" aria-label="Show dates">
+                {showtimeInfo.dates.map((dateValue) => (
+                  <button
+                    key={dateValue}
+                    type="button"
+                    className={`seat-dateChip${bookingDateValue === dateValue ? " seat-dateChipActive" : ""}`}
+                    onClick={() => handleDateChange(dateValue)}
+                    aria-pressed={bookingDateValue === dateValue}
+                  >
+                    {formatChipDate(dateValue)}
+                  </button>
+                ))}
+              </div>
+            ) : null}
             <div className="seat-showtimes">
               {(showtimeInfo.times.length
                 ? showtimeInfo.times
                 : ["10:00 AM", "12:30 PM", "2:00 PM", "6:30 PM", "9:00 PM", "10:30 PM"]
               ).map((time) => (
                 <button
-                  className="seat-timeChip"
+                  className={`seat-timeChip${selectedTime === time ? " seat-timeChipActive" : ""}`}
                   type="button"
                   key={time}
-                  onClick={() => setSelectedTime(time)}
+                  onClick={() => handleTimeChange(time)}
                   aria-pressed={selectedTime === time}
                 >
                   {time}
@@ -557,7 +838,8 @@ export default function SeatSelection() {
                                 key,
                                 selectedSeats,
                                 soldSeatSet,
-                                unavailableSeatSet
+                                unavailableSeatSet,
+                                reservedSeatSet
                               );
                               const isBlocked =
                                 status === "seat--reserved" ||
@@ -570,15 +852,11 @@ export default function SeatSelection() {
                                     className={`seat seat--cat-${group.key} ${status}`}
                                     aria-label={`Seat ${key}`}
                                     aria-pressed={status === "seat--selected"}
-                                    disabled={isBlocked}
+                                    disabled={isBlocked || pendingSeatSet.has(key)}
                                     onClick={() => toggleSeat(key)}
                                   >
                                     {key}
                                   </button>
-                                  {aisleBreaks.has(col) &&
-                                  col !== dynamicSeatCols[dynamicSeatCols.length - 1] ? (
-                                    <span className="seat-aisle" aria-hidden="true" />
-                                  ) : null}
                                 </React.Fragment>
                               );
                             })}
@@ -594,10 +872,6 @@ export default function SeatSelection() {
                   {dynamicSeatCols.map((col) => (
                     <React.Fragment key={`col-${col}`}>
                       <div className="seat-colLabel">{col}</div>
-                      {aisleBreaks.has(col) &&
-                      col !== dynamicSeatCols[dynamicSeatCols.length - 1] ? (
-                        <div className="seat-colAisle" aria-hidden="true" />
-                      ) : null}
                     </React.Fragment>
                   ))}
                 </div>
@@ -724,9 +998,9 @@ export default function SeatSelection() {
               className="seat-payBtn"
               type="button"
               onClick={handleProceed}
-              disabled={totalSeats === 0}
+              disabled={totalSeats === 0 || proceeding}
             >
-              Proceed
+              {proceeding ? "Checking Food..." : "Proceed"}
             </button>
             <button
               className="seat-cancelBtn"
@@ -745,14 +1019,65 @@ export default function SeatSelection() {
   );
 }
 
+function ensureUniqueGroupRows(groups) {
+  const input = Array.isArray(groups) ? groups : [];
+  const usedRows = new Set();
+
+  return input.map((group) => {
+    const groupRows = Array.isArray(group?.rows) ? group.rows : [];
+    const normalizedRows = groupRows
+      .map((row) => String(row || "").trim().toUpperCase())
+      .filter(Boolean);
+
+    const uniqueRows = normalizedRows.map((row) => {
+      if (!usedRows.has(row)) {
+        usedRows.add(row);
+        return row;
+      }
+      const next = nextAvailableRowLabel(usedRows);
+      usedRows.add(next);
+      return next;
+    });
+
+    return {
+      ...group,
+      rows: uniqueRows,
+    };
+  });
+}
+
+function nextAvailableRowLabel(usedRows) {
+  let index = 0;
+  while (index < 2000) {
+    const label = rowLabelFromIndex(index);
+    if (!usedRows.has(label)) {
+      return label;
+    }
+    index += 1;
+  }
+  return `ROW${usedRows.size + 1}`;
+}
+
+function rowLabelFromIndex(index) {
+  let value = Number(index) + 1;
+  let label = "";
+  while (value > 0) {
+    const remainder = (value - 1) % 26;
+    label = String.fromCharCode(65 + remainder) + label;
+    value = Math.floor((value - 1) / 26);
+  }
+  return label;
+}
+
 function getSeatStatus(
   key,
   selectedSeats,
   soldSeatSet = new Set(),
-  unavailableSeatSet = new Set()
+  unavailableSeatSet = new Set(),
+  reservedSeatSet = new Set()
 ) {
   if (selectedSeats.includes(key)) return "seat--selected";
-  if (reservedSeats.has(key)) return "seat--reserved";
+  if (reservedSeatSet.has(normalizeSeatLabel(key))) return "seat--reserved";
   if (soldSeatSet.has(normalizeSeatLabel(key))) return "seat--sold";
   if (unavailableSeatSet.has(normalizeSeatLabel(key))) return "seat--unavailable";
   return "seat--available";
@@ -821,6 +1146,17 @@ function formatVenueDate(value) {
   });
 }
 
+function formatChipDate(value) {
+  const iso = normalizeDateValue(value);
+  if (!iso) return "";
+  const date = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return iso;
+  return date.toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+  });
+}
+
 function findMatchingShow(shows, movie, vendor, dateValue, timeValue) {
   const list = Array.isArray(shows) ? shows : [];
   if (!list.length) return null;
@@ -862,7 +1198,7 @@ function findMatchingShow(shows, movie, vendor, dateValue, timeValue) {
 
 function getStoredUser() {
   if (typeof window === "undefined") return null;
-  const raw = localStorage.getItem("user");
+  const raw = sessionStorage.getItem("user") || localStorage.getItem("user");
   if (!raw) return null;
   try {
     return JSON.parse(raw);
@@ -890,7 +1226,9 @@ function buildSeatShowtimes(shows, movie, vendor, preferredDate, preferredTime) 
 
   if (!filtered.length) {
     return {
+      dates: [],
       times: [],
+      activeDate: "",
       venueLabel: resolveVendorLabel(vendor),
       subtitle: "",
     };
@@ -904,6 +1242,10 @@ function buildSeatShowtimes(shows, movie, vendor, preferredDate, preferredTime) 
     dateSet.add(dateValue);
     availableDates.push(dateValue);
   });
+
+  const dates = availableDates
+    .slice()
+    .sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
 
   const desiredDate = normalizeDateValue(preferredDate);
   const todayIso = new Date().toISOString().slice(0, 10);
@@ -928,12 +1270,6 @@ function buildSeatShowtimes(shows, movie, vendor, preferredDate, preferredTime) 
   });
 
   const times = Array.from(timeSet).filter(Boolean).sort((a, b) => (a > b ? 1 : -1));
-  if (preferredTime) {
-    const formattedPreferred = formatTime(preferredTime);
-    if (formattedPreferred && !timeSet.has(formattedPreferred)) {
-      times.unshift(formattedPreferred);
-    }
-  }
 
   const venueLabel =
     resolveVendorLabel(vendor) ||
@@ -946,7 +1282,9 @@ function buildSeatShowtimes(shows, movie, vendor, preferredDate, preferredTime) 
     ).trim();
 
   return {
+    dates,
     times,
+    activeDate: focusDate,
     venueLabel,
     subtitle: buildSubtitle(focusDate),
   };
@@ -1032,6 +1370,27 @@ function formatTime(value) {
   const period = hours >= 12 ? "PM" : "AM";
   const adjusted = hours % 12 || 12;
   return `${String(adjusted).padStart(2, "0")}:${String(minutes).padStart(2, "0")} ${period}`;
+}
+
+function buildBookingPayload(
+  movieId,
+  cinemaId,
+  dateValue,
+  timeValue,
+  showId,
+  hall,
+  seats
+) {
+  const payload = {
+    movie_id: movieId,
+    cinema_id: cinemaId,
+    date: dateValue,
+    time: timeValue,
+    selected_seats: seats,
+  };
+  if (showId) payload.show_id = showId;
+  if (hall) payload.hall = hall;
+  return payload;
 }
 
 const fallbackShows = [

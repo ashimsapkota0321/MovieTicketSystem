@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { Film, Play } from "lucide-react";
 import { useAppContext } from "../context/Appcontext";
 import { fetchTrailers } from "../lib/catalogApi";
-import { getNowShowing } from "../lib/showUtils";
+import { getNowShowing, resolveMoviesByShowListing } from "../lib/showUtils";
 import HeroSlider from "../components/HeroSlider";
 import CollaboratorsRow from "../components/CollaboratorsRow";
 import NowShowingCard from "../components/NowShowingCard";
@@ -13,9 +13,37 @@ export default function Home() {
   const navigate = useNavigate();
 
   const ctx = safeUseAppContext();
-  const movies = ctx?.movies ?? ctx?.shows ?? [];
-  const nowShowing = useMemo(() => getNowShowing(movies, 5), [movies]);
-  const visibleShows = nowShowing.length ? nowShowing : [];
+  const movies = ctx?.movies ?? [];
+  const showtimes = ctx?.showtimes ?? [];
+
+  // Build set of movie IDs that have active shows
+  const moviesWithActiveShows = useMemo(() => {
+    if (!Array.isArray(showtimes) || showtimes.length === 0) return new Set();
+    const movieIds = new Set();
+    showtimes.forEach((show) => {
+      const movieId = String(show.movieId || show.movie_id || "").trim();
+      if (movieId) movieIds.add(movieId);
+    });
+    return movieIds;
+  }, [showtimes]);
+
+  const showBuckets = useMemo(
+    () => resolveMoviesByShowListing(movies, showtimes),
+    [movies, showtimes]
+  );
+  const visibleShows = useMemo(() => {
+    const fromShows = (showBuckets?.nowShowing || []).filter((movie) => {
+      const id = String(movie?.id || "").trim();
+      return moviesWithActiveShows.has(id);
+    });
+    if (fromShows.length) return fromShows.slice(0, 5);
+
+    const fallback = getNowShowing(movies, 5).filter((movie) => {
+      const id = String(movie?.id || "").trim();
+      return moviesWithActiveShows.has(id);
+    });
+    return fallback.slice(0, 5);
+  }, [showBuckets, movies, moviesWithActiveShows]);
 
 
   const [trailers, setTrailers] = useState([]);
@@ -88,7 +116,8 @@ export default function Home() {
                     movie={movie}
                     onBuy={() =>
                       navigate(
-                        `/movie/${movie?._id || movie?.id || encodeURIComponent(movie?.title || movie?.name || "")}`
+                        `/movie/${movie?._id || movie?.id || encodeURIComponent(movie?.title || movie?.name || "")}`,
+                        { state: { movie } }
                       )
                     }
                   />
@@ -237,10 +266,10 @@ function getEmbedUrl(trailer) {
 
 function getTrailerThumbnail(trailer) {
   if (!trailer) return "";
-  if (trailer.thumbnail_url) return trailer.thumbnail_url;
   if (trailer.youtube_id) {
     return `https://img.youtube.com/vi/${trailer.youtube_id}/hqdefault.jpg`;
   }
+  if (trailer.thumbnail_url) return trailer.thumbnail_url;
   return "";
 }
 

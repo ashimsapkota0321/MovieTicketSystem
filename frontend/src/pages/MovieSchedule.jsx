@@ -1,9 +1,11 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { ChevronLeft } from "lucide-react";
 import "../css/movieSchedule.css";
+import AdultWarningModal from "../components/AdultWarningModal";
 import { useAppContext } from "../context/Appcontext";
 import { cinemaVendors } from "../lib/cinemas";
+import { getMovieRatingLabel, isAdultRating } from "../lib/showUtils";
 
 import gharjwai from "../images/gharjwai.jpg";
 import balidan from "../images/balidan.jpg";
@@ -29,10 +31,21 @@ export default function MovieSchedule() {
   const year = toText(movie?.year || movie?.releaseDate) || "2025";
   const censor = toText(movie?.censor || movie?.rating || movie?.certificate) || "UA 13+";
   const metaLine = [duration, genre, year, censor].filter(Boolean).join(" | ");
+  const movieRating = getMovieRatingLabel(movie) || censor;
+  const isAdultMovie = isAdultRating(movieRating);
 
   const [activeDate, setActiveDate] = useState(0);
   const [priceRange, setPriceRange] = useState("all");
   const [preferredTime, setPreferredTime] = useState("all");
+  const [adultConfirmOpen, setAdultConfirmOpen] = useState(false);
+  const [pendingSelection, setPendingSelection] = useState(null);
+
+  // Reset date selection when movie changes
+  useEffect(() => {
+    setActiveDate(0);
+    setPriceRange("all");
+    setPreferredTime("all");
+  }, [movie?.id || movie?._id || movie?.title]);
 
   const movieShowDates = useMemo(() => collectShowDates(showtimes, movie), [showtimes, movie]);
   const dateOptions = useMemo(() => buildDateOptions(7, movieShowDates), [movieShowDates]);
@@ -41,6 +54,32 @@ export default function MovieSchedule() {
     const rows = buildShowtimeRowsFromShows(showtimes, movie, activeDateValue, cinemaVendors);
     return rows.length ? rows : buildShowtimeRows(cinemaVendors);
   }, [showtimes, movie, activeDateValue]);
+
+  const proceedToBooking = (selectedShow, selectedVendor, selectedDate, selectedTime) => {
+    navigate("/booking", {
+      state: {
+        movie,
+        show: selectedShow,
+        vendor: selectedVendor,
+        date: selectedDate,
+        time: selectedTime,
+      },
+    });
+  };
+
+  const handleSelectShowtime = (selectedShow, selectedVendor, selectedDate, selectedTime) => {
+    if (isAdultMovie) {
+      setPendingSelection({
+        selectedShow,
+        selectedVendor,
+        selectedDate,
+        selectedTime,
+      });
+      setAdultConfirmOpen(true);
+      return;
+    }
+    proceedToBooking(selectedShow, selectedVendor, selectedDate, selectedTime);
+  };
 
   return (
     <div className="wf2-page movieSchedule-page">
@@ -109,30 +148,47 @@ export default function MovieSchedule() {
                 <div className="movieSchedule-cinemaLocation">{row.location}</div>
               </div>
               <div className="movieSchedule-times">
-                {row.times.map((time) => (
-                  <button
-                    key={`${row.vendor.slug}-${time}`}
-                    className="movieSchedule-time"
-                    type="button"
-                    onClick={() =>
-                      navigate("/booking", {
-                        state: {
-                          movie,
-                          vendor: row.vendor,
-                          date: activeDateValue,
-                          time,
-                        },
-                      })
-                    }
-                  >
-                    {time}
-                  </button>
-                ))}
+                {row.times.map((time) => {
+                  const matchingShow = findShowForSelection(showtimes, movie, row.vendor, activeDateValue, time);
+                  return (
+                    <button
+                      key={`${row.vendor.slug}-${time}`}
+                      className="movieSchedule-time"
+                      type="button"
+                      onClick={() =>
+                        handleSelectShowtime(matchingShow, row.vendor, activeDateValue, time)
+                      }
+                    >
+                      {time}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           ))}
         </div>
       </div>
+      <AdultWarningModal
+        open={adultConfirmOpen}
+        onCancel={() => {
+          setAdultConfirmOpen(false);
+          setPendingSelection(null);
+        }}
+        onConfirm={() => {
+          if (!pendingSelection) {
+            setAdultConfirmOpen(false);
+            return;
+          }
+          proceedToBooking(
+            pendingSelection.selectedShow,
+            pendingSelection.selectedVendor,
+            pendingSelection.selectedDate,
+            pendingSelection.selectedTime
+          );
+          setAdultConfirmOpen(false);
+          setPendingSelection(null);
+        }}
+      />
     </div>
   );
 }
@@ -279,6 +335,24 @@ function matchesMovie(show, movie) {
     .toLowerCase();
   if (!showTitle || !movieTitle) return false;
   return showTitle === movieTitle;
+}
+
+function findShowForSelection(shows, movie, vendor, activeDate, selectedTime) {
+  if (!Array.isArray(shows) || !movie || !vendor) return null;
+  return shows.find((show) => {
+    if (!show) return false;
+    if (!matchesMovie(show, movie)) return false;
+    const showVendor = String(show.vendor || show.vendor_name || show.vendorName || show.cinema || "").trim();
+    const vendorName = String(vendor?.name || vendor?.vendor || vendor || "").trim();
+    if (!showVendor.toLowerCase().includes(vendorName.toLowerCase()) && vendorName !== showVendor) {
+      return false;
+    }
+    const showDate = String(show.date || show.show_date || show.showDate || "").trim();
+    if (activeDate && showDate && showDate !== activeDate) return false;
+    const showTime = String(show.start || show.start_time || show.startTime || "").trim();
+    if (!selectedTime || !showTime) return false;
+    return formatTime(showTime) === selectedTime;
+  }) || null;
 }
 
 function formatTime(value) {

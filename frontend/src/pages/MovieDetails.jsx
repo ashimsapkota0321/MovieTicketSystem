@@ -4,7 +4,9 @@ import { Heart, Play, Star } from "lucide-react";
 
 import "../css/movieDetails.css";
 import "../css/home.css";
+import AdultWarningModal from "../components/AdultWarningModal";
 import { createMovieReview, fetchMovieById, fetchMovieBySlug, fetchPersonDetail } from "../lib/catalogApi";
+import { getMovieRatingLabel, isAdultRating } from "../lib/showUtils";
 import { useAppContext } from "../context/Appcontext";
 
 export default function MovieDetails() {
@@ -14,8 +16,8 @@ export default function MovieDetails() {
   const ctx = safeUseAppContext();
   const allMovies = Array.isArray(ctx?.movies) ? ctx.movies : [];
 
-  const [movie, setMovie] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [movie, setMovie] = useState(() => location?.state?.movie || null);
+  const [loading, setLoading] = useState(!location?.state?.movie);
   const [loadError, setLoadError] = useState("");
   const isComingSoon = Boolean(location?.state?.variant === "soon" || location?.state?.isComingSoon);
   const [currentTrailer, setCurrentTrailer] = useState("");
@@ -27,11 +29,15 @@ export default function MovieDetails() {
   const [selectedCredit, setSelectedCredit] = useState(null);
   const [personLoading, setPersonLoading] = useState(false);
   const [personError, setPersonError] = useState("");
+  const [adultConfirmOpen, setAdultConfirmOpen] = useState(false);
 
   useEffect(() => {
     let mounted = true;
+    const hasStateMovie = Boolean(location?.state?.movie);
+
     const loadMovie = async () => {
-      setLoading(true);
+      // Keep existing state movie visible while details hydrate in the background.
+      setLoading(!hasStateMovie);
       setLoadError("");
       try {
         const isNumeric = /^\d+$/.test(String(id || ""));
@@ -40,17 +46,21 @@ export default function MovieDetails() {
         setMovie(data || null);
       } catch (error) {
         if (!mounted) return;
-        setLoadError(error.message || "Unable to load movie.");
-        setMovie(null);
+        // Preserve state movie if available; otherwise show load failure.
+        if (!hasStateMovie) {
+          setMovie(null);
+          setLoadError(error.message || "Unable to load movie.");
+        }
       } finally {
         if (mounted) setLoading(false);
       }
     };
+
     loadMovie();
     return () => {
       mounted = false;
     };
-  }, [id]);
+  }, [id, location?.state?.movie]);
 
   const activeMovie = movie;
   const trailerUrl = resolveTrailerUrl(activeMovie);
@@ -117,14 +127,8 @@ export default function MovieDetails() {
     activeMovie?.releaseDate || activeMovie?.premiere || activeMovie?.showDate || activeMovie?.date
   );
   const releaseValue = releaseLabel || "TBA";
-  const ageRating =
-    toText(
-      activeMovie?.certificate ||
-        activeMovie?.classification ||
-        activeMovie?.censor ||
-        activeMovie?.ageRating ||
-        activeMovie?.rating
-    ) || "PG";
+  const ageRating = getMovieRatingLabel(activeMovie) || "PG";
+  const isAdultMovie = isAdultRating(ageRating);
   const runtimeLabel = formatDuration(activeMovie?.duration || activeMovie?.runtime) || "TBA";
   const yearLabel = formatYear(activeMovie?.year || activeMovie?.releaseDate || activeMovie?.premiere) || "TBA";
   const genresLabel = genres || "Drama";
@@ -146,6 +150,20 @@ export default function MovieDetails() {
 
   const closeTrailer = () => {
     setTrailerOpen(false);
+  };
+
+  const navigateToSchedule = () => {
+    navigate(`/movie/${encodeURIComponent(scheduleKey)}/schedule`, {
+      state: { movie: activeMovie },
+    });
+  };
+
+  const handleBuyTickets = () => {
+    if (isAdultMovie) {
+      setAdultConfirmOpen(true);
+      return;
+    }
+    navigateToSchedule();
   };
 
   const currentUser = getStoredUser();
@@ -325,9 +343,7 @@ export default function MovieDetails() {
                   <button
                     className="md-btn md-btnPrimary"
                     type="button"
-                    onClick={() =>
-                      navigate(`/movie/${encodeURIComponent(scheduleKey)}/schedule`)
-                    }
+                    onClick={handleBuyTickets}
                   >
                     Buy Tickets
                   </button>
@@ -502,7 +518,7 @@ export default function MovieDetails() {
               onClick={closeTrailer}
               aria-label="Close trailer"
             >
-              x
+              ×
             </button>
             <div className="md-trailerFrame">
               <iframe
@@ -551,6 +567,14 @@ export default function MovieDetails() {
           </div>
         </div>
       ) : null}
+      <AdultWarningModal
+        open={adultConfirmOpen}
+        onCancel={() => setAdultConfirmOpen(false)}
+        onConfirm={() => {
+          setAdultConfirmOpen(false);
+          navigateToSchedule();
+        }}
+      />
     </div>
   );
 }
@@ -565,7 +589,7 @@ function safeUseAppContext() {
 
 function getStoredUser() {
   if (typeof window === "undefined") return null;
-  const raw = localStorage.getItem("user");
+  const raw = sessionStorage.getItem("user") || localStorage.getItem("user");
   if (!raw) return null;
   try {
     return JSON.parse(raw);
@@ -613,11 +637,6 @@ function buildMetaLine(movie) {
     : toText(movie?.genre || movie?.category || movie?.type || movie?.genres);
   const parts = [language, genre].filter(Boolean);
   return parts.length ? parts.join(" | ") : "";
-}
-
-function isAdultRating(label) {
-  const value = String(label || "").toLowerCase();
-  return value.includes("adult") || value.includes("18");
 }
 
 function formatRating(value) {

@@ -1,138 +1,11 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { ChevronLeft, Search, Plus, Minus } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import "../css/foodBeverage.css";
 import gharjwai from "../images/gharjwai.jpg";
-import foodItemImage from "../images/food-item.png";
+import { fetchFoodItemsByVendor } from "../lib/catalogApi";
 
-const CATEGORIES = ["All", "Popcorn", "Beverages", "Combos", "Snacks", "Desserts"];
-
-const FOOD_ITEMS = [
-  {
-    id: "popcorn-salt",
-    name: "Regular Salt Pop Corn 80g",
-    desc: "Allergen: Milk | Popcorn 80g | 425 kcal",
-    price: 250,
-    originalPrice: 300,
-    category: "Popcorn",
-    tag: "Bestseller",
-    color: "linear-gradient(135deg, #f59e0b, #f6d35e)",
-    image: foodItemImage,
-    isVeg: true,
-  },
-  {
-    id: "popcorn-cheese",
-    name: "Cheese Pop Corn 80g",
-    desc: "Allergen: Milk | Popcorn 80g | 435 kcal",
-    price: 320,
-    category: "Popcorn",
-    color: "linear-gradient(135deg, #f97316, #fb7185)",
-    image: foodItemImage,
-    isVeg: true,
-  },
-  {
-    id: "popcorn-caramel",
-    name: "Caramel Pop Corn 90g",
-    desc: "Allergen: Milk | Popcorn 90g | 445 kcal",
-    price: 340,
-    originalPrice: 400,
-    category: "Popcorn",
-    color: "linear-gradient(135deg, #f59e0b, #fbbf24)",
-    image: foodItemImage,
-    isVeg: true,
-  },
-  {
-    id: "cola-regular",
-    name: "Cola 500ml",
-    desc: "Chilled | 0.5L | 210 kcal",
-    price: 180,
-    category: "Beverages",
-    color: "linear-gradient(135deg, #38bdf8, #0ea5e9)",
-    image: foodItemImage,
-    isVeg: true,
-  },
-  {
-    id: "lemonade",
-    name: "Fresh Lemonade 350ml",
-    desc: "Cold pressed | 350ml | 120 kcal",
-    price: 220,
-    category: "Beverages",
-    color: "linear-gradient(135deg, #22c55e, #84cc16)",
-    image: foodItemImage,
-    isVeg: true,
-  },
-  {
-    id: "combo-classic",
-    name: "Classic Combo",
-    desc: "Salt Pop Corn + Cola | 2 items",
-    price: 520,
-    category: "Combos",
-    tag: "Value",
-    color: "linear-gradient(135deg, #818cf8, #a78bfa)",
-    image: foodItemImage,
-    isVeg: true,
-  },
-  {
-    id: "combo-family",
-    name: "Family Combo",
-    desc: "Large Pop Corn + 2 Cola | 3 items",
-    price: 780,
-    category: "Combos",
-    color: "linear-gradient(135deg, #f472b6, #fb7185)",
-    image: foodItemImage,
-    isVeg: true,
-  },
-  {
-    id: "nachos",
-    name: "Classic Nachos",
-    desc: "Cheese dip | 1 serving | 410 kcal",
-    price: 350,
-    category: "Snacks",
-    color: "linear-gradient(135deg, #f97316, #f59e0b)",
-    image: foodItemImage,
-    isVeg: true,
-  },
-  {
-    id: "hotdog",
-    name: "Loaded Hot Dog",
-    desc: "Sausage, sauce, cheese | 1 serving",
-    price: 380,
-    category: "Snacks",
-    color: "linear-gradient(135deg, #ef4444, #fb7185)",
-    image: foodItemImage,
-    isVeg: false,
-  },
-  {
-    id: "churros",
-    name: "Cinnamon Churros",
-    desc: "6 pcs | Chocolate dip | 320 kcal",
-    price: 260,
-    category: "Desserts",
-    color: "linear-gradient(135deg, #c084fc, #f0abfc)",
-    image: foodItemImage,
-    isVeg: true,
-  },
-  {
-    id: "brownie",
-    name: "Fudge Brownie",
-    desc: "Chocolate | 1 piece | 280 kcal",
-    price: 240,
-    category: "Desserts",
-    color: "linear-gradient(135deg, #a78bfa, #818cf8)",
-    image: foodItemImage,
-    isVeg: true,
-  },
-  {
-    id: "water",
-    name: "Mineral Water 500ml",
-    desc: "Chilled | 0.5L",
-    price: 80,
-    category: "Beverages",
-    color: "linear-gradient(135deg, #22d3ee, #38bdf8)",
-    image: foodItemImage,
-    isVeg: true,
-  },
-];
+const CATEGORIES_BASE = ["All"];
 
 const TICKET_PRICE = 300;
 const DEFAULT_MOVIE = {
@@ -151,10 +24,17 @@ export default function FoodBeverage() {
   const [activeCategory, setActiveCategory] = useState("All");
   const [query, setQuery] = useState("");
   const [cart, setCart] = useState({});
+  const [foodItems, setFoodItems] = useState([]);
+  const [loadingItems, setLoadingItems] = useState(true);
+
+  const categories = useMemo(() => {
+    const dynamic = Array.from(new Set(foodItems.map((item) => item.category).filter(Boolean)));
+    return [...CATEGORIES_BASE, ...dynamic];
+  }, [foodItems]);
 
   const filteredItems = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
-    return FOOD_ITEMS.filter((item) => {
+    return foodItems.filter((item) => {
       const matchesCategory = activeCategory === "All" || item.category === activeCategory;
       const matchesQuery =
         !normalizedQuery ||
@@ -162,11 +42,11 @@ export default function FoodBeverage() {
         item.desc.toLowerCase().includes(normalizedQuery);
       return matchesCategory && matchesQuery;
     });
-  }, [activeCategory, query]);
+  }, [activeCategory, query, foodItems]);
 
   const cartItems = useMemo(
-    () => FOOD_ITEMS.filter((item) => cart[item.id]),
-    [cart]
+    () => foodItems.filter((item) => cart[item.id]),
+    [cart, foodItems]
   );
 
   const cartCount = cartItems.reduce((sum, item) => sum + cart[item.id], 0);
@@ -183,6 +63,56 @@ export default function FoodBeverage() {
     poster: state?.movie?.poster || DEFAULT_MOVIE.poster,
   };
   const bookingContext = state.bookingContext || {};
+
+  useEffect(() => {
+    let mounted = true;
+    const loadItems = async () => {
+      const vendorId = bookingContext?.cinemaId || state?.movie?.cinemaId;
+      if (!vendorId) {
+        if (mounted) {
+          setFoodItems([]);
+          setLoadingItems(false);
+          goToOrderConfirm([]);
+        }
+        return;
+      }
+      setLoadingItems(true);
+      try {
+        const items = await fetchFoodItemsByVendor({
+          vendorId,
+          hall: bookingContext?.hall || state?.movie?.hall || "",
+        });
+        if (!mounted) return;
+        const normalized = (Array.isArray(items) ? items : []).map((item) => ({
+          id: String(item.id),
+          name: item.itemName,
+          desc: item.category ? `Category: ${item.category}` : "Food Item",
+          price: Number(item.price || 0),
+          category: item.category || "Other",
+          tag: item.hall ? `Hall ${item.hall}` : "",
+          color: "linear-gradient(135deg, #f59e0b, #f6d35e)",
+          image: "",
+          isVeg: true,
+        }));
+        setFoodItems(normalized);
+
+        if (normalized.length === 0) {
+          goToOrderConfirm([]);
+        }
+      } catch {
+        if (!mounted) return;
+        setFoodItems([]);
+        goToOrderConfirm([]);
+      } finally {
+        if (mounted) setLoadingItems(false);
+      }
+    };
+
+    loadItems();
+    return () => {
+      mounted = false;
+    };
+  }, [bookingContext?.cinemaId, bookingContext?.hall]);
 
   const addItem = (id) => {
     setCart((prev) => ({ ...prev, [id]: (prev[id] || 0) + 1 }));
@@ -280,7 +210,7 @@ export default function FoodBeverage() {
           </div>
 
           <div className="wf2-foodTabs">
-            {CATEGORIES.map((category) => (
+            {categories.map((category) => (
               <button
                 key={category}
                 type="button"
@@ -293,6 +223,7 @@ export default function FoodBeverage() {
           </div>
 
           <div className="wf2-foodGrid">
+            {loadingItems ? <div className="wf2-foodEmpty">Loading food items...</div> : null}
             {filteredItems.map((item) => {
               const qty = cart[item.id] || 0;
               const discount = discountLabel(item);
