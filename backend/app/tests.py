@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import date, time
+from decimal import Decimal
+
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
+from rest_framework import status
 
-from .models import Banner, Movie
+from . import services
+from .models import Banner, Booking, Movie, Seat, Show, User, Vendor
 from .serializers import BannerCreateUpdateSerializer
 
 
@@ -36,6 +41,84 @@ class BannerValidationTests(TestCase):
         )
         self.assertFalse(serializer.is_valid())
         self.assertIn("movie", serializer.errors)
+
+
+class BookingBulkAssignmentTests(TestCase):
+    """Corporate bulk seat assignment behavior tests."""
+
+    def setUp(self) -> None:
+        self.vendor = Vendor.objects.create(
+            name="Test Vendor",
+            email="vendor@meroticket.local",
+            phone_number="9800000000",
+            username="vendor-user",
+            password="password",
+            theatre="Test Theatre",
+            city="Kathmandu",
+            is_active=True,
+        )
+        self.vendor.set_password("password")
+        self.vendor.save()
+
+        self.movie = Movie.objects.create(title="Corporate Movie", status=Movie.STATUS_NOW_SHOWING, is_active=True)
+
+        self.show = Show.objects.create(
+            vendor=self.vendor,
+            movie=self.movie,
+            hall="A",
+            show_date=date.today(),
+            start_time=time(12, 0),
+            price=Decimal("200.00"),
+            status="Open",
+        )
+
+        self.screen, self.showtime = services._get_or_create_showtime_for_context(self.show, self.show.hall)
+
+        for seat_index in range(1, 6):
+            Seat.objects.create(
+                screen=self.screen,
+                row_label="A",
+                seat_number=str(seat_index),
+                seat_type="Normal",
+            )
+        for seat_index in range(1, 6):
+            Seat.objects.create(
+                screen=self.screen,
+                row_label="B",
+                seat_number=str(seat_index),
+                seat_type="Executive",
+            )
+
+        self.user = User.objects.create(
+            phone_number="9800000001",
+            email="user@meroticket.local",
+            username="bulk-user",
+            dob=date(1990, 1, 1),
+            first_name="Bulk",
+            last_name="User",
+            password="password",
+        )
+        self.user.set_password("password")
+        self.user.save()
+
+    def test_bulk_assign_booking_seats(self) -> None:
+        booking = Booking.objects.create(
+            user=self.user,
+            showtime=self.showtime,
+            booking_status="Pending",
+            total_amount=Decimal("0.00"),
+        )
+
+        request = type("Request", (), {"data": {"seat_category_counts": {"normal": 3, "executive": 2}}})
+
+        payload, status_code = services.bulk_assign_booking_seats(request, booking)
+
+        self.assertEqual(status_code, status.HTTP_200_OK)
+        self.assertEqual(payload.get("assigned_count"), 5)
+        self.assertEqual(payload.get("booking_id"), booking.id)
+        self.assertTrue("assigned_seats" in payload)
+        booking.refresh_from_db()
+        self.assertEqual(booking.total_amount, Decimal("1000.00"))
 
     def test_promo_banner_disallows_movie(self) -> None:
         serializer = BannerCreateUpdateSerializer(
