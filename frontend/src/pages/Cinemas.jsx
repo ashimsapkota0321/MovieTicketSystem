@@ -2,8 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import "../css/cinemas.css";
 import { cinemaVendors, setRuntimeCinemas } from "../lib/cinemas";
-
-const API_BASE_URL = "http://localhost:8000/api";
+import { API_BASE_URL } from "../lib/apiBase";
 const ACCENT_PALETTE = [
   "#00b3ff",
   "#ff8a00",

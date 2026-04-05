@@ -1,8 +1,6 @@
 import axios from "axios";
 import { getAuthToken } from "../lib/authSession";
-
-const API_BASE =
-  import.meta.env.VITE_BASE_URL?.replace(/\/$/, "") || "http://localhost:8000";
+import { API_BASE } from "../lib/apiBase";
 
 const api = axios.create({
   baseURL: API_BASE,

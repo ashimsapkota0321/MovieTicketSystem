@@ -18,10 +18,10 @@ export default function PaymentFailure() {
   useEffect(() => {
     let mounted = true;
 
-    const releaseReservedSeats = async () => {
+    const verifyPendingPayment = async () => {
       if (!dataValue && !transactionUuid) {
         if (!mounted) return;
-        setMessage("Payment was not completed.");
+        setMessage("Payment was not completed. Continue your booking and try payment again.");
         setLoading(false);
         return;
       }
@@ -32,13 +32,12 @@ export default function PaymentFailure() {
         const result = await verifyEsewaPayment({
           data: dataValue || undefined,
           transaction_uuid: transactionUuid || undefined,
-          release: true,
         });
         if (!mounted) return;
         setVerification(result || null);
         setMessage(
           result?.message ||
-            "Payment was not completed. Reserved seats were released."
+            "Payment was not completed. Continue your booking and try payment again."
         );
       } catch (err) {
         if (!mounted) return;
@@ -48,15 +47,14 @@ export default function PaymentFailure() {
       }
     };
 
-    releaseReservedSeats();
+    verifyPendingPayment();
     return () => {
       mounted = false;
     };
   }, [dataValue, transactionUuid]);
 
   const confirmed = Boolean(verification?.confirmed);
-  const orderPayload =
-    verification?.order || verification?.ticket?.payload?.order || {};
+  const orderPayload = verification?.order || verification?.ticket?.payload?.order || null;
   const ticketPayload = verification?.ticket || null;
 
   return (
@@ -83,6 +81,19 @@ export default function PaymentFailure() {
               }
             >
               Continue
+            </button>
+          ) : null}
+          {!confirmed && orderPayload ? (
+            <button
+              className="wf2-orderPayBtn"
+              type="button"
+              onClick={() =>
+                navigate("/order-confirm", {
+                  state: orderPayload,
+                })
+              }
+            >
+              Continue Booking
             </button>
           ) : null}
           <button className="wf2-orderPayBtn" type="button" onClick={() => navigate(-1)}>

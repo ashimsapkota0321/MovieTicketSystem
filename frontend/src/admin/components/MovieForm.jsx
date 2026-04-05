@@ -1,6 +1,24 @@
+import { useEffect, useState } from "react";
 import { ExternalLink, Plus, Trash2 } from "lucide-react";
 
 export default function MovieForm({ value, onChange, onEditPerson, loading = false }) {
+  const [posterObjectUrl, setPosterObjectUrl] = useState("");
+
+  useEffect(() => {
+    if (!value?.posterFile) {
+      setPosterObjectUrl("");
+      return undefined;
+    }
+
+    const objectUrl = URL.createObjectURL(value.posterFile);
+    setPosterObjectUrl(objectUrl);
+    return () => {
+      URL.revokeObjectURL(objectUrl);
+    };
+  }, [value?.posterFile]);
+
+  const posterPreviewSrc = posterObjectUrl || value?.posterPreview || "";
+
   const updateField = (field, val) => {
     onChange({ ...value, [field]: val });
   };
@@ -116,6 +134,14 @@ export default function MovieForm({ value, onChange, onEditPerson, loading = fal
           <small className="text-muted">Selected: {value.posterFile.name}</small>
         ) : value.posterPreview ? (
           <small className="text-muted">Current poster already set.</small>
+        ) : null}
+        {posterPreviewSrc ? (
+          <img
+            className="admin-movie-poster-preview"
+            src={posterPreviewSrc}
+            alt="Movie poster preview"
+            loading="lazy"
+          />
         ) : null}
       </div>
       <div className="col-md-6">

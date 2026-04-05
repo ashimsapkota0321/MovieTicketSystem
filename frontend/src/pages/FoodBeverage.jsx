@@ -1,9 +1,9 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, Search, Plus, Minus } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import "../css/foodBeverage.css";
 import gharjwai from "../images/gharjwai.jpg";
-import { fetchFoodItemsByVendor } from "../lib/catalogApi";
+import { fetchFoodItemsByVendor, releaseBookingSeats } from "../lib/catalogApi";
 
 const CATEGORIES_BASE = ["All"];
 
@@ -21,6 +21,7 @@ export default function FoodBeverage() {
   const navigate = useNavigate();
   const location = useLocation();
   const state = location?.state || {};
+  const skipReleaseOnUnmountRef = useRef(false);
   const [activeCategory, setActiveCategory] = useState("All");
   const [query, setQuery] = useState("");
   const [cart, setCart] = useState({});
@@ -63,6 +64,27 @@ export default function FoodBeverage() {
     poster: state?.movie?.poster || DEFAULT_MOVIE.poster,
   };
   const bookingContext = state.bookingContext || {};
+
+  useEffect(() => {
+    return () => {
+      if (skipReleaseOnUnmountRef.current) return;
+      if (!selectedSeats.length) return;
+
+      const payload = {
+        movie_id: bookingContext.movieId || bookingContext.movie_id || state?.movie?.movieId,
+        cinema_id: bookingContext.cinemaId || bookingContext.cinema_id || state?.movie?.cinemaId,
+        show_id: bookingContext.showId || bookingContext.show_id,
+        date: bookingContext.date || bookingContext.showDate || state?.movie?.showDate,
+        time: bookingContext.time || bookingContext.showTime || state?.movie?.showTime,
+        hall: bookingContext.hall || state?.movie?.hall,
+        selected_seats: selectedSeats,
+        track_dropoff: true,
+        dropoff_stage: "BOOKING",
+        dropoff_reason: "LEFT_BOOKING_PROCESS",
+      };
+      releaseBookingSeats(payload).catch(() => {});
+    };
+  }, [bookingContext, selectedSeats, state?.movie]);
 
   useEffect(() => {
     let mounted = true;
@@ -147,6 +169,7 @@ export default function FoodBeverage() {
     }));
 
   const goToOrderConfirm = (items) => {
+    skipReleaseOnUnmountRef.current = true;
     navigate("/order-confirm", {
       state: {
         movie: orderMovie,

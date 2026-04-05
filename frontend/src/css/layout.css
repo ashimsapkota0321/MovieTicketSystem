@@ -298,6 +298,57 @@ main > *{
   align-items: center;
 }
 
+.wf2-mobileNavTabs{
+  display: none;
+  align-items: center;
+  gap: 10px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 8px clamp(20px, 4vw, 24px) 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  background: linear-gradient(180deg, rgba(64, 64, 68, 0.95), rgba(54, 54, 58, 0.95));
+  scrollbar-width: none;
+}
+
+.wf2-mobileNavTabs::-webkit-scrollbar{
+  display: none;
+}
+
+.wf2-mobileNavTab{
+  flex: 0 0 auto;
+  border: 1px solid rgba(255,255,255,0.18);
+  background: rgba(12, 16, 24, 0.25);
+  color: rgba(234,240,255,0.78);
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 12px;
+  line-height: 1;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.wf2-mobileNavTab:hover{
+  border-color: rgba(31, 182, 216, 0.72);
+  color: rgba(234,240,255,0.96);
+  background: rgba(31, 182, 216, 0.16);
+}
+
+.wf2-mobileNavTab:focus,
+.wf2-mobileNavTab:focus-visible{
+  outline: none;
+  box-shadow: none;
+}
+
+.wf2-mobileNavTabActive{
+  background: #17a7c8;
+  border-color: rgba(23, 167, 200, 0.98);
+  color: #ffffff;
+  box-shadow: 0 10px 18px rgba(23, 167, 200, 0.28);
+}
+
 .wf2-navItem{
   position: relative;
   display: inline-flex;
@@ -1418,6 +1469,15 @@ main > *{
   .wf2-bookingControls{ gap: 16px; }
   .wf2-controlGroup{ min-width: 140px; }
   .wf2-footerGrid{ grid-template-columns: 1fr 1fr; }
+}
+
+@media (max-width:768px){
+  .wf2-navPillsTop{
+    display: none;
+  }
+  .wf2-mobileNavTabs{
+    display: flex;
+  }
 }
 
 @media (max-width:640px){

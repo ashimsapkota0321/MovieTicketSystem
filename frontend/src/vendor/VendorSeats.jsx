@@ -1,7 +1,9 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import "../css/seatSelection.css";
 import {
+  createVendorHall,
   fetchVendorSeatLayout,
+  fetchVendorHalls,
   saveVendorSeatLayout,
   updateVendorSeatStatus,
 } from "../lib/catalogApi";
@@ -32,8 +34,22 @@ export default function VendorSeats() {
     });
   }, [shows, vendorId, vendorName]);
 
+  const [hallRecords, setHallRecords] = useState([]);
+  const [hallsLoading, setHallsLoading] = useState(false);
+  const [hallActionLoading, setHallActionLoading] = useState(false);
+  const hallOptions = useMemo(() => {
+    const names = new Set(
+      (Array.isArray(hallRecords) ? hallRecords : [])
+        .map((item) => String(item?.hall || "").trim())
+        .filter(Boolean)
+    );
+    return Array.from(names).sort((left, right) =>
+      left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" })
+    );
+  }, [hallRecords]);
+
   const [selectedShowId, setSelectedShowId] = useState("");
-  const [selectedHall, setSelectedHall] = useState("Hall A");
+  const [selectedHall, setSelectedHall] = useState("");
   const [layout, setLayout] = useState(null);
   const [loading, setLoading] = useState(false);
   const [savingLayout, setSavingLayout] = useState(false);
@@ -59,6 +75,60 @@ export default function VendorSeats() {
   useEffect(() => {
     layoutDirtyRef.current = layoutDirty;
   }, [layoutDirty]);
+
+  useEffect(() => {
+    if (!vendorId) return;
+    let active = true;
+    const loadHalls = async () => {
+      setHallsLoading(true);
+      try {
+        const payload = await fetchVendorHalls({ vendor_id: vendorId });
+        if (!active) return;
+        setHallRecords(Array.isArray(payload?.halls) ? payload.halls : []);
+      } catch (error) {
+        if (!active) return;
+        setHallRecords([]);
+      } finally {
+        if (active) setHallsLoading(false);
+      }
+    };
+    loadHalls();
+    return () => {
+      active = false;
+    };
+  }, [vendorId]);
+
+  useEffect(() => {
+    if (!hallOptions.length) {
+      setSelectedHall("");
+      return;
+    }
+    const current = String(selectedHall || "").trim().toLowerCase();
+    if (current && hallOptions.some((hall) => hall.toLowerCase() === current)) {
+      return;
+    }
+    setSelectedHall(hallOptions[0]);
+  }, [hallOptions, selectedHall]);
+
+  const handleAddHall = async () => {
+    if (!vendorId || hallActionLoading) return;
+    setMessage("");
+    setHallActionLoading(true);
+    try {
+      const result = await createVendorHall({ vendor_id: vendorId });
+      const createdHall = String(result?.hall?.hall || "").trim();
+      const payload = await fetchVendorHalls({ vendor_id: vendorId });
+      setHallRecords(Array.isArray(payload?.halls) ? payload.halls : []);
+      if (createdHall) {
+        setSelectedHall(createdHall);
+        setMessage(`${createdHall} created.`);
+      }
+    } catch (error) {
+      setMessage(error.message || "Unable to add hall.");
+    } finally {
+      setHallActionLoading(false);
+    }
+  };
 
   const seatMapStyle = useMemo(() => {
     const colCount = dynamicSeatCols.length || Number(layout?.total_columns) || 0;
@@ -179,7 +249,11 @@ export default function VendorSeats() {
   useEffect(() => {
     if (!vendorShows.length) return;
     if (selectedShowId) return;
-    setSelectedShowId(String(vendorShows[0].id));
+    const firstShow = vendorShows[0];
+    setSelectedShowId(String(firstShow.id));
+    if (firstShow?.hall) {
+      setSelectedHall(String(firstShow.hall));
+    }
   }, [vendorShows, selectedShowId]);
 
   useEffect(() => {
@@ -222,6 +296,10 @@ export default function VendorSeats() {
 
   const handleSaveLayout = async () => {
     if (!vendorId) return;
+    if (!selectedHall) {
+      setMessage("Please add/select a hall first.");
+      return;
+    }
     setSavingLayout(true);
     setMessage("");
     try {
@@ -240,7 +318,7 @@ export default function VendorSeats() {
       const payload = {
         vendor_id: vendorId,
         show_id: selectedShowId || undefined,
-        hall: selectedHall || "Hall A",
+        hall: selectedHall,
         rows: rowsValue,
         columns: Number(columns) || 15,
         category_rows: {
@@ -266,6 +344,10 @@ export default function VendorSeats() {
     if (!seat || !seat.label) return;
     if (!vendorId || !selectedShowId) {
       setMessage("Select a show to update seat availability.");
+      return;
+    }
+    if (!selectedHall) {
+      setMessage("Select a hall to update seat availability.");
       return;
     }
     if (String(seat.status).toLowerCase() === "booked") return;
@@ -347,15 +429,35 @@ export default function VendorSeats() {
             </select>
           </div>
           <div className="col-md-4">
-            <label className="form-label">Hall</label>
-            <input
-              className="form-control"
+            <div className="d-flex align-items-center justify-content-between mb-1">
+              <label className="form-label mb-0">Hall</label>
+              <button
+                type="button"
+                className="btn btn-sm btn-outline-light"
+                onClick={handleAddHall}
+                disabled={hallActionLoading}
+              >
+                {hallActionLoading ? "Adding..." : "+ Add Hall"}
+              </button>
+            </div>
+            <select
+              className="form-select"
               value={selectedHall}
               onChange={(event) => {
                 setLayoutDirty(true);
                 setSelectedHall(event.target.value);
               }}
-            />
+            >
+              <option value="">Select Hall</option>
+              {hallOptions.map((hall) => (
+                <option key={hall} value={hall}>
+                  {hall}
+                </option>
+              ))}
+            </select>
+            <small className="text-muted d-block mt-1">
+              {hallsLoading ? "Loading halls..." : "Hall names are auto-generated (Hall A, Hall B, Hall C...)."}
+            </small>
           </div>
           <div className="col-md-2">
             <label className="form-label">Rows</label>

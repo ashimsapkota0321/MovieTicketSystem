@@ -4,21 +4,23 @@ import { Armchair, CalendarPlus, MoveRight, Sparkles, Trash2 } from "lucide-reac
 import AdminModal from "../admin/components/AdminModal";
 import ConfirmModal from "../admin/components/ConfirmModal";
 import {
+  createVendorHall,
   createShow,
   createVendorMovie,
   deleteShow,
+  fetchVendorHalls,
   fetchVendorQuickHallSwapPreview,
   runVendorQuickHallSwap,
 } from "../lib/catalogApi";
 import { useAppContext } from "../context/Appcontext";
 
-const NEW_HALL_OPTION = "__add_new_hall__";
+const EMPTY_LIST = [];
 
 export default function VendorShows() {
   const navigate = useNavigate();
-  const ctx = safeUseAppContext();
-  const movies = ctx?.movies ?? [];
-  const shows = ctx?.showtimes ?? [];
+  const ctx = useSafeAppContext();
+  const movies = ctx?.movies ?? EMPTY_LIST;
+  const shows = ctx?.showtimes ?? EMPTY_LIST;
   const refreshCatalog = ctx?.refreshCatalog ?? (async () => {});
 
   const vendor = getStoredVendor();
@@ -33,16 +35,19 @@ export default function VendorShows() {
       }),
     [shows, vendorId, vendorName]
   );
+  const [hallRecords, setHallRecords] = useState([]);
+  const [hallsLoading, setHallsLoading] = useState(false);
+  const [hallActionLoading, setHallActionLoading] = useState(false);
   const hallOptions = useMemo(() => {
     const halls = new Set(
-      vendorShows
-        .map((show) => normalizeHallName(show?.hall))
+      (Array.isArray(hallRecords) ? hallRecords : [])
+        .map((item) => normalizeHallName(item?.hall))
         .filter(Boolean)
     );
     return Array.from(halls).sort((left, right) =>
       left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" })
     );
-  }, [vendorShows]);
+  }, [hallRecords]);
 
   const [showModal, setShowModal] = useState(false);
   const [movieModal, setMovieModal] = useState(false);
@@ -55,7 +60,7 @@ export default function VendorShows() {
   const [swapRunning, setSwapRunning] = useState(false);
   const [swapTargetHall, setSwapTargetHall] = useState("");
   const [form, setForm] = useState(() => buildEmptyShow(movies, hallOptions));
-  const [customHallName, setCustomHallName] = useState("");
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [movieForm, setMovieForm] = useState(() => buildEmptyMovie());
   const [query, setQuery] = useState("");
   const [notice, setNotice] = useState("");
@@ -99,12 +104,70 @@ export default function VendorShows() {
     ).size;
     return { nowShowing, soldOut, halls };
   }, [vendorShows]);
-  const selectedHallOption = useMemo(() => {
-    const normalizedHall = normalizeHallName(form.hall);
-    if (!normalizedHall) return NEW_HALL_OPTION;
-    if (hallOptions.includes(normalizedHall)) return normalizedHall;
-    return NEW_HALL_OPTION;
-  }, [form.hall, hallOptions]);
+  useEffect(() => {
+    if (!vendorId) return;
+    let active = true;
+    const loadHalls = async () => {
+      setHallsLoading(true);
+      try {
+        const payload = await fetchVendorHalls({ vendor_id: vendorId });
+        if (!active) return;
+        setHallRecords(Array.isArray(payload?.halls) ? payload.halls : []);
+      } catch {
+        if (!active) return;
+        setHallRecords([]);
+      } finally {
+        if (active) setHallsLoading(false);
+      }
+    };
+    loadHalls();
+    return () => {
+      active = false;
+    };
+  }, [vendorId]);
+
+  useEffect(() => {
+    setForm((prev) => {
+      const normalized = normalizeHallName(prev.hall);
+      const isValid =
+        normalized &&
+        hallOptions.some((hall) => hall.toLowerCase() === normalized.toLowerCase());
+      if (isValid) return prev;
+      return { ...prev, hall: hallOptions[0] || "" };
+    });
+  }, [hallOptions]);
+
+  const selectedHallMeta = useMemo(() => {
+    const normalized = normalizeHallName(form.hall).toLowerCase();
+    if (!normalized) return null;
+    return (
+      hallRecords.find(
+        (item) => normalizeHallName(item?.hall).toLowerCase() === normalized
+      ) || null
+    );
+  }, [hallRecords, form.hall]);
+
+  const handleAddHall = async () => {
+    if (!vendorId || hallActionLoading) return;
+    setErrorMessage("");
+    setNotice("");
+    setHallActionLoading(true);
+    try {
+      const result = await createVendorHall({ vendor_id: vendorId });
+      const createdHall = normalizeHallName(result?.hall?.hall);
+      const hallsPayload = await fetchVendorHalls({ vendor_id: vendorId });
+      const nextHalls = Array.isArray(hallsPayload?.halls) ? hallsPayload.halls : [];
+      setHallRecords(nextHalls);
+      if (createdHall) {
+        setForm((prev) => ({ ...prev, hall: createdHall }));
+        setNotice(`${createdHall} created.`);
+      }
+    } catch (error) {
+      setErrorMessage(error.message || "Unable to add hall.");
+    } finally {
+      setHallActionLoading(false);
+    }
+  };
 
   const handleBookSeats = (show) => {
     if (!show) return;
@@ -150,7 +213,11 @@ export default function VendorShows() {
     if (!form.movieId) return;
     const resolvedHall = normalizeHallName(form.hall);
     if (!resolvedHall) {
-      setErrorMessage("Please select or add a hall.");
+      setErrorMessage("Please add a hall first.");
+      return;
+    }
+    if (!hallOptions.some((hall) => hall.toLowerCase() === resolvedHall.toLowerCase())) {
+      setErrorMessage("Please select a valid hall.");
       return;
     }
     const payload = {
@@ -158,15 +225,19 @@ export default function VendorShows() {
       vendorId: vendorId,
       hall: resolvedHall,
       date: form.date,
-      repeatDays: form.repeatDays,
-      slot: form.slot || guessSlot(form.start),
       start: form.start,
-      end: form.end,
-      screenType: form.screenType,
-      price: form.price,
-      status: form.status,
-      listingStatus: form.listingStatus,
+      repeatDays: form.repeatDays,
     };
+
+    if (showAdvanced) {
+      payload.slot = form.slot || guessSlot(form.start);
+      payload.screenType = form.screenType;
+      payload.status = form.status;
+      payload.listingStatus = form.listingStatus;
+      if (String(form.price || "").trim()) {
+        payload.price = form.price;
+      }
+    }
 
     try {
       const result = await createShow(payload);
@@ -349,7 +420,7 @@ export default function VendorShows() {
             className="vendor-chip"
             onClick={() => {
               setForm(buildEmptyShow(movies, hallOptions));
-              setCustomHallName("");
+              setShowAdvanced(false);
               setShowModal(true);
             }}
           >
@@ -382,8 +453,8 @@ export default function VendorShows() {
                     {show.start} - {show.end}
                   </td>
                   <td>{show.hall}</td>
-                  <td>{show.screenType}</td>
-                  <td>Rs {show.price}</td>
+                  <td>{show.screenType || "-"}</td>
+                  <td>{show.price != null && show.price !== "" ? `Rs ${show.price}` : "-"}</td>
                   <td>{show.status}</td>
                   <td>{show.listingStatus || "Now Showing"}</td>
                   <td>
@@ -569,45 +640,40 @@ export default function VendorShows() {
             <label className="form-label">Cinema</label>
             <input className="form-control" value={vendorName} disabled />
           </div>
-          <div className="col-md-4">
-            <label className="form-label">Hall</label>
+          <div className="col-md-6">
+            <div className="d-flex align-items-center justify-content-between mb-1">
+              <label className="form-label mb-0">Hall</label>
+              <button
+                type="button"
+                className="btn btn-sm btn-outline-light"
+                onClick={handleAddHall}
+                disabled={hallActionLoading}
+              >
+                {hallActionLoading ? "Adding..." : "+ Add Hall"}
+              </button>
+            </div>
             <select
               className="form-select"
-              value={selectedHallOption}
-              onChange={(event) => {
-                const nextValue = event.target.value;
-                if (nextValue === NEW_HALL_OPTION) {
-                  setCustomHallName("");
-                  setForm((prev) => ({ ...prev, hall: "" }));
-                  return;
-                }
-                setCustomHallName("");
-                setForm((prev) => ({ ...prev, hall: nextValue }));
-              }}
+              value={form.hall}
+              onChange={(event) => setForm((prev) => ({ ...prev, hall: event.target.value }))}
             >
+              <option value="">Select hall</option>
               {hallOptions.map((hall) => (
                 <option key={hall} value={hall}>
                   {hall}
                 </option>
               ))}
-              <option value={NEW_HALL_OPTION}>
-                {hallOptions.length ? "+ Add new hall" : "Add your first hall"}
-              </option>
             </select>
-            {selectedHallOption === NEW_HALL_OPTION ? (
-              <input
-                className="form-control mt-2"
-                placeholder="Enter new hall name"
-                value={customHallName}
-                onChange={(event) => {
-                  const nextHall = event.target.value;
-                  setCustomHallName(nextHall);
-                  setForm((prev) => ({ ...prev, hall: nextHall }));
-                }}
-              />
+            <small className="text-muted d-block mt-1">
+              {hallsLoading ? "Loading halls..." : "Use + Add Hall to create Hall A, Hall B, Hall C..."}
+            </small>
+            {selectedHallMeta ? (
+              <small className="text-muted d-block mt-1">
+                Layout: {Number(selectedHallMeta?.total_rows || 0)} rows x {Number(selectedHallMeta?.total_columns || 0)} cols | Seats: {Number(selectedHallMeta?.seat_count || 0)}
+              </small>
             ) : null}
           </div>
-          <div className="col-md-4">
+          <div className="col-md-3">
             <label className="form-label">Date</label>
             <input
               type="date"
@@ -616,31 +682,7 @@ export default function VendorShows() {
               onChange={(event) => setForm((prev) => ({ ...prev, date: event.target.value }))}
             />
           </div>
-          <div className="col-md-4">
-            <label className="form-label">Repeat for days</label>
-            <input
-              type="number"
-              min="1"
-              max="60"
-              className="form-control"
-              value={form.repeatDays}
-              onChange={(event) => setForm((prev) => ({ ...prev, repeatDays: event.target.value }))}
-            />
-          </div>
-          <div className="col-md-4">
-            <label className="form-label">Slot</label>
-            <select
-              className="form-select"
-              value={form.slot}
-              onChange={(event) => setForm((prev) => ({ ...prev, slot: event.target.value }))}
-            >
-              <option>Morning</option>
-              <option>Matinee</option>
-              <option>Evening</option>
-              <option>Night</option>
-            </select>
-          </div>
-          <div className="col-md-4">
+          <div className="col-md-3">
             <label className="form-label">Start time</label>
             <input
               type="time"
@@ -649,59 +691,90 @@ export default function VendorShows() {
               onChange={(event) => setForm((prev) => ({ ...prev, start: event.target.value }))}
             />
           </div>
-          <div className="col-md-4">
-            <label className="form-label">End time</label>
-            <input
-              type="time"
-              className="form-control"
-              value={form.end}
-              onChange={(event) => setForm((prev) => ({ ...prev, end: event.target.value }))}
-            />
+          <div className="col-12">
+            <div className="d-flex align-items-center justify-content-between">
+              <small className="text-muted">End time is computed automatically from movie duration.</small>
+              <button
+                type="button"
+                className="btn btn-sm btn-outline-light"
+                onClick={() => setShowAdvanced((prev) => !prev)}
+              >
+                {showAdvanced ? "Hide Advanced" : "Show Advanced"}
+              </button>
+            </div>
           </div>
-          <div className="col-md-4">
-            <label className="form-label">Screen</label>
-            <select
-              className="form-select"
-              value={form.screenType}
-              onChange={(event) => setForm((prev) => ({ ...prev, screenType: event.target.value }))}
-            >
-              <option>Standard</option>
-              <option>Dolby Atmos</option>
-              <option>IMAX</option>
-              <option>4K Laser</option>
-            </select>
-          </div>
-          <div className="col-md-6">
-            <label className="form-label">Price (Rs)</label>
-            <input
-              className="form-control"
-              value={form.price}
-              onChange={(event) => setForm((prev) => ({ ...prev, price: event.target.value }))}
-            />
-          </div>
-          <div className="col-md-6">
-            <label className="form-label">Status</label>
-            <select
-              className="form-select"
-              value={form.status}
-              onChange={(event) => setForm((prev) => ({ ...prev, status: event.target.value }))}
-            >
-              <option>Open</option>
-              <option>Scheduled</option>
-              <option>Sold Out</option>
-            </select>
-          </div>
-          <div className="col-md-6">
-            <label className="form-label">Listing</label>
-            <select
-              className="form-select"
-              value={form.listingStatus}
-              onChange={(event) => setForm((prev) => ({ ...prev, listingStatus: event.target.value }))}
-            >
-              <option value="Now Showing">Now Showing</option>
-              <option value="Coming Soon">Coming Soon</option>
-            </select>
-          </div>
+          {showAdvanced ? (
+            <>
+              <div className="col-md-3">
+                <label className="form-label">Repeat for days</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="60"
+                  className="form-control"
+                  value={form.repeatDays}
+                  onChange={(event) => setForm((prev) => ({ ...prev, repeatDays: event.target.value }))}
+                />
+              </div>
+              <div className="col-md-3">
+                <label className="form-label">Slot</label>
+                <select
+                  className="form-select"
+                  value={form.slot}
+                  onChange={(event) => setForm((prev) => ({ ...prev, slot: event.target.value }))}
+                >
+                  <option>Morning</option>
+                  <option>Matinee</option>
+                  <option>Evening</option>
+                  <option>Night</option>
+                </select>
+              </div>
+              <div className="col-md-3">
+                <label className="form-label">Screen</label>
+                <select
+                  className="form-select"
+                  value={form.screenType}
+                  onChange={(event) => setForm((prev) => ({ ...prev, screenType: event.target.value }))}
+                >
+                  <option>Standard</option>
+                  <option>Dolby Atmos</option>
+                  <option>IMAX</option>
+                  <option>4K Laser</option>
+                </select>
+              </div>
+              <div className="col-md-3">
+                <label className="form-label">Price (Rs)</label>
+                <input
+                  className="form-control"
+                  value={form.price}
+                  onChange={(event) => setForm((prev) => ({ ...prev, price: event.target.value }))}
+                />
+              </div>
+              <div className="col-md-6">
+                <label className="form-label">Status</label>
+                <select
+                  className="form-select"
+                  value={form.status}
+                  onChange={(event) => setForm((prev) => ({ ...prev, status: event.target.value }))}
+                >
+                  <option>Open</option>
+                  <option>Scheduled</option>
+                  <option>Sold Out</option>
+                </select>
+              </div>
+              <div className="col-md-6">
+                <label className="form-label">Listing</label>
+                <select
+                  className="form-select"
+                  value={form.listingStatus}
+                  onChange={(event) => setForm((prev) => ({ ...prev, listingStatus: event.target.value }))}
+                >
+                  <option value="Now Showing">Now Showing</option>
+                  <option value="Coming Soon">Coming Soon</option>
+                </select>
+              </div>
+            </>
+          ) : null}
         </div>
       </AdminModal>
 
@@ -846,7 +919,7 @@ function findMovieForShow(movies, show) {
   );
 }
 
-function safeUseAppContext() {
+function useSafeAppContext() {
   try {
     return useAppContext?.();
   } catch {

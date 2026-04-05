@@ -32,6 +32,7 @@ export default function VendorCorporateBulkBookings() {
   const [creatingBatch, setCreatingBatch] = useState(false);
   const [exportingBatchId, setExportingBatchId] = useState(null);
   const [selectedMovieKey, setSelectedMovieKey] = useState("");
+  const [selectedShowId, setSelectedShowId] = useState("");
   const [actionState, setActionState] = useState({});
   const [batchForm, setBatchForm] = useState({
     corporate_name: "",
@@ -76,21 +77,58 @@ export default function VendorCorporateBulkBookings() {
     [movieOptions, selectedMovieKey]
   );
 
-  const hallOptions = useMemo(() => {
+  const movieShows = useMemo(() => {
     if (!selectedMovie) return [];
-    const hallSet = new Set();
-    (Array.isArray(vendorShows) ? vendorShows : []).forEach((show) => {
+    return (Array.isArray(vendorShows) ? vendorShows : []).filter((show) => {
       const showMovieId = String(show?.movieId || "").trim();
       const showMovieTitle = String(show?.movie || "").trim();
-      const matchesMovie = selectedMovie.movieId
+      return selectedMovie.movieId
         ? showMovieId === selectedMovie.movieId
         : showMovieTitle.toLowerCase() === selectedMovie.title.toLowerCase();
-      if (!matchesMovie) return;
+    });
+  }, [selectedMovie, vendorShows]);
+
+  const availableMovieShows = useMemo(
+    () =>
+      movieShows
+        .filter((show) => Boolean(show?.bookingOpen))
+        .slice()
+        .sort(sortShowsByDateTime),
+    [movieShows]
+  );
+
+  const hallOptions = useMemo(() => {
+    const hallSet = new Set();
+    availableMovieShows.forEach((show) => {
       const hallName = String(show?.hall || "").trim();
       if (hallName) hallSet.add(hallName);
     });
     return Array.from(hallSet).sort((a, b) => a.localeCompare(b));
-  }, [selectedMovie, vendorShows]);
+  }, [availableMovieShows]);
+
+  const showSlotOptions = useMemo(() => {
+    const selectedHall = String(batchForm.hall || "").trim().toLowerCase();
+    return availableMovieShows.filter((show) => {
+      if (!selectedHall) return true;
+      return String(show?.hall || "").trim().toLowerCase() === selectedHall;
+    });
+  }, [availableMovieShows, batchForm.hall]);
+
+  const selectedShow = useMemo(
+    () => showSlotOptions.find((show) => String(show?.id || "") === String(selectedShowId || "")) || null,
+    [showSlotOptions, selectedShowId]
+  );
+
+  const recommendedUnitPrice = useMemo(() => {
+    if (selectedShow?.price != null && Number.isFinite(Number(selectedShow.price))) {
+      return Number(selectedShow.price);
+    }
+    const pricedSlots = showSlotOptions
+      .map((show) => Number(show?.price))
+      .filter((value) => Number.isFinite(value) && value > 0);
+    if (!pricedSlots.length) return null;
+    return pricedSlots.reduce((sum, value) => sum + value, 0) / pricedSlots.length;
+  }, [selectedShow, showSlotOptions]);
 
   const loadData = async () => {
     setLoading(true);
@@ -118,8 +156,17 @@ export default function VendorCorporateBulkBookings() {
   useEffect(() => {
     if (!movieOptions.length) {
       setSelectedMovieKey("");
+      setSelectedShowId("");
       setBatchForm((prev) =>
-        prev.movie_title || prev.hall ? { ...prev, movie_title: "", hall: "" } : prev
+        prev.movie_title || prev.hall || prev.show_date || prev.show_time
+          ? {
+              ...prev,
+              movie_title: "",
+              hall: "",
+              show_date: "",
+              show_time: "",
+            }
+          : prev
       );
       return;
     }
@@ -151,6 +198,55 @@ export default function VendorCorporateBulkBookings() {
     if (hallOptions.includes(batchForm.hall)) return;
     setBatchForm((prev) => ({ ...prev, hall: hallOptions[0] }));
   }, [hallOptions, batchForm.hall]);
+
+  useEffect(() => {
+    if (!showSlotOptions.length) {
+      if (selectedShowId) setSelectedShowId("");
+      return;
+    }
+    const hasSelectedShow = showSlotOptions.some(
+      (show) => String(show?.id || "") === String(selectedShowId || "")
+    );
+    if (!hasSelectedShow) {
+      setSelectedShowId(String(showSlotOptions[0]?.id || ""));
+    }
+  }, [showSlotOptions, selectedShowId]);
+
+  useEffect(() => {
+    if (!selectedShow) return;
+    setBatchForm((prev) => {
+      const next = { ...prev };
+      let changed = false;
+
+      const nextHall = String(selectedShow?.hall || "").trim();
+      if (nextHall && next.hall !== nextHall) {
+        next.hall = nextHall;
+        changed = true;
+      }
+
+      const nextDate = String(selectedShow?.date || "").trim();
+      if (nextDate && next.show_date !== nextDate) {
+        next.show_date = nextDate;
+        changed = true;
+      }
+
+      const nextTime = String(selectedShow?.start || "").trim();
+      if (nextTime && next.show_time !== nextTime) {
+        next.show_time = nextTime;
+        changed = true;
+      }
+
+      if (selectedShow?.price != null && Number.isFinite(Number(selectedShow.price))) {
+        const nextPrice = Number(selectedShow.price).toFixed(2);
+        if (String(next.unit_price || "") !== nextPrice) {
+          next.unit_price = nextPrice;
+          changed = true;
+        }
+      }
+
+      return changed ? next : prev;
+    });
+  }, [selectedShow]);
 
   const handleRequestAction = async (requestItem) => {
     const current = actionState[requestItem.id] || {};
@@ -196,6 +292,14 @@ export default function VendorCorporateBulkBookings() {
       setError("Choose a hall for the selected movie.");
       return;
     }
+    if (!showSlotOptions.length) {
+      setError("No booking-open show slots are available for this movie/hall.");
+      return;
+    }
+    if (!selectedShow) {
+      setError("Choose an available show slot before generating a bulk batch.");
+      return;
+    }
     if (Number(batchForm.ticket_count || 0) < 1) {
       setError("Ticket count must be at least 1.");
       return;
@@ -220,6 +324,7 @@ export default function VendorCorporateBulkBookings() {
     try {
       await createVendorBulkTicketBatch({
         ...batchForm,
+        show_id: selectedShow?.id,
         ticket_count: Number(batchForm.ticket_count || 0),
         unit_price: Number(batchForm.unit_price || 0),
       });
@@ -511,7 +616,7 @@ export default function VendorCorporateBulkBookings() {
             </select>
           </div>
 
-          <div className="col-md-6 col-xl-2">
+          <div className="col-md-6 col-xl-3">
             <label className="form-label mb-1" htmlFor="bulk-hall">
               Hall
             </label>
@@ -525,7 +630,7 @@ export default function VendorCorporateBulkBookings() {
               }
             >
               {!hallOptions.length ? (
-                <option value="">No hall for selected movie</option>
+                <option value="">No available hall for selected movie</option>
               ) : null}
               {hallOptions.map((hallName) => (
                 <option key={hallName} value={hallName}>
@@ -533,6 +638,34 @@ export default function VendorCorporateBulkBookings() {
                 </option>
               ))}
             </select>
+            <small className="text-muted d-block mt-1">
+              Showing halls with booking-open slots only.
+            </small>
+          </div>
+
+          <div className="col-md-6 col-xl-5">
+            <label className="form-label mb-1" htmlFor="bulk-show-slot">
+              Available show slot
+            </label>
+            <select
+              id="bulk-show-slot"
+              className="form-select"
+              value={selectedShowId}
+              disabled={!showSlotOptions.length}
+              onChange={(event) => setSelectedShowId(event.target.value)}
+            >
+              {!showSlotOptions.length ? (
+                <option value="">No booking-open slot available</option>
+              ) : null}
+              {showSlotOptions.map((show) => (
+                <option key={show.id} value={String(show.id)}>
+                  {buildShowSlotLabel(show)}
+                </option>
+              ))}
+            </select>
+            <small className="text-muted d-block mt-1">
+              Select a slot to auto-fill hall, date, time, and price.
+            </small>
           </div>
 
           <div className="col-md-4 col-xl-2">
@@ -614,6 +747,57 @@ export default function VendorCorporateBulkBookings() {
                 setBatchForm((prev) => ({ ...prev, valid_until: event.target.value }))
               }
             />
+          </div>
+
+          <div className="col-12">
+            <div className="vendor-corporate-detail-panel">
+              <div className="vendor-corporate-detail-header">
+                <h4>Corporate Booking Details</h4>
+                <span
+                  className={`vendor-corporate-detail-badge ${
+                    showSlotOptions.length ? "" : "empty"
+                  }`}
+                >
+                  {showSlotOptions.length
+                    ? `${showSlotOptions.length} slot(s) open`
+                    : "No open slot"}
+                </span>
+              </div>
+              <div className="vendor-corporate-detail-grid">
+                <div className="vendor-corporate-detail-item">
+                  <span>Movie</span>
+                  <strong>{batchForm.movie_title || "-"}</strong>
+                </div>
+                <div className="vendor-corporate-detail-item">
+                  <span>Hall</span>
+                  <strong>{batchForm.hall || "-"}</strong>
+                </div>
+                <div className="vendor-corporate-detail-item">
+                  <span>Show Date</span>
+                  <strong>{batchForm.show_date || "-"}</strong>
+                </div>
+                <div className="vendor-corporate-detail-item">
+                  <span>Show Time</span>
+                  <strong>{batchForm.show_time || "-"}</strong>
+                </div>
+                <div className="vendor-corporate-detail-item">
+                  <span>Recommended Price</span>
+                  <strong>{formatCurrency(recommendedUnitPrice)}</strong>
+                </div>
+                <div className="vendor-corporate-detail-item">
+                  <span>Chosen Unit Price</span>
+                  <strong>{formatCurrency(batchForm.unit_price)}</strong>
+                </div>
+                <div className="vendor-corporate-detail-item">
+                  <span>Ticket Count</span>
+                  <strong>{Number(batchForm.ticket_count || 0)}</strong>
+                </div>
+                <div className="vendor-corporate-detail-item">
+                  <span>Estimated Total</span>
+                  <strong>{formatCurrency(estimatedBatchAmount)}</strong>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div className="col-12">
@@ -712,6 +896,43 @@ function formatDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "-";
   return date.toLocaleDateString();
+}
+
+function sortShowsByDateTime(a, b) {
+  const left = toShowSortTime(a);
+  const right = toShowSortTime(b);
+  if (left === right) {
+    const leftHall = String(a?.hall || "");
+    const rightHall = String(b?.hall || "");
+    return leftHall.localeCompare(rightHall);
+  }
+  return left - right;
+}
+
+function toShowSortTime(show) {
+  const dateValue = String(show?.date || "").trim();
+  const timeValue = String(show?.start || "00:00").trim() || "00:00";
+  if (!dateValue) return Number.MAX_SAFE_INTEGER;
+  const parsed = new Date(`${dateValue}T${timeValue}:00`);
+  const stamp = parsed.getTime();
+  return Number.isFinite(stamp) ? stamp : Number.MAX_SAFE_INTEGER;
+}
+
+function buildShowSlotLabel(show) {
+  const dateLabel = String(show?.date || "Date TBD").trim() || "Date TBD";
+  const timeLabel = String(show?.start || "--:--").trim() || "--:--";
+  const hallLabel = String(show?.hall || "Hall").trim() || "Hall";
+  const screenType = String(show?.screenType || "").trim();
+  const price = Number(show?.price);
+  const priceLabel = Number.isFinite(price) ? `NPR ${price.toFixed(2)}` : "Price not set";
+  const screenSuffix = screenType ? ` | ${screenType}` : "";
+  return `${dateLabel} | ${timeLabel} | ${hallLabel}${screenSuffix} | ${priceLabel}`;
+}
+
+function formatCurrency(value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "NPR 0.00";
+  return `NPR ${amount.toFixed(2)}`;
 }
 
 function getRequestStatusClass(value) {

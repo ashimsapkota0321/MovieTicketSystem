@@ -5,7 +5,14 @@ import { Heart, Play, Star } from "lucide-react";
 import "../css/movieDetails.css";
 import "../css/home.css";
 import AdultWarningModal from "../components/AdultWarningModal";
-import { createMovieReview, fetchMovieById, fetchMovieBySlug, fetchPersonDetail } from "../lib/catalogApi";
+import {
+  createMovieReview,
+  deleteMovieReview,
+  fetchMovieById,
+  fetchMovieBySlug,
+  fetchPersonDetail,
+  updateMovieReview,
+} from "../lib/catalogApi";
 import { getMovieRatingLabel, isAdultRating } from "../lib/showUtils";
 import { useAppContext } from "../context/Appcontext";
 
@@ -24,6 +31,7 @@ export default function MovieDetails() {
   const [isTrailerOpen, setTrailerOpen] = useState(false);
   const [reviewRating, setReviewRating] = useState(0);
   const [reviewComment, setReviewComment] = useState("");
+  const [editingReviewId, setEditingReviewId] = useState(null);
   const [reviewStatus, setReviewStatus] = useState("");
   const [selectedPerson, setSelectedPerson] = useState(null);
   const [selectedCredit, setSelectedCredit] = useState(null);
@@ -94,21 +102,11 @@ export default function MovieDetails() {
   const metaParts = [duration, genres, year].filter(Boolean);
   const metaLine = metaParts.length > 0 ? metaParts.join(" | ") : "";
 
-  const cast = useMemo(() => {
-    if (Array.isArray(activeMovie?.cast) && activeMovie.cast.length > 0) return activeMovie.cast;
-    return [];
-  }, [activeMovie]);
+  const cast = useMemo(() => resolveCredits(activeMovie, "CAST"), [activeMovie]);
 
-  const crew = useMemo(() => {
-    if (Array.isArray(activeMovie?.crew) && activeMovie.crew.length > 0) return activeMovie.crew;
-    return [];
-  }, [activeMovie]);
+  const crew = useMemo(() => resolveCredits(activeMovie, "CREW"), [activeMovie]);
 
-  const reviews = useMemo(() => {
-    if (Array.isArray(activeMovie?.reviews) && activeMovie.reviews.length > 0)
-      return activeMovie.reviews;
-    return [];
-  }, [activeMovie]);
+  const reviews = useMemo(() => resolveReviews(activeMovie), [activeMovie]);
 
   const similarMovies = useMemo(() => {
     if (!Array.isArray(allMovies) || !allMovies.length) return [];
@@ -182,17 +180,54 @@ export default function MovieDetails() {
       return;
     }
     try {
-      const updated = await createMovieReview(movie.id, {
-        userId: currentUser.id,
-        rating: reviewRating,
-        comment: reviewComment,
-      });
-      setMovie(updated);
+      if (editingReviewId) {
+        await updateMovieReview(editingReviewId, {
+          rating: reviewRating,
+          comment: reviewComment,
+        });
+        const refreshed = await fetchMovieById(movie.id);
+        if (refreshed) setMovie(refreshed);
+        setReviewStatus("Review updated.");
+      } else {
+        const updated = await createMovieReview(movie.id, {
+          userId: currentUser.id,
+          rating: reviewRating,
+          comment: reviewComment,
+        });
+        setMovie(updated);
+        setReviewStatus("Review submitted.");
+      }
       setReviewComment("");
       setReviewRating(0);
-      setReviewStatus("Review submitted.");
+      setEditingReviewId(null);
     } catch (error) {
       setReviewStatus(error.message || "Unable to submit review.");
+    }
+  };
+
+  const handleReviewEdit = (review) => {
+    if (!review?.id) return;
+    setEditingReviewId(review.id);
+    setReviewRating(Number(review.rating || 0));
+    setReviewComment(review.comment || "");
+    setReviewStatus("Editing your review.");
+  };
+
+  const handleReviewDelete = async (review) => {
+    if (!review?.id || !movie?.id) return;
+    setReviewStatus("");
+    try {
+      await deleteMovieReview(review.id);
+      const refreshed = await fetchMovieById(movie.id);
+      if (refreshed) setMovie(refreshed);
+      if (editingReviewId === review.id) {
+        setEditingReviewId(null);
+        setReviewComment("");
+        setReviewRating(0);
+      }
+      setReviewStatus("Review deleted.");
+    } catch (error) {
+      setReviewStatus(error.message || "Unable to delete review.");
     }
   };
 
@@ -451,8 +486,22 @@ export default function MovieDetails() {
                     />
                     <div className="md-reviewActions">
                       <button type="button" className="md-btn md-btnPrimary" onClick={handleReviewSubmit}>
-                        Submit Review
+                        {editingReviewId ? "Update Review" : "Submit Review"}
                       </button>
+                      {editingReviewId ? (
+                        <button
+                          type="button"
+                          className="md-btn md-btnGhost"
+                          onClick={() => {
+                            setEditingReviewId(null);
+                            setReviewComment("");
+                            setReviewRating(0);
+                            setReviewStatus("");
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      ) : null}
                       {reviewStatus ? <span className="md-reviewStatus">{reviewStatus}</span> : null}
                     </div>
                   </div>
@@ -475,6 +524,12 @@ export default function MovieDetails() {
                       rating={review.rating}
                       comment={review.comment || review.text}
                       createdAt={review.createdAt}
+                      canManage={
+                        Boolean(currentUser?.id) &&
+                        String(review?.userId || "") === String(currentUser?.id || "")
+                      }
+                      onEdit={() => handleReviewEdit(review)}
+                      onDelete={() => handleReviewDelete(review)}
                     />
                   ))
                 ) : (
@@ -602,6 +657,88 @@ function toText(value) {
   if (!value) return "";
   if (Array.isArray(value)) return value.filter(Boolean).join(", ");
   return String(value).trim();
+}
+
+function resolveCredits(movie, targetRoleType) {
+  const roleType = String(targetRoleType || "").toUpperCase();
+  const directList = roleType === "CAST" ? movie?.cast : movie?.crew;
+  if (Array.isArray(directList) && directList.length > 0) {
+    return directList.map(normalizeCreditShape);
+  }
+
+  const credits = Array.isArray(movie?.credits) ? movie.credits : [];
+  if (!credits.length) return [];
+
+  return credits
+    .filter((credit) => {
+      const creditType = String(
+        credit?.roleType ||
+          credit?.role_type ||
+          credit?.creditType ||
+          ""
+      ).toUpperCase();
+      return creditType === roleType;
+    })
+    .map(normalizeCreditShape);
+}
+
+function normalizeCreditShape(credit) {
+  const person = credit?.person || {};
+  const personName = person?.fullName || person?.full_name || person?.name || "";
+  const personPhoto =
+    person?.photo || person?.photo_url || person?.photoUrl || credit?.photo || credit?.photo_url || credit?.photoUrl || "";
+
+  return {
+    ...credit,
+    roleType:
+      credit?.roleType ||
+      credit?.role_type ||
+      credit?.creditType ||
+      "",
+    characterName:
+      credit?.characterName ||
+      credit?.character_name ||
+      credit?.roleName ||
+      "",
+    jobTitle:
+      credit?.jobTitle ||
+      credit?.job_title ||
+      credit?.department ||
+      "",
+    roleName:
+      credit?.roleName ||
+      credit?.characterName ||
+      credit?.character_name ||
+      credit?.jobTitle ||
+      credit?.job_title ||
+      credit?.department ||
+      "",
+    person: {
+      ...person,
+      fullName: personName,
+      name: person?.name || personName,
+      photo: personPhoto,
+      photoUrl: person?.photoUrl || person?.photo_url || personPhoto,
+    },
+  };
+}
+
+function resolveReviews(movie) {
+  if (!Array.isArray(movie?.reviews)) return [];
+  return movie.reviews.map((review) => ({
+    ...review,
+    userId: review?.userId || review?.user_id || review?.user || null,
+    userName:
+      review?.userName ||
+      review?.user_name ||
+      review?.user ||
+      "Anonymous",
+    createdAt:
+      review?.createdAt ||
+      review?.created_at ||
+      review?.review_date ||
+      null,
+  }));
 }
 
 function formatDateLabel(value) {
@@ -758,7 +895,7 @@ function Person({ name, role, photo, onSelect }) {
   );
 }
 
-function Review({ userName, rating, comment, createdAt }) {
+function Review({ userName, rating, comment, createdAt, canManage, onEdit, onDelete }) {
   const stars = Array.from({ length: 5 }).map((_, index) => {
     const value = index + 1;
     const active = value <= Number(rating || 0);
@@ -776,6 +913,16 @@ function Review({ userName, rating, comment, createdAt }) {
             <p className="md-reviewDate">{formatReviewDate(createdAt)}</p>
           ) : null}
         </div>
+        {canManage ? (
+          <div className="d-flex gap-2 ms-auto me-2">
+            <button type="button" className="md-link" onClick={onEdit}>
+              Edit
+            </button>
+            <button type="button" className="md-link" onClick={onDelete}>
+              Delete
+            </button>
+          </div>
+        ) : null}
         <div className="md-reviewRating">{stars}</div>
       </div>
       {comment ? <p className="md-reviewText">{comment}</p> : null}

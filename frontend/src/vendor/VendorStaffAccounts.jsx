@@ -1,15 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { Briefcase, Search, ShieldCheck, UserPlus, Users } from "lucide-react";
+import { Search, UserPlus, Users } from "lucide-react";
 import {
   createVendorStaffAccount,
   fetchVendorStaffAccounts,
   updateVendorStaffAccount,
 } from "../lib/catalogApi";
-
-const STAFF_ROLES = [
-  { value: "CASHIER", label: "Cashier" },
-  { value: "MANAGER", label: "Manager" },
-];
 
 const INITIAL_FORM = {
   full_name: "",
@@ -17,7 +12,6 @@ const INITIAL_FORM = {
   username: "",
   phone_number: "",
   password: "",
-  role: "CASHIER",
   is_active: true,
 };
 
@@ -56,7 +50,6 @@ export default function VendorStaffAccounts() {
         item.email,
         item.username,
         item.phone_number,
-        item.role,
       ]
         .filter(Boolean)
         .join(" ")
@@ -69,12 +62,8 @@ export default function VendorStaffAccounts() {
     () => staffAccounts.filter((item) => Boolean(item.is_active)).length,
     [staffAccounts]
   );
-  const managerCount = useMemo(
-    () => staffAccounts.filter((item) => String(item.role || "").toUpperCase() === "MANAGER").length,
-    [staffAccounts]
-  );
-  const cashierCount = useMemo(
-    () => staffAccounts.filter((item) => String(item.role || "").toUpperCase() === "CASHIER").length,
+  const inactiveCount = useMemo(
+    () => staffAccounts.filter((item) => !item.is_active).length,
     [staffAccounts]
   );
 
@@ -98,7 +87,6 @@ export default function VendorStaffAccounts() {
         username: form.username || null,
         phone_number: form.phone_number || null,
         password: form.password,
-        role: form.role,
         is_active: form.is_active,
       });
       setMessage("Staff account created successfully.");
@@ -123,18 +111,6 @@ export default function VendorStaffAccounts() {
     }
   };
 
-  const handleRoleUpdate = async (item, role) => {
-    setError("");
-    setMessage("");
-    try {
-      await updateVendorStaffAccount(item.id, { role });
-      setMessage("Staff role updated.");
-      await loadStaff();
-    } catch (err) {
-      setError(err?.message || "Failed to update staff role.");
-    }
-  };
-
   return (
     <div className="vendor-dashboard">
       <div className="vendor-marketing-hero mb-3">
@@ -142,7 +118,7 @@ export default function VendorStaffAccounts() {
           <p className="vendor-marketing-eyebrow mb-1">Access Control</p>
           <h2 className="mb-1">Staff Accounts</h2>
           <p className="text-muted mb-0">
-            Add and control cashier and manager accounts with clear permission boundaries.
+            Create and manage staff accounts while vendor management stays with the vendor admin account.
           </p>
         </div>
         <div className="vendor-marketing-metrics">
@@ -155,10 +131,8 @@ export default function VendorStaffAccounts() {
             <strong>{activeCount}</strong>
           </div>
           <div className="vendor-marketing-metric">
-            <span>Managers / Cashiers</span>
-            <strong>
-              {managerCount} / {cashierCount}
-            </strong>
+            <span>Inactive Staff</span>
+            <strong>{inactiveCount}</strong>
           </div>
         </div>
       </div>
@@ -181,12 +155,12 @@ export default function VendorStaffAccounts() {
               <UserPlus size={18} className="me-2" />
               Create Staff Account
             </h3>
-            <p>Use unique credentials for each team member and assign the minimum required role.</p>
+            <p>Use unique credentials for each team member.</p>
           </div>
         </div>
 
         <div className="row g-3 align-items-start">
-          <form className="col-lg-8 row g-2" onSubmit={handleCreate}>
+          <form className="col-12 row g-2" onSubmit={handleCreate}>
             <div className="col-md-6">
               <label className="form-label">Full Name</label>
             <input
@@ -238,21 +212,7 @@ export default function VendorStaffAccounts() {
               required
             />
             </div>
-            <div className="col-md-6">
-              <label className="form-label">Role</label>
-            <select
-              className="form-select"
-              value={form.role}
-              onChange={(event) => handleInput("role", event.target.value)}
-            >
-              {STAFF_ROLES.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-            </div>
-            <div className="col-md-6">
+            <div className="col-md-4">
               <label className="form-label">Status</label>
             <select
               className="form-select"
@@ -269,23 +229,6 @@ export default function VendorStaffAccounts() {
             </button>
             </div>
           </form>
-
-          <div className="col-lg-4">
-            <div className="vendor-staff-role-panel mb-2">
-              <h4>
-                <Briefcase size={15} className="me-1" />
-                Manager Access
-              </h4>
-              <p>Can manage pricing and campaigns, plus bookings and ticket validation.</p>
-            </div>
-            <div className="vendor-staff-role-panel">
-              <h4>
-                <ShieldCheck size={15} className="me-1" />
-                Cashier Access
-              </h4>
-              <p>Can handle bookings and ticket validation only. No pricing controls.</p>
-            </div>
-          </div>
         </div>
       </section>
 
@@ -296,14 +239,14 @@ export default function VendorStaffAccounts() {
               <Users size={18} className="me-2" />
               Manage Staff
             </h3>
-            <p>Toggle account status and adjust role assignments.</p>
+            <p>Toggle account status for each staff account.</p>
           </div>
           <div className="vendor-staff-search">
             <Search size={15} />
             <input
               className="form-control"
               type="text"
-              placeholder="Search by name, email, phone, role"
+              placeholder="Search by name, email, phone"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
             />
@@ -317,7 +260,6 @@ export default function VendorStaffAccounts() {
                 <th>Email</th>
                 <th>Username</th>
                 <th>Phone</th>
-                <th>Role</th>
                 <th>Status</th>
                 <th>Actions</th>
               </tr>
@@ -325,7 +267,7 @@ export default function VendorStaffAccounts() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={7}>Loading staff accounts...</td>
+                  <td colSpan={6}>Loading staff accounts...</td>
                 </tr>
               ) : filteredStaff.length ? (
                 filteredStaff.map((item) => (
@@ -342,19 +284,6 @@ export default function VendorStaffAccounts() {
                     <td>{item.email || "-"}</td>
                     <td>{item.username || "-"}</td>
                     <td>{item.phone_number || "-"}</td>
-                    <td>
-                      <select
-                        className="form-select form-select-sm"
-                        value={item.role || "CASHIER"}
-                        onChange={(event) => handleRoleUpdate(item, event.target.value)}
-                      >
-                        {STAFF_ROLES.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
                     <td>
                       <span className={`vendor-request-status ${item.is_active ? "approved" : "neutral"}`}>
                         {item.is_active ? "ACTIVE" : "INACTIVE"}
@@ -373,7 +302,7 @@ export default function VendorStaffAccounts() {
                 ))
               ) : (
                 <tr>
-                  <td colSpan={7}>No staff accounts found.</td>
+                  <td colSpan={6}>No staff accounts found.</td>
                 </tr>
               )}
             </tbody>

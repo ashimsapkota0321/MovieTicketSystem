@@ -246,20 +246,9 @@ export function canAccessVendorFeature(feature, options = {}) {
   if (!key) return false;
   if (isVendorOwner(options)) return true;
 
-  const staffRole = getVendorStaffRole(options);
   const cashierFeatures = new Set(["bookings", "ticket-validation", "profile"]);
-  const managerFeatures = new Set([
-    "bookings",
-    "ticket-validation",
-    "profile",
-    "pricing",
-    "campaigns-promos",
-  ]);
-
-  if (staffRole === "MANAGER") {
-    return managerFeatures.has(key);
-  }
-  if (staffRole === "CASHIER") {
+  const staffRole = getVendorStaffRole(options);
+  if (staffRole) {
     return cashierFeatures.has(key);
   }
   return false;

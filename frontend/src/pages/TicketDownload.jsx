@@ -1,12 +1,11 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, Download } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import "../css/orderConfirm.css";
 import gharjwai from "../images/gharjwai.jpg";
 import html2canvas from "html2canvas";
 import { getCinemaBySlug, resolveCinemaSlug } from "../lib/cinemas";
-
-const API_BASE_URL = "http://localhost:8000/api";
+import { API_BASE_URL } from "../lib/apiBase";
 const SUPPORT_CONTACT = "+977 9826633701";
 const WEBSITE_URL = "www.meroticket.com";
 
@@ -45,7 +44,7 @@ const parseTicketDetails = (html) => {
 export default function TicketDownload() {
   const navigate = useNavigate();
   const location = useLocation();
-  const state = location?.state || {};
+  const state = location?.state;
   const ticket = state?.ticket || {};
   const [remoteDetails, setRemoteDetails] = useState(null);
   const ticketRef = useRef(null);
@@ -106,7 +105,7 @@ export default function TicketDownload() {
 
   const downloadUrl = ticket?.download_url || ticket?.ticket_image;
 
-  const triggerDownload = (href, filename) => {
+  const triggerDownload = useCallback((href, filename) => {
     const link = document.createElement("a");
     link.href = href;
     link.download = filename;
@@ -114,9 +113,9 @@ export default function TicketDownload() {
     document.body.appendChild(link);
     link.click();
     link.remove();
-  };
+  }, []);
 
-  const handleDownload = async () => {
+  const handleDownload = useCallback(async () => {
     const filename = `ticket-${ticket.reference || "mero"}.png`;
     const node = ticketRef.current;
     if (node) {
@@ -135,7 +134,7 @@ export default function TicketDownload() {
     if (downloadUrl) {
       triggerDownload(downloadUrl, filename);
     }
-  };
+  }, [downloadUrl, ticket.reference, triggerDownload]);
 
   useEffect(() => {
     if (!state?.autoDownload) return;
@@ -143,7 +142,7 @@ export default function TicketDownload() {
       handleDownload();
     }, 350);
     return () => clearTimeout(timer);
-  }, [state?.autoDownload, downloadUrl]);
+  }, [state?.autoDownload, handleDownload]);
 
   const ticketDetails = remoteDetails || {};
   const venueParts = String(order.movie.venue || "")
@@ -172,7 +171,7 @@ export default function TicketDownload() {
   const ticketTotalLabel = ticketDetails["ticket total"] || formatPrice(order.ticketTotal);
   const foodTotalLabel = ticketDetails["food total"] || formatPrice(order.foodTotal);
   const grandTotalLabel = ticketDetails["grand total"] || formatPrice(order.total);
-  const ticketId = ticket?.reference || "MT-XXXX";
+  const ticketId = ticket?.ticket_id || ticket?.reference || "MT-XXXX";
 
   const ticketStyle = useMemo(
     () => ({ "--wf2-ticket-accent": cinemaBrand.accent || "#0f6fbf" }),
@@ -251,16 +250,8 @@ export default function TicketDownload() {
                       <strong>{theater}</strong>
                     </div>
                     <div className="wf2-etkGridItem">
-                      <span>Seats</span>
-                      <strong>{seatLabel}</strong>
-                    </div>
-                    <div className="wf2-etkGridItem">
-                      <span>Date</span>
-                      <strong>{formattedDate}</strong>
-                    </div>
-                    <div className="wf2-etkGridItem">
-                      <span>Time</span>
-                      <strong>{formattedTime}</strong>
+                      <span>Ticket ID</span>
+                      <strong>{ticketId}</strong>
                     </div>
                   </div>
 
@@ -296,10 +287,6 @@ export default function TicketDownload() {
                   </div>
                   <div className="wf2-etkTicketMeta">
                     <span>Ticket ID</span>
-                    <strong>{ticketId}</strong>
-                  </div>
-                  <div className="wf2-etkTicketMeta">
-                    <span>Booking ID</span>
                     <strong>{ticketId}</strong>
                   </div>
                   <p className="wf2-etkSideHint">Scan this QR at cinema entry.</p>

@@ -21,6 +21,14 @@ import Layout from "./components/Layout";
 import Profile from "./pages/Profile";
 import BookingHistory from "./pages/BookingHistory";
 import Notifications from "./pages/Notifications";
+import LoyaltyDashboard from "./pages/LoyaltyDashboard";
+import LoyaltyRewards from "./pages/LoyaltyRewards";
+import ReferralWallet from "./pages/ReferralWallet";
+import SubscriptionPlans from "./pages/SubscriptionPlans";
+import SubscriptionPlanDetail from "./pages/SubscriptionPlanDetail";
+import SubscriptionDashboard from "./pages/SubscriptionDashboard";
+import GroupBookingCreate from "./pages/GroupBookingCreate";
+import GroupBookingSession from "./pages/GroupBookingSession";
 import NotFound from "./pages/NotFound";
 import AdminLayout from "./admin/AdminLayout";
 import AdminDashboard from "./admin/AdminDashboard";
@@ -36,6 +44,9 @@ import AdminProfile from "./admin/AdminProfile";
 import AdminPeople from "./admin/AdminPeople";
 import AdminTrailers from "./admin/AdminTrailers";
 import AdminCoupons from "./admin/AdminCoupons";
+import AdminLoyaltyControl from "./admin/AdminLoyaltyControl";
+import AdminSubscriptionControl from "./admin/AdminSubscriptionControl";
+import AdminReferralControl from "./admin/AdminReferralControl";
 import VendorLayout from "./vendor/VendorLayout";
 import VendorDashboard from "./vendor/VendorDashboard";
 import VendorProfile from "./vendor/VendorProfile";
@@ -48,6 +59,7 @@ import VendorTicketValidation from "./vendor/VendorTicketValidation";
 import VendorCorporateBulkBookings from "./vendor/VendorCorporateBulkBookings";
 import VendorStaffAccounts from "./vendor/VendorStaffAccounts";
 import VendorCampaignPromos from "./vendor/VendorCampaignPromos";
+import VendorOffers from "./vendor/VendorOffers";
 import { canAccessVendorFeature, getAuthSession } from "./lib/authSession";
 
 function RequireRole({ allowedRole, children }) {
@@ -150,6 +162,70 @@ function App() {
             </RequireCustomer>
           }
         />
+        <Route
+          path="/loyalty/dashboard"
+          element={
+            <RequireCustomer>
+              <Layout><LoyaltyDashboard /></Layout>
+            </RequireCustomer>
+          }
+        />
+        <Route
+          path="/loyalty/rewards"
+          element={
+            <RequireCustomer>
+              <Layout><LoyaltyRewards /></Layout>
+            </RequireCustomer>
+          }
+        />
+        <Route
+          path="/referral/wallet"
+          element={
+            <RequireCustomer>
+              <Layout><ReferralWallet /></Layout>
+            </RequireCustomer>
+          }
+        />
+        <Route
+          path="/subscriptions/plans"
+          element={
+            <RequireCustomer>
+              <Layout><SubscriptionPlans /></Layout>
+            </RequireCustomer>
+          }
+        />
+        <Route
+          path="/subscriptions/plans/:planId"
+          element={
+            <RequireCustomer>
+              <Layout><SubscriptionPlanDetail /></Layout>
+            </RequireCustomer>
+          }
+        />
+        <Route
+          path="/subscriptions/dashboard"
+          element={
+            <RequireCustomer>
+              <Layout><SubscriptionDashboard /></Layout>
+            </RequireCustomer>
+          }
+        />
+        <Route
+          path="/group-booking/new"
+          element={
+            <RequireCustomer>
+              <Layout><GroupBookingCreate /></Layout>
+            </RequireCustomer>
+          }
+        />
+        <Route
+          path="/group-booking/session/:inviteCode"
+          element={
+            <RequireCustomer>
+              <Layout><GroupBookingSession /></Layout>
+            </RequireCustomer>
+          }
+        />
         <Route path="/admin" element={<RequireRole allowedRole="admin"><AdminLayout /></RequireRole>}>
           <Route index element={<Navigate to="dashboard" replace />} />
           <Route path="dashboard" element={<AdminDashboard />} />
@@ -163,6 +239,9 @@ function App() {
           <Route path="schedule" element={<AdminSchedule />} />
           <Route path="bookings" element={<AdminBookings />} />
           <Route path="coupons" element={<AdminCoupons />} />
+          <Route path="loyalty" element={<AdminLoyaltyControl />} />
+          <Route path="subscriptions" element={<AdminSubscriptionControl />} />
+          <Route path="referrals" element={<AdminReferralControl />} />
           <Route path="reports" element={<AdminReports />} />
           <Route path="profile" element={<AdminProfile />} />
           <Route path="*" element={<NotFound />} />
@@ -177,6 +256,7 @@ function App() {
           <Route path="bookings" element={<RequireVendorFeature feature="bookings"><VendorBookings /></RequireVendorFeature>} />
           <Route path="corporate-bulk" element={<RequireVendorFeature feature="corporate-bulk"><VendorCorporateBulkBookings /></RequireVendorFeature>} />
           <Route path="campaigns-promos" element={<RequireVendorFeature feature="campaigns-promos"><VendorCampaignPromos /></RequireVendorFeature>} />
+          <Route path="offers" element={<RequireVendorFeature feature="offers"><VendorOffers /></RequireVendorFeature>} />
           <Route path="ticket-validation" element={<RequireVendorFeature feature="ticket-validation"><VendorTicketValidation /></RequireVendorFeature>} />
           <Route path="staff-accounts" element={<RequireVendorFeature feature="staff-accounts"><VendorStaffAccounts /></RequireVendorFeature>} />
           <Route path="profile" element={<RequireVendorFeature feature="profile"><VendorProfile /></RequireVendorFeature>} />

@@ -20,10 +20,10 @@ import {
   getStoredRoleData,
   storeRoleData,
 } from "../lib/authSession";
+import { API_BASE_URL } from "../lib/apiBase";
 
 const STORAGE_KEY = "admin";
 const UPDATE_EVENT = "mt:admin-updated";
-const API_BASE_URL = "http://localhost:8000/api";
 
 const EMPTY_PROFILE = {
   full_name: "",

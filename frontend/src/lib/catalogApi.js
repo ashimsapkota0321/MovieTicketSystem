@@ -1,18 +1,95 @@
 import { getAuthHeaders } from "./authSession";
+import { logError, logInfo } from "./clientLogger";
+import { API_BASE } from "./apiBase";
+const MONITOR_EXPORT_POLL_INTERVAL_MS = 1200;
+const MONITOR_EXPORT_TIMEOUT_MS = 60000;
+const REQUEST_ID_HEADER = "X-Request-ID";
 
-const API_BASE =
-  import.meta.env.VITE_BASE_URL?.replace(/\/$/, "") || "http://localhost:8000";
+function delay(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function createRequestId() {
+  if (typeof globalThis !== "undefined" && globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
+  }
+  return `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function normalizeMethod(value) {
+  return String(value || "GET").trim().toUpperCase();
+}
+
+function buildRequestError({ message, response, payload, requestId, method, path, durationMs }) {
+  const error = new Error(message);
+  error.requestId = requestId;
+  error.status = response.status;
+  error.payload = payload;
+  logError("API request failed", {
+    requestId,
+    method,
+    path,
+    status: response.status,
+    durationMs,
+    message,
+  });
+  return error;
+}
+
+function buildNetworkRequestError({ error, requestId, method, path, durationMs }) {
+  const wrapped = new Error(
+    `Unable to reach API server at ${API_BASE}. Please ensure backend is running on port 8000.`
+  );
+  wrapped.requestId = requestId;
+  wrapped.method = method;
+  wrapped.path = path;
+  wrapped.cause = error;
+  logError("API network request failed", {
+    requestId,
+    method,
+    path,
+    durationMs,
+    message: error?.message || "Network request failed",
+  });
+  return wrapped;
+}
 
 async function request(path, options = {}) {
-  const response = await fetch(`${API_BASE}${path}`, {
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-      ...getAuthHeaders(),
-      ...(options.headers || {}),
-    },
-    ...options,
-  });
+  const {
+    requestId: explicitRequestId,
+    headers: optionHeaders = {},
+    ...fetchOptions
+  } = options;
+  const method = normalizeMethod(fetchOptions.method);
+  const requestId = explicitRequestId || createRequestId();
+  const startedAt = Date.now();
+
+  let response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        ...getAuthHeaders(),
+        [REQUEST_ID_HEADER]: requestId,
+        ...optionHeaders,
+      },
+      ...fetchOptions,
+    });
+  } catch (error) {
+    const durationMs = Date.now() - startedAt;
+    throw buildNetworkRequestError({
+      error,
+      requestId,
+      method,
+      path,
+      durationMs,
+    });
+  }
+  const resolvedRequestId = response.headers.get(REQUEST_ID_HEADER) || requestId;
+  const durationMs = Date.now() - startedAt;
 
   let data = null;
   try {
@@ -23,21 +100,62 @@ async function request(path, options = {}) {
 
   if (!response.ok) {
     const message = data?.message || data?.error || `Request failed (${response.status})`;
-    throw new Error(message);
+    throw buildRequestError({
+      message,
+      response,
+      payload: data,
+      requestId: resolvedRequestId,
+      method,
+      path,
+      durationMs,
+    });
   }
+
+  logInfo("API request completed", {
+    requestId: resolvedRequestId,
+    method,
+    path,
+    status: response.status,
+    durationMs,
+  });
+
   return data;
 }
 
 async function requestForm(path, formData, options = {}) {
-  const response = await fetch(`${API_BASE}${path}`, {
-    headers: {
-      Accept: "application/json",
-      ...getAuthHeaders(),
-      ...(options.headers || {}),
-    },
-    body: formData,
-    ...options,
-  });
+  const {
+    requestId: explicitRequestId,
+    headers: optionHeaders = {},
+    ...fetchOptions
+  } = options;
+  const method = normalizeMethod(fetchOptions.method);
+  const requestId = explicitRequestId || createRequestId();
+  const startedAt = Date.now();
+
+  let response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      headers: {
+        Accept: "application/json",
+        ...getAuthHeaders(),
+        [REQUEST_ID_HEADER]: requestId,
+        ...optionHeaders,
+      },
+      body: formData,
+      ...fetchOptions,
+    });
+  } catch (error) {
+    const durationMs = Date.now() - startedAt;
+    throw buildNetworkRequestError({
+      error,
+      requestId,
+      method,
+      path,
+      durationMs,
+    });
+  }
+  const resolvedRequestId = response.headers.get(REQUEST_ID_HEADER) || requestId;
+  const durationMs = Date.now() - startedAt;
 
   let data = null;
   try {
@@ -48,9 +166,94 @@ async function requestForm(path, formData, options = {}) {
 
   if (!response.ok) {
     const message = data?.message || data?.error || `Request failed (${response.status})`;
-    throw new Error(message);
+    throw buildRequestError({
+      message,
+      response,
+      payload: data,
+      requestId: resolvedRequestId,
+      method,
+      path,
+      durationMs,
+    });
   }
+
+  logInfo("API form request completed", {
+    requestId: resolvedRequestId,
+    method,
+    path,
+    status: response.status,
+    durationMs,
+  });
+
   return data;
+}
+
+async function requestBlob(path, options = {}) {
+  const {
+    requestId: explicitRequestId,
+    headers: optionHeaders = {},
+    ...fetchOptions
+  } = options;
+  const method = normalizeMethod(fetchOptions.method);
+  const requestId = explicitRequestId || createRequestId();
+  const startedAt = Date.now();
+
+  let response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      headers: {
+        Accept: "application/octet-stream",
+        ...getAuthHeaders(),
+        [REQUEST_ID_HEADER]: requestId,
+        ...optionHeaders,
+      },
+      ...fetchOptions,
+    });
+  } catch (error) {
+    const durationMs = Date.now() - startedAt;
+    throw buildNetworkRequestError({
+      error,
+      requestId,
+      method,
+      path,
+      durationMs,
+    });
+  }
+  const resolvedRequestId = response.headers.get(REQUEST_ID_HEADER) || requestId;
+  const durationMs = Date.now() - startedAt;
+
+  if (!response.ok) {
+    let payload = null;
+    let message = `Request failed (${response.status})`;
+    try {
+      payload = await response.json();
+      message = payload?.message || payload?.error || message;
+    } catch {
+      payload = null;
+    }
+    throw buildRequestError({
+      message,
+      response,
+      payload,
+      requestId: resolvedRequestId,
+      method,
+      path,
+      durationMs,
+    });
+  }
+
+  logInfo("API file request completed", {
+    requestId: resolvedRequestId,
+    method,
+    path,
+    status: response.status,
+    durationMs,
+  });
+
+  return {
+    response,
+    requestId: resolvedRequestId,
+  };
 }
 
 export async function fetchMovies(params = {}) {
@@ -138,6 +341,21 @@ export async function createMovieReview(movieId, payload) {
     body: JSON.stringify(payload),
   });
   return data?.movie;
+}
+
+export async function updateMovieReview(reviewId, payload) {
+  const data = await request(`/api/reviews/${reviewId}/`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+  return data?.review || data;
+}
+
+export async function deleteMovieReview(reviewId) {
+  await request(`/api/reviews/${reviewId}/`, {
+    method: "DELETE",
+  });
+  return true;
 }
 
 export async function fetchPersonDetail(slug) {
@@ -274,6 +492,20 @@ export async function fetchVendorSeatLayout(params = {}) {
   return data || {};
 }
 
+export async function fetchVendorHalls(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const data = await request(`/api/vendor/halls/${query ? `?${query}` : ""}`);
+  return data || {};
+}
+
+export async function createVendorHall(payload = {}) {
+  const data = await request("/api/vendor/halls/", {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
 export async function saveVendorSeatLayout(payload) {
   const data = await request("/api/vendor/seat-layout/", {
     method: "POST",
@@ -319,11 +551,235 @@ export async function deleteVendorPricingRule(ruleId) {
   return data;
 }
 
+export async function fetchVendorShowBasePrices(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const data = await request(`/api/vendor/show-base-prices/${query ? `?${query}` : ""}`);
+  return data || {};
+}
+
+export async function saveVendorShowBasePrices(payload) {
+  const data = await request("/api/vendor/show-base-prices/", {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
+export async function fetchAdminPricingRules(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const data = await request(`/api/admin/pricing-rules/${query ? `?${query}` : ""}`);
+  return data?.rules || [];
+}
+
+export async function createAdminPricingRule(payload) {
+  const data = await request("/api/admin/pricing-rules/", {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data?.rule || data;
+}
+
+export async function updateAdminPricingRule(ruleId, payload) {
+  const data = await request(`/api/admin/pricing-rules/${ruleId}/`, {
+    method: "PATCH",
+    body: JSON.stringify(payload || {}),
+  });
+  return data?.rule || data;
+}
+
+export async function deleteAdminPricingRule(ruleId) {
+  const data = await request(`/api/admin/pricing-rules/${ruleId}/`, {
+    method: "DELETE",
+  });
+  return data || {};
+}
+
+export async function fetchVendorLoyaltyRule() {
+  const data = await request("/api/vendor/loyalty/rules/");
+  return data?.rule || data;
+}
+
+export async function updateVendorLoyaltyRule(payload) {
+  const data = await request("/api/vendor/loyalty/rules/", {
+    method: "PATCH",
+    body: JSON.stringify(payload || {}),
+  });
+  return data?.rule || data;
+}
+
+export async function fetchVendorLoyaltyRewards() {
+  const data = await request("/api/vendor/loyalty/rewards/");
+  return data?.rewards || [];
+}
+
+export async function createVendorLoyaltyReward(payload) {
+  const data = await request("/api/vendor/loyalty/rewards/", {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
+export async function updateVendorLoyaltyReward(rewardId, payload) {
+  const data = await request(`/api/vendor/loyalty/rewards/${rewardId}/`, {
+    method: "PATCH",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
+export async function deleteVendorLoyaltyReward(rewardId) {
+  const data = await request(`/api/vendor/loyalty/rewards/${rewardId}/`, {
+    method: "DELETE",
+  });
+  return data || {};
+}
+
+export async function fetchVendorLoyaltyPromotions() {
+  const data = await request("/api/vendor/loyalty/promotions/");
+  return data?.promotions || [];
+}
+
+export async function createVendorLoyaltyPromotion(payload) {
+  const data = await request("/api/vendor/loyalty/promotions/", {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
+export async function updateVendorLoyaltyPromotion(promotionId, payload) {
+  const data = await request(`/api/vendor/loyalty/promotions/${promotionId}/`, {
+    method: "PATCH",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
+export async function deleteVendorLoyaltyPromotion(promotionId) {
+  const data = await request(`/api/vendor/loyalty/promotions/${promotionId}/`, {
+    method: "DELETE",
+  });
+  return data || {};
+}
+
+export async function fetchAdminLoyaltyControls() {
+  const data = await request("/api/admin/loyalty/rules/");
+  return data || {};
+}
+
+export async function updateAdminLoyaltyRule(payload) {
+  const data = await request("/api/admin/loyalty/rules/", {
+    method: "PATCH",
+    body: JSON.stringify(payload || {}),
+  });
+  return data?.rule || data;
+}
+
+export async function fetchAdminLoyaltyRewards() {
+  const data = await request("/api/admin/loyalty/rewards/");
+  return data?.rewards || [];
+}
+
+export async function createAdminLoyaltyReward(payload) {
+  const data = await request("/api/admin/loyalty/rewards/", {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data?.reward || data;
+}
+
+export async function updateAdminLoyaltyReward(rewardId, payload) {
+  const data = await request(`/api/admin/loyalty/rewards/${rewardId}/`, {
+    method: "PATCH",
+    body: JSON.stringify(payload || {}),
+  });
+  return data?.reward || data;
+}
+
+export async function deleteAdminLoyaltyReward(rewardId) {
+  const data = await request(`/api/admin/loyalty/rewards/${rewardId}/`, {
+    method: "DELETE",
+  });
+  return data || {};
+}
+
+export async function fetchAdminLoyaltyPromotions() {
+  const data = await request("/api/admin/loyalty/promotions/");
+  return data?.promotions || [];
+}
+
+export async function createAdminLoyaltyPromotion(payload) {
+  const data = await request("/api/admin/loyalty/promotions/", {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data?.promotion || data;
+}
+
+export async function updateAdminLoyaltyPromotion(promotionId, payload) {
+  const data = await request(`/api/admin/loyalty/promotions/${promotionId}/`, {
+    method: "PATCH",
+    body: JSON.stringify(payload || {}),
+  });
+  return data?.promotion || data;
+}
+
+export async function deleteAdminLoyaltyPromotion(promotionId) {
+  const data = await request(`/api/admin/loyalty/promotions/${promotionId}/`, {
+    method: "DELETE",
+  });
+  return data || {};
+}
+
+export async function fetchVendorOffers(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const data = await request(`/api/vendor/offers/${query ? `?${query}` : ""}`);
+  return data?.offers || [];
+}
+
+export async function createVendorOffer(payload) {
+  const data = await request("/api/vendor/offers/", {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data?.offer || data;
+}
+
+export async function updateVendorOffer(offerId, payload) {
+  const data = await request(`/api/vendor/offers/${offerId}/`, {
+    method: "PATCH",
+    body: JSON.stringify(payload || {}),
+  });
+  return data?.offer || data;
+}
+
+export async function deleteVendorOffer(offerId) {
+  const data = await request(`/api/vendor/offers/${offerId}/`, {
+    method: "DELETE",
+  });
+  return data || {};
+}
+
 export async function calculateBookingTicketPrice(payload) {
   const data = await request("/api/booking/ticket-price/", {
     method: "POST",
     body: JSON.stringify(payload),
   });
+  return data || {};
+}
+
+export async function previewBookingTicketPrice(payload) {
+  const data = await request("/api/booking/price-preview/", {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
+export async function fetchBookingDynamicPrice(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const data = await request(`/api/booking/dynamic-price/${query ? `?${query}` : ""}`);
   return data || {};
 }
 
@@ -371,6 +827,315 @@ export async function fetchCustomerBookingHistoryDetail(bookingId) {
 
 export async function cancelCustomerBookingHistory(bookingId, payload = {}) {
   const data = await request(`/api/bookings/history/${bookingId}/cancel/`, {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
+export async function fetchLoyaltyDashboard() {
+  const data = await request("/api/loyalty/dashboard/");
+  return data || {};
+}
+
+export async function fetchLoyaltyTransactions(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const data = await request(`/api/loyalty/transactions/${query ? `?${query}` : ""}`);
+  return data?.transactions || [];
+}
+
+export async function fetchLoyaltyRewards(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const data = await request(`/api/loyalty/rewards/${query ? `?${query}` : ""}`);
+  return data || {};
+}
+
+export async function previewLoyaltyCheckout(payload) {
+  const data = await request("/api/loyalty/checkout/preview/", {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data?.preview || data;
+}
+
+export async function redeemLoyaltyReward(payload) {
+  const data = await request("/api/loyalty/rewards/redeem/", {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
+export async function fetchLoyaltyRedemptions(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const data = await request(`/api/loyalty/redemptions/${query ? `?${query}` : ""}`);
+  return data?.redemptions || [];
+}
+
+export async function applyReferralLoyaltyBonus(payload) {
+  const data = await request("/api/loyalty/referral/bonus/", {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
+export async function fetchSubscriptionPlans(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const data = await request(`/api/subscriptions/plans/${query ? `?${query}` : ""}`);
+  return data || {};
+}
+
+export async function fetchSubscriptionPlanDetail(planId, params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const data = await request(`/api/subscriptions/plans/${planId}/${query ? `?${query}` : ""}`);
+  return data || {};
+}
+
+export async function fetchSubscriptionDashboard(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const data = await request(`/api/subscriptions/dashboard/${query ? `?${query}` : ""}`);
+  return data || {};
+}
+
+export async function fetchActiveSubscription(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const data = await request(`/api/subscriptions/active/${query ? `?${query}` : ""}`);
+  return data || {};
+}
+
+export async function previewSubscriptionCheckout(payload) {
+  const data = await request("/api/subscriptions/checkout/preview/", {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data?.preview || data;
+}
+
+export async function subscribeToPlan(payload) {
+  const data = await request("/api/subscriptions/subscribe/", {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
+export async function upgradeSubscription(payload) {
+  const data = await request("/api/subscriptions/upgrade/", {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
+export async function cancelSubscription(payload = {}) {
+  const data = await request("/api/subscriptions/cancel/", {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
+export async function fetchVendorSubscriptionPlans() {
+  const data = await request("/api/vendor/subscriptions/plans/");
+  return data?.plans || [];
+}
+
+export async function createVendorSubscriptionPlan(payload) {
+  const data = await request("/api/vendor/subscriptions/plans/", {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data?.plan || data;
+}
+
+export async function updateVendorSubscriptionPlan(planId, payload) {
+  const data = await request(`/api/vendor/subscriptions/plans/${planId}/`, {
+    method: "PATCH",
+    body: JSON.stringify(payload || {}),
+  });
+  return data?.plan || data;
+}
+
+export async function deleteVendorSubscriptionPlan(planId) {
+  const data = await request(`/api/vendor/subscriptions/plans/${planId}/`, {
+    method: "DELETE",
+  });
+  return data || {};
+}
+
+export async function fetchAdminSubscriptionPlans(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const data = await request(`/api/admin/subscriptions/plans/${query ? `?${query}` : ""}`);
+  return data?.plans || [];
+}
+
+export async function createAdminSubscriptionPlan(payload) {
+  const data = await request("/api/admin/subscriptions/plans/", {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data?.plan || data;
+}
+
+export async function updateAdminSubscriptionPlan(planId, payload) {
+  const data = await request(`/api/admin/subscriptions/plans/${planId}/`, {
+    method: "PATCH",
+    body: JSON.stringify(payload || {}),
+  });
+  return data?.plan || data;
+}
+
+export async function deleteAdminSubscriptionPlan(planId, payload = {}) {
+  const data = await request(`/api/admin/subscriptions/plans/${planId}/`, {
+    method: "DELETE",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
+export async function fetchReferralDashboard() {
+  const data = await request("/api/referral/dashboard/");
+  return data || {};
+}
+
+export async function fetchReferralWalletTransactions(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const data = await request(`/api/referral/wallet/transactions/${query ? `?${query}` : ""}`);
+  return data || {};
+}
+
+export async function previewReferralWalletCheckout(payload) {
+  const data = await request("/api/referral/wallet/preview/", {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data?.preview || data;
+}
+
+export async function fetchAdminReferralControls(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const data = await request(`/api/admin/referrals/${query ? `?${query}` : ""}`);
+  return data || {};
+}
+
+export async function updateAdminReferralPolicy(payload) {
+  const data = await request("/api/admin/referrals/", {
+    method: "PATCH",
+    body: JSON.stringify(payload || {}),
+  });
+  return data?.policy || data;
+}
+
+export async function updateAdminReferralStatus(referralId, payload) {
+  const data = await request(`/api/admin/referrals/${referralId}/status/`, {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data?.referral || data;
+}
+
+export async function fetchUserWallet() {
+  const data = await request("/api/user/wallet/");
+  return data || {};
+}
+
+export async function fetchUserSubscription() {
+  const data = await request("/api/user/subscription/");
+  return data || {};
+}
+
+export async function redeemUserReward(payload) {
+  const data = await request("/api/user/redeem/", {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
+export async function fetchUserVendorOffers(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const data = await request(`/api/user/offers/${query ? `?${query}` : ""}`);
+  return data?.offers || [];
+}
+
+export async function fetchGroupBookingSessions(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const data = await request(`/api/group-booking/sessions/${query ? `?${query}` : ""}`);
+  return data?.sessions || [];
+}
+
+export async function createGroupBookingSession(payload) {
+  const data = await request("/api/group-booking/sessions/", {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
+export async function fetchGroupBookingSession(sessionId) {
+  const data = await request(`/api/group-booking/sessions/${sessionId}/`);
+  return data?.session || data;
+}
+
+export async function fetchGroupBookingSessionByInvite(inviteCode) {
+  const data = await request(`/api/group-booking/invite/${encodeURIComponent(inviteCode)}/`);
+  return data?.session || data;
+}
+
+export async function joinGroupBookingSession(inviteCode, payload = {}) {
+  const data = await request(`/api/group-booking/invite/${encodeURIComponent(inviteCode)}/join/`, {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
+export async function assignGroupBookingSeats(sessionId, payload) {
+  const data = await request(`/api/group-booking/sessions/${sessionId}/assign-seats/`, {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
+export async function applyGroupManualSplit(sessionId, payload) {
+  const data = await request(`/api/group-booking/sessions/${sessionId}/manual-split/`, {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
+export async function initiateGroupBookingPayment(sessionId, payload = {}) {
+  const data = await request(`/api/group-booking/sessions/${sessionId}/payments/initiate/`, {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
+export async function completeGroupBookingPayment(sessionId, paymentId, payload) {
+  const data = await request(
+    `/api/group-booking/sessions/${sessionId}/payments/${paymentId}/complete/`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload || {}),
+    }
+  );
+  return data || {};
+}
+
+export async function dropOutGroupBookingSession(sessionId, payload = {}) {
+  const data = await request(`/api/group-booking/sessions/${sessionId}/drop-out/`, {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
+export async function cancelGroupBookingSession(sessionId, payload = {}) {
+  const data = await request(`/api/group-booking/sessions/${sessionId}/cancel/`, {
     method: "POST",
     body: JSON.stringify(payload || {}),
   });
@@ -442,6 +1207,11 @@ export async function fetchUsersAdmin() {
 export async function fetchAdminBookings() {
   const data = await request("/api/admin/bookings/");
   return data?.bookings || [];
+}
+
+export async function fetchAdminDropoffAnalytics() {
+  const data = await request("/api/admin/analytics/dropoffs/");
+  return data || {};
 }
 
 export async function fetchAdminCoupons() {
@@ -557,12 +1327,28 @@ export async function deleteVendorBooking(bookingId) {
   return data;
 }
 
-export async function validateVendorTicket(reference) {
-  const data = await request("/api/vendor/ticket-validation/scan/", {
-    method: "POST",
-    body: JSON.stringify({ reference }),
-  });
-  return data || {};
+export async function validateVendorTicket(payloadOrReference) {
+  const payload =
+    payloadOrReference && typeof payloadOrReference === "object"
+      ? payloadOrReference
+      : { reference: payloadOrReference };
+  try {
+    const data = await request("/api/vendor/ticket-validation/scan/", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    return data || {};
+  } catch (error) {
+    const payloadData = error?.payload || null;
+    const scanError = new Error(error?.message || "Request failed");
+    scanError.code = String(payloadData?.code || "").trim().toUpperCase();
+    scanError.alert = String(payloadData?.alert || "").trim().toLowerCase();
+    scanError.retryAfterSeconds = Number(payloadData?.retryAfterSeconds || 0);
+    scanError.status = Number(error?.status || 0);
+    scanError.scan = payloadData?.scan || null;
+    scanError.requestId = error?.requestId || "";
+    throw scanError;
+  }
 }
 
 export async function fetchVendorTicketValidationMonitor(params = {}) {
@@ -571,6 +1357,91 @@ export async function fetchVendorTicketValidationMonitor(params = {}) {
     `/api/vendor/ticket-validation/monitor/${query ? `?${query}` : ""}`
   );
   return data || {};
+}
+
+export async function createVendorTicketValidationMonitorExportJob(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const data = await request(
+    `/api/vendor/ticket-validation/monitor/export/jobs/${query ? `?${query}` : ""}`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+      },
+    }
+  );
+
+  return data?.job || data || {};
+}
+
+export async function fetchVendorTicketValidationMonitorExportJob(jobId) {
+  const data = await request(`/api/vendor/ticket-validation/monitor/export/jobs/${jobId}/`, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+    },
+  });
+
+  return data?.job || data || {};
+}
+
+export async function downloadVendorTicketValidationMonitorExportJob(jobId) {
+  const { response, requestId } = await requestBlob(
+    `/api/vendor/ticket-validation/monitor/export/jobs/${jobId}/download/`,
+    {
+      method: "GET",
+      headers: {
+        Accept: "text/csv",
+      },
+    }
+  );
+
+  const disposition = response.headers.get("Content-Disposition") || "";
+  const filenameMatch = disposition.match(/filename="?([^\"]+)"?/i);
+  const filename = filenameMatch?.[1] || "ticket_validation_monitor.csv";
+  const blob = await response.blob();
+  return { blob, filename, requestId };
+}
+
+async function waitForVendorTicketValidationMonitorExportJob(jobId, options = {}) {
+  const timeoutMs = Math.max(Number(options.timeoutMs || MONITOR_EXPORT_TIMEOUT_MS), 1000);
+  const pollIntervalMs = Math.max(
+    Number(options.pollIntervalMs || MONITOR_EXPORT_POLL_INTERVAL_MS),
+    300
+  );
+  const startedAt = Date.now();
+
+  while (true) {
+    const job = await fetchVendorTicketValidationMonitorExportJob(jobId);
+    const statusValue = String(job?.status || "").trim().toUpperCase();
+    if (statusValue === "COMPLETED") {
+      return job;
+    }
+    if (statusValue === "FAILED") {
+      throw new Error(job?.errorMessage || "Monitor CSV export failed.");
+    }
+
+    if (Date.now() - startedAt >= timeoutMs) {
+      throw new Error("Monitor CSV export is taking longer than expected. Please try again shortly.");
+    }
+
+    await delay(pollIntervalMs);
+  }
+}
+
+export async function exportVendorTicketValidationMonitorCsv(params = {}) {
+  const queuedJob = await createVendorTicketValidationMonitorExportJob(params);
+  const jobId = Number(queuedJob?.id || 0);
+  if (!jobId) {
+    throw new Error("Failed to queue monitor CSV export.");
+  }
+
+  const completedJob = await waitForVendorTicketValidationMonitorExportJob(jobId);
+  const { blob, filename } = await downloadVendorTicketValidationMonitorExportJob(jobId);
+  return {
+    blob,
+    filename: filename || completedJob?.filename || "ticket_validation_monitor.csv",
+  };
 }
 
 export async function submitPrivateScreeningRequest(payload) {
@@ -612,30 +1483,21 @@ export async function createVendorBulkTicketBatch(payload) {
 }
 
 export async function exportVendorBulkTicketBatch(batchId) {
-  const response = await fetch(`${API_BASE}/api/vendor/bulk-ticket-batches/${batchId}/export/`, {
-    headers: {
-      ...getAuthHeaders(),
-      Accept: "text/csv",
-    },
-    method: "GET",
-  });
-
-  if (!response.ok) {
-    let message = `Export failed (${response.status})`;
-    try {
-      const payload = await response.json();
-      message = payload?.message || payload?.error || message;
-    } catch {
-      // no-op
+  const { response, requestId } = await requestBlob(
+    `/api/vendor/bulk-ticket-batches/${batchId}/export/`,
+    {
+      method: "GET",
+      headers: {
+        Accept: "text/csv",
+      },
     }
-    throw new Error(message);
-  }
+  );
 
   const disposition = response.headers.get("Content-Disposition") || "";
-  const filenameMatch = disposition.match(/filename="?([^\"]+)"?/i);
+  const filenameMatch = disposition.match(/filename="?([^"]+)"?/i);
   const filename = filenameMatch?.[1] || `bulk_tickets_batch_${batchId}.csv`;
   const blob = await response.blob();
-  return { blob, filename };
+  return { blob, filename, requestId };
 }
 
 export async function fetchVendorStaffAccounts() {

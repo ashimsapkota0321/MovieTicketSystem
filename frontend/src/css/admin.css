@@ -841,6 +841,18 @@
   box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
 }
 
+.admin-movie-poster-preview {
+  margin-top: 10px;
+  width: min(100%, 170px);
+  aspect-ratio: 2 / 3;
+  border-radius: 14px;
+  object-fit: cover;
+  border: 1px solid var(--admin-border);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+  background: #f1f5f9;
+  display: block;
+}
+
 .badge-soft {
   padding: 6px 10px;
   border-radius: 999px;

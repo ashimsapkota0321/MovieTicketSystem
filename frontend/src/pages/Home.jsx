@@ -32,6 +32,10 @@ export default function Home() {
     [movies, showtimes]
   );
   const visibleShows = useMemo(() => {
+    if (moviesWithActiveShows.size === 0) {
+      return getNowShowing(movies, 5).slice(0, 5);
+    }
+
     const fromShows = (showBuckets?.nowShowing || []).filter((movie) => {
       const id = String(movie?.id || "").trim();
       return moviesWithActiveShows.has(id);

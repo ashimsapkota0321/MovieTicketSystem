@@ -153,20 +153,22 @@
   color: #9ca3af;
   cursor: pointer;
   padding: 4px;
+  width: 30px;
+  height: 30px;
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-sm);
-  transition: var(--transition-base);
+  line-height: 1;
 }
 
-.mt-eye-btn:hover {
-  background: #f3f4f6;
-  color: var(--primary);
-}
-
-.mt-eye-btn:active {
-  transform: scale(0.95);
+.mt-eye-btn .material-symbols-outlined {
+  font-size: 20px;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* ==================== REMEMBER & FORGOT ==================== */

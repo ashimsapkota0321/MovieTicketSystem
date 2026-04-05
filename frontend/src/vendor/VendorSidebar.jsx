@@ -10,6 +10,7 @@ import {
   Building2,
   Users,
   Megaphone,
+  Gift,
 } from "lucide-react";
 import logo from "../images/logo.png";
 import { canAccessVendorFeature, isVendorOwner } from "../lib/authSession";
@@ -25,6 +26,13 @@ const navItems = [
     icon: Megaphone,
     to: "/vendor/campaigns-promos",
     feature: "campaigns-promos",
+  },
+  {
+    label: "Offers",
+    icon: Gift,
+    to: "/vendor/offers",
+    feature: "offers",
+    ownerOnly: true,
   },
   { label: "Bookings", icon: Ticket, to: "/vendor/bookings", feature: "bookings" },
   { label: "Corporate & Bulk", icon: Building2, to: "/vendor/corporate-bulk", feature: "corporate-bulk" },

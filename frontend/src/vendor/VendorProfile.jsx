@@ -22,10 +22,10 @@ import {
   getStoredRoleData,
   storeRoleData,
 } from "../lib/authSession";
+import { API_BASE_URL } from "../lib/apiBase";
 
 const STORAGE_KEY = "vendor";
 const UPDATE_EVENT = "mt:vendor-updated";
-const API_BASE_URL = "http://localhost:8000/api";
 
 const EMPTY_PROFILE = {
   name: "",

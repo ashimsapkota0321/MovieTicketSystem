@@ -16,12 +16,22 @@ const seatCategoryOptions = [
   { value: "EXECUTIVE", label: "Executive" },
   { value: "PREMIUM", label: "Premium" },
   { value: "VIP", label: "VIP" },
+  { value: "SILVER", label: "Silver" },
+  { value: "GOLD", label: "Gold" },
+  { value: "PLATINUM", label: "Platinum" },
 ];
 
-const dayTypeOptions = [
+const dayOfWeekOptions = [
   { value: "ALL", label: "All Days" },
   { value: "WEEKDAY", label: "Weekday" },
   { value: "WEEKEND", label: "Weekend" },
+  { value: "MON", label: "Monday" },
+  { value: "TUE", label: "Tuesday" },
+  { value: "WED", label: "Wednesday" },
+  { value: "THU", label: "Thursday" },
+  { value: "FRI", label: "Friday" },
+  { value: "SAT", label: "Saturday" },
+  { value: "SUN", label: "Sunday" },
 ];
 
 const adjustmentTypeOptions = [
@@ -37,6 +47,12 @@ function defaultFormValue() {
     movie_id: "",
     hall: "",
     seat_category: "ALL",
+    day_of_week: "ALL",
+    start_time: "",
+    end_time: "",
+    occupancy_threshold: "",
+    price_multiplier: "",
+    flat_adjustment: "",
     day_type: "ALL",
     is_festival_pricing: false,
     festival_name: "",
@@ -50,7 +66,7 @@ function defaultFormValue() {
 }
 
 export default function VendorPricingRules() {
-  const ctx = safeUseAppContext();
+  const ctx = useSafeAppContext();
   const movies = useMemo(() => (Array.isArray(ctx?.movies) ? ctx.movies : []), [ctx?.movies]);
   const shows = useMemo(() => (Array.isArray(ctx?.showtimes) ? ctx.showtimes : []), [ctx?.showtimes]);
 
@@ -205,6 +221,13 @@ export default function VendorPricingRules() {
       movie_id: rule.movie_id ? String(rule.movie_id) : "",
       hall: String(rule.hall || ""),
       seat_category: String(rule.seat_category || "ALL").toUpperCase(),
+      day_of_week: String(rule.day_of_week || rule.day_type || "ALL").toUpperCase(),
+      start_time: String(rule.start_time || ""),
+      end_time: String(rule.end_time || ""),
+      occupancy_threshold:
+        rule.occupancy_threshold == null ? "" : String(rule.occupancy_threshold),
+      price_multiplier: rule.price_multiplier == null ? "" : String(rule.price_multiplier),
+      flat_adjustment: rule.flat_adjustment == null ? "" : String(rule.flat_adjustment),
       day_type: String(rule.day_type || "ALL").toUpperCase(),
       is_festival_pricing: Boolean(rule.is_festival_pricing),
       festival_name: String(rule.festival_name || ""),
@@ -221,12 +244,26 @@ export default function VendorPricingRules() {
 
   const buildPayload = () => {
     const adjustmentValue = Number(form.adjustment_value);
+    const occupancyThreshold = Number(form.occupancy_threshold);
+    const priceMultiplier = Number(form.price_multiplier);
+    const flatAdjustment = Number(form.flat_adjustment);
     const payload = {
       name: String(form.name || "").trim(),
       movie_id: form.movie_id ? Number(form.movie_id) : null,
       hall: String(form.hall || "").trim() || null,
       seat_category: form.seat_category,
-      day_type: form.day_type,
+      day_of_week: form.day_of_week,
+      start_time: form.start_time || null,
+      end_time: form.end_time || null,
+      occupancy_threshold: Number.isFinite(occupancyThreshold) ? occupancyThreshold : null,
+      price_multiplier: Number.isFinite(priceMultiplier) ? priceMultiplier : null,
+      flat_adjustment: Number.isFinite(flatAdjustment) ? flatAdjustment : null,
+      day_type:
+        form.day_of_week === "WEEKDAY"
+          ? "WEEKDAY"
+          : form.day_of_week === "WEEKEND"
+            ? "WEEKEND"
+            : "ALL",
       is_festival_pricing: Boolean(form.is_festival_pricing),
       festival_name: String(form.festival_name || "").trim() || null,
       start_date: form.start_date || null,
@@ -254,8 +291,18 @@ export default function VendorPricingRules() {
       setError("Rule name is required.");
       return;
     }
-    if (payload.adjustment_value === null || payload.adjustment_value < 0) {
-      setError("Adjustment value must be a valid non-negative number.");
+    const hasModernAdjustment =
+      payload.price_multiplier !== null || payload.flat_adjustment !== null;
+    if (!hasModernAdjustment && payload.adjustment_value === null) {
+      setError("Provide price multiplier, flat adjustment, or a legacy adjustment value.");
+      return;
+    }
+    if (payload.occupancy_threshold !== null && (payload.occupancy_threshold < 0 || payload.occupancy_threshold > 100)) {
+      setError("Occupancy threshold must be between 0 and 100.");
+      return;
+    }
+    if (payload.price_multiplier !== null && payload.price_multiplier <= 0) {
+      setError("Price multiplier must be greater than 0.");
       return;
     }
 
@@ -279,7 +326,7 @@ export default function VendorPricingRules() {
   };
 
   const handleDelete = async (rule) => {
-    const confirmDelete = window.confirm(`Delete pricing rule \"${rule.name}\"?`);
+    const confirmDelete = window.confirm(`Delete pricing rule "${rule.name}"?`);
     if (!confirmDelete) return;
 
     setError("");
@@ -484,18 +531,77 @@ export default function VendorPricingRules() {
             </label>
 
             <label className="form-label">
-              Day Type
+              Day Of Week
               <select
                 className="form-select"
-                value={form.day_type}
-                onChange={(event) => setForm((prev) => ({ ...prev, day_type: event.target.value }))}
+                value={form.day_of_week}
+                onChange={(event) => setForm((prev) => ({ ...prev, day_of_week: event.target.value }))}
               >
-                {dayTypeOptions.map((option) => (
+                {dayOfWeekOptions.map((option) => (
                   <option key={option.value} value={option.value}>
                     {option.label}
                   </option>
                 ))}
               </select>
+            </label>
+
+            <label className="form-label">
+              Start Time
+              <input
+                className="form-control"
+                type="time"
+                value={form.start_time}
+                onChange={(event) => setForm((prev) => ({ ...prev, start_time: event.target.value }))}
+              />
+            </label>
+
+            <label className="form-label">
+              End Time
+              <input
+                className="form-control"
+                type="time"
+                value={form.end_time}
+                onChange={(event) => setForm((prev) => ({ ...prev, end_time: event.target.value }))}
+              />
+            </label>
+
+            <label className="form-label">
+              Occupancy Threshold (%)
+              <input
+                className="form-control"
+                type="number"
+                min="0"
+                max="100"
+                step="0.01"
+                value={form.occupancy_threshold}
+                onChange={(event) => setForm((prev) => ({ ...prev, occupancy_threshold: event.target.value }))}
+                placeholder="e.g. 70"
+              />
+            </label>
+
+            <label className="form-label">
+              Price Multiplier
+              <input
+                className="form-control"
+                type="number"
+                min="0"
+                step="0.0001"
+                value={form.price_multiplier}
+                onChange={(event) => setForm((prev) => ({ ...prev, price_multiplier: event.target.value }))}
+                placeholder="e.g. 1.2"
+              />
+            </label>
+
+            <label className="form-label">
+              Flat Adjustment (NPR)
+              <input
+                className="form-control"
+                type="number"
+                step="0.01"
+                value={form.flat_adjustment}
+                onChange={(event) => setForm((prev) => ({ ...prev, flat_adjustment: event.target.value }))}
+                placeholder="e.g. +50 or -30"
+              />
             </label>
 
             <label className="form-label">
@@ -518,12 +624,10 @@ export default function VendorPricingRules() {
               <input
                 className="form-control"
                 type="number"
-                min="0"
                 step="0.01"
                 value={form.adjustment_value}
                 onChange={(event) => setForm((prev) => ({ ...prev, adjustment_value: event.target.value }))}
-                placeholder="e.g. 50"
-                required
+                placeholder="Legacy fallback value"
               />
             </label>
 
@@ -642,12 +746,27 @@ export default function VendorPricingRules() {
               {rules.map((rule) => {
                 const movieTitle = rule.movie_id ? movieMap.get(String(rule.movie_id)) || `Movie #${rule.movie_id}` : "All Movies";
                 const trigger = [
-                  rule.day_type || "ALL",
+                  rule.day_of_week || rule.day_type || "ALL",
+                  rule.start_time && rule.end_time ? `${rule.start_time}-${rule.end_time}` : null,
+                  rule.occupancy_threshold != null ? `Occ ${Number(rule.occupancy_threshold).toFixed(2)}%` : null,
                   rule.seat_category || "ALL",
                   rule.is_festival_pricing ? rule.festival_name || "Festival" : null,
                 ]
                   .filter(Boolean)
                   .join(" / ");
+                const adjustmentParts = [
+                  rule.price_multiplier != null
+                    ? `x${Number(rule.price_multiplier).toFixed(4)}`
+                    : null,
+                  rule.flat_adjustment != null
+                    ? `${Number(rule.flat_adjustment) >= 0 ? "+" : ""}NPR ${Number(rule.flat_adjustment).toFixed(2)}`
+                    : null,
+                  rule.adjustment_value != null && rule.price_multiplier == null && rule.flat_adjustment == null
+                    ? `${rule.adjustment_type}: ${Number(rule.adjustment_value).toFixed(2)}`
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(" | ");
 
                 return (
                   <tr key={rule.id}>
@@ -658,7 +777,7 @@ export default function VendorPricingRules() {
                     </td>
                     <td>{trigger}</td>
                     <td>
-                      {rule.adjustment_type} : {Number(rule.adjustment_value || 0).toFixed(2)}
+                      {adjustmentParts || "-"}
                     </td>
                     <td>{rule.priority}</td>
                     <td>
@@ -697,7 +816,7 @@ export default function VendorPricingRules() {
   );
 }
 
-function safeUseAppContext() {
+function useSafeAppContext() {
   try {
     return useAppContext();
   } catch {

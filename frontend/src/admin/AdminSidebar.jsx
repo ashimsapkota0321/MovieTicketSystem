@@ -12,6 +12,9 @@ import {
   Clapperboard,
   Image,
   PlayCircle,
+  Gift,
+  Crown,
+  Wallet,
 } from "lucide-react";
 import logo from "../images/logo.png";
 
@@ -26,6 +29,9 @@ const navItems = [
   { label: "Manage Trailers", icon: PlayCircle, to: "/admin/trailers" },
   { label: "Manage Bookings", icon: Ticket, to: "/admin/bookings" },
   { label: "Manage Coupons", icon: Percent, to: "/admin/coupons" },
+  { label: "Loyalty Rules", icon: Gift, to: "/admin/loyalty" },
+  { label: "Subscriptions", icon: Crown, to: "/admin/subscriptions" },
+  { label: "Referrals", icon: Wallet, to: "/admin/referrals" },
   { label: "View Reports", icon: BarChart3, to: "/admin/reports" },
 ];
 

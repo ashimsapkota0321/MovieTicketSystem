@@ -21,6 +21,7 @@ import {
   storeRoleData,
 } from "../lib/authSession";
 import { fetchCustomerBookingHistory } from "../lib/catalogApi";
+import { API_BASE_URL } from "../lib/apiBase";
 
 const EMPTY_PROFILE = {
   first_name: "",
@@ -87,8 +88,6 @@ const revokePreviewUrl = (url) => {
     URL.revokeObjectURL(url);
   }
 };
-
-const API_BASE_URL = "http://localhost:8000/api";
 
 const buildUpdatePayload = (profile) => {
   const payload = {};

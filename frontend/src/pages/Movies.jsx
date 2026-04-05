@@ -6,10 +6,6 @@ import { useAppContext } from "../context/Appcontext";
 import HeroSlider from "../components/HeroSlider";
 import NowShowingCard from "../components/NowShowingCard";
 import { getComingSoon, getNowShowing, resolveMoviesByShowListing } from "../lib/showUtils";
-import gharjwai from "../images/gharjwai.jpg";
-import balidan from "../images/balidan.jpg";
-import degreemaila from "../images/degreemaila.jpg";
-import avengers from "../images/avengers.jpg";
 
 export default function Movies() {
   const navigate = useNavigate();
@@ -34,25 +30,28 @@ export default function Movies() {
   }, [showtimes]);
 
   // Filter movies to only those with active shows
+  const hasActiveShowtimes = moviesWithActiveShows.size > 0;
+
   const moviesWithShows = useMemo(() => {
+    if (!hasActiveShowtimes) return movies;
     return movies.filter((movie) => {
       const id = String(movie?.id || "").trim();
       return moviesWithActiveShows.has(id);
     });
-  }, [movies, moviesWithActiveShows]);
+  }, [movies, moviesWithActiveShows, hasActiveShowtimes]);
 
   const showBuckets = useMemo(
     () => resolveMoviesByShowListing(moviesWithShows, showtimes),
     [moviesWithShows, showtimes]
   );
   const nowShowing = useMemo(() => {
-    if (showBuckets.nowShowing.length) return showBuckets.nowShowing;
-    return getNowShowing(moviesWithShows);
-  }, [showBuckets, moviesWithShows]);
+    if (!hasActiveShowtimes) return getNowShowing(moviesWithShows);
+    return showBuckets.nowShowing;
+  }, [showBuckets, moviesWithShows, hasActiveShowtimes]);
   const comingSoon = useMemo(() => {
-    if (showBuckets.comingSoon.length) return showBuckets.comingSoon;
-    return getComingSoon(moviesWithShows);
-  }, [showBuckets, moviesWithShows]);
+    if (!hasActiveShowtimes) return getComingSoon(moviesWithShows);
+    return showBuckets.comingSoon;
+  }, [showBuckets, moviesWithShows, hasActiveShowtimes]);
   useEffect(() => {
     if (location?.state?.filter) {
       setActiveTab(location.state.filter === "soon" ? "soon" : "now");
@@ -110,18 +109,22 @@ export default function Movies() {
         <section className="wf2-container wf2-section movies-nowshowing" id="now-showing">
           <div className="wf2-constrained">
             <div className="ns-grid">
-              {nowShowing.map((movie) => (
-                <NowShowingCard
-                  key={movie._id || movie.id || movie.title}
-                  movie={movie}
-                  onBuy={() =>
-                    navigate(
-                      `/movie/${movie?._id || movie?.id || encodeURIComponent(movie?.title || movie?.name || "")}`,
-                      { state: { movie } }
-                    )
-                  }
-                />
-              ))}
+              {nowShowing.length ? (
+                nowShowing.map((movie) => (
+                  <NowShowingCard
+                    key={movie._id || movie.id || movie.title}
+                    movie={movie}
+                    onBuy={() =>
+                      navigate(
+                        `/movie/${movie?._id || movie?.id || encodeURIComponent(movie?.title || movie?.name || "")}`,
+                        { state: { movie } }
+                      )
+                    }
+                  />
+                ))
+              ) : (
+                <div className="text-muted">No now showing shows for this location.</div>
+              )}
             </div>
           </div>
         </section>
@@ -145,18 +148,7 @@ export default function Movies() {
                   />
                 ))
               ) : (
-                fallbackShows.slice(0, 6).map((movie) => (
-                  <NowShowingCard
-                    key={movie._id || movie.id || movie.title}
-                    movie={movie}
-                    onBuy={() =>
-                      navigate(
-                        `/movie/${movie?._id || movie?.id || encodeURIComponent(movie?.title || movie?.name || "")}`,
-                        { state: { movie, variant: "soon" } }
-                      )
-                    }
-                  />
-                ))
+                <div className="text-muted">No coming soon shows for this location.</div>
               )}
             </div>
           </div>
@@ -173,18 +165,3 @@ function safeUseAppContext() {
     return null;
   }
 }
-
-const fallbackShows = [
-  { _id: "1", title: "Gharjwai", poster: gharjwai },
-  { _id: "2", title: "Balidan", poster: balidan },
-  { _id: "3", title: "Degree Maila", poster: degreemaila },
-  { _id: "4", title: "Avengers", poster: avengers },
-  { _id: "5", title: "Gharjwai 2", poster: gharjwai },
-  { _id: "6", title: "Balidan 2", poster: balidan },
-  { _id: "7", title: "Degree Maila 2", poster: degreemaila },
-  { _id: "8", title: "Avengers 2", poster: avengers },
-  { _id: "9", title: "Gharjwai 3", poster: gharjwai },
-  { _id: "10", title: "Balidan 3", poster: balidan },
-  { _id: "11", title: "Degree Maila 3", poster: degreemaila },
-  { _id: "12", title: "Avengers 3", poster: avengers },
-];

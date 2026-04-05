@@ -7,8 +7,8 @@ import ConfirmModal from "./components/ConfirmModal";
 import { vendors as seedVendors } from "./data";
 import { useAdminToast } from "./AdminToastContext";
 import { getAuthHeaders } from "../lib/authSession";
+import { API_BASE_URL } from "../lib/apiBase";
 
-const API_BASE_URL = "http://localhost:8000/api";
 const INITIAL_FORM = {
   name: "",
   email: "",

@@ -101,8 +101,6 @@ export default function Header() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [adultConfirmOpen, setAdultConfirmOpen] = useState(false);
   const [pendingBookingState, setPendingBookingState] = useState(null);
-  const [dismissedNoticeIds, setDismissedNoticeIds] = useState(() => readDismissedNoticeIds());
-  const [showNoticePopup, setShowNoticePopup] = useState(false);
   const isCinemaSelected = Boolean(selectedCinemaId);
   const isMovieSelected = Boolean(selectedMovieId);
   const isDateSelected = Boolean(selectedDate);
@@ -191,16 +189,6 @@ export default function Header() {
   }, [searchResults, activeSearchGenre]);
 
   const shouldShowSearchPanel = searchOpen && Boolean(normalizedSearchTerm);
-  const popupNotification = useMemo(() => {
-    const unread = notifications.filter((item) => !item?.is_read);
-    if (!unread.length) return null;
-    return (
-      unread.find(
-        (item) => String(item?.event_type || "").trim().toUpperCase() === "MARKETING_CAMPAIGN"
-      ) || unread[0]
-    );
-  }, [notifications]);
-
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 16);
     window.addEventListener("scroll", onScroll, { passive: true });
@@ -487,21 +475,6 @@ export default function Header() {
     };
   }, [user, path]);
 
-  useEffect(() => {
-    if (!user || !popupNotification || path.startsWith("/notifications")) {
-      setShowNoticePopup(false);
-      return;
-    }
-
-    const noticeId = Number(popupNotification?.id || 0);
-    if (noticeId > 0 && dismissedNoticeIds.includes(noticeId)) {
-      setShowNoticePopup(false);
-      return;
-    }
-
-    setShowNoticePopup(true);
-  }, [user, popupNotification, dismissedNoticeIds, path]);
-
   const matchedShowId = useMemo(() => {
     if (!selectedCinemaId || !selectedMovieId || !selectedDate || !selectedTime) {
       return null;
@@ -575,16 +548,6 @@ export default function Header() {
       window.dispatchEvent(new Event("mt:user-updated"));
     }
     navigate("/login");
-  };
-
-  const dismissNoticePopup = () => {
-    const noticeId = Number(popupNotification?.id || 0);
-    if (noticeId > 0) {
-      const next = Array.from(new Set([...dismissedNoticeIds, noticeId]));
-      setDismissedNoticeIds(next);
-      writeDismissedNoticeIds(next);
-    }
-    setShowNoticePopup(false);
   };
 
   const navigateToBookingState = (bookingState) => {
@@ -936,6 +899,48 @@ export default function Header() {
                 <button
                   className="wf2-navMenuItem"
                   type="button"
+                  onClick={() => navigate("/group-booking/new")}
+                >
+                  GROUP BOOKINGS
+                </button>
+                <button
+                  className="wf2-navMenuItem"
+                  type="button"
+                  onClick={() => navigate("/loyalty/dashboard")}
+                >
+                  LOYALTY DASHBOARD
+                </button>
+                <button
+                  className="wf2-navMenuItem"
+                  type="button"
+                  onClick={() => navigate("/subscriptions/dashboard")}
+                >
+                  MEMBERSHIP
+                </button>
+                <button
+                  className="wf2-navMenuItem"
+                  type="button"
+                  onClick={() => navigate("/subscriptions/plans")}
+                >
+                  MEMBERSHIP PLANS
+                </button>
+                <button
+                  className="wf2-navMenuItem"
+                  type="button"
+                  onClick={() => navigate("/loyalty/rewards")}
+                >
+                  REWARDS
+                </button>
+                <button
+                  className="wf2-navMenuItem"
+                  type="button"
+                  onClick={() => navigate("/referral/wallet")}
+                >
+                  REFERRAL WALLET
+                </button>
+                <button
+                  className="wf2-navMenuItem"
+                  type="button"
                   onClick={() => navigate("/notifications")}
                 >
                   NOTIFICATIONS
@@ -953,52 +958,36 @@ export default function Header() {
         )}
       </div>
 
-      {showNoticePopup && popupNotification ? (
-        <div
-          className="wf2-noticeOverlay"
-          role="dialog"
-          aria-modal="true"
-          aria-label="New notice"
-          onClick={dismissNoticePopup}
+      <nav className="wf2-mobileNavTabs" aria-label="Mobile quick navigation">
+        <button
+          type="button"
+          className={`wf2-mobileNavTab ${isActive(path, "/") ? "wf2-mobileNavTabActive" : ""}`}
+          onClick={() => navigate("/")}
         >
-          <div className="wf2-noticeModal" onClick={(event) => event.stopPropagation()}>
-            <button
-              type="button"
-              className="wf2-noticeClose"
-              onClick={dismissNoticePopup}
-              aria-label="Close notice"
-            >
-              x
-            </button>
-            <div className="wf2-noticeType">{formatNotificationType(popupNotification?.event_type)}</div>
-            <h3 className="wf2-noticeTitle">
-              {popupNotification?.title || "New notification"}
-            </h3>
-            <p className="wf2-noticeMessage">
-              {popupNotification?.message || "Please check your latest notice."}
-            </p>
-            <div className="wf2-noticeActions">
-              <button
-                type="button"
-                className="wf2-noticeActionPrimary"
-                onClick={() => {
-                  dismissNoticePopup();
-                  navigate("/notifications");
-                }}
-              >
-                View details
-              </button>
-              <button
-                type="button"
-                className="wf2-noticeActionGhost"
-                onClick={dismissNoticePopup}
-              >
-                Later
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+          Home
+        </button>
+        <button
+          type="button"
+          className={`wf2-mobileNavTab ${path.startsWith("/movie") ? "wf2-mobileNavTabActive" : ""}`}
+          onClick={() => navigate("/movies")}
+        >
+          Movies
+        </button>
+        <button
+          type="button"
+          className={`wf2-mobileNavTab ${isActive(path, "/schedules") ? "wf2-mobileNavTabActive" : ""}`}
+          onClick={() => navigate("/schedules")}
+        >
+          Schedules
+        </button>
+        <button
+          type="button"
+          className={`wf2-mobileNavTab ${isActive(path, "/cinemas") ? "wf2-mobileNavTabActive" : ""}`}
+          onClick={() => navigate("/cinemas")}
+        >
+          Cinemas
+        </button>
+      </nav>
 
       <AdultWarningModal
         open={adultConfirmOpen}
@@ -1251,37 +1240,6 @@ function normalizeClockTime(value) {
   if (Number.isNaN(hour) || Number.isNaN(minute)) return "";
   if (ampm[3] === "PM") hour += 12;
   return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
-}
-
-function formatNotificationType(eventType) {
-  const key = String(eventType || "").trim().toUpperCase();
-  if (key === "MARKETING_CAMPAIGN") return "NEW OFFER";
-  if (key === "NEW_BOOKING") return "BOOKING";
-  if (key === "PAYMENT_SUCCESS") return "PAYMENT";
-  if (key === "SHOW_UPDATE") return "SHOW";
-  return "NOTICE";
-}
-
-function readDismissedNoticeIds() {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.sessionStorage.getItem("mt_notice_dismissed_ids");
-    const parsed = JSON.parse(raw || "[]");
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map((item) => Number(item))
-      .filter((item) => Number.isInteger(item) && item > 0);
-  } catch {
-    return [];
-  }
-}
-
-function writeDismissedNoticeIds(ids) {
-  if (typeof window === "undefined") return;
-  const safeIds = Array.isArray(ids)
-    ? ids.filter((item) => Number.isInteger(item) && item > 0)
-    : [];
-  window.sessionStorage.setItem("mt_notice_dismissed_ids", JSON.stringify(safeIds));
 }
 
 function isActive(path, target) {

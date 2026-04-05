@@ -6,11 +6,12 @@ import "../css/seatSelection.css";
 
 import { useAppContext } from "../context/Appcontext";
 import {
-  createBookingResumeNotification,
+  calculateBookingTicketPrice,
   fetchFoodItemsByVendor,
   releaseBookingSeats,
   reserveBookingSeats,
 } from "../lib/catalogApi";
+import { API_BASE } from "../lib/apiBase";
 import gharjwai from "../images/gharjwai.jpg";
 import avengers from "../images/avengers.jpg";
 import degreemaila from "../images/degreemaila.jpg";
@@ -24,8 +25,8 @@ const defaultSeatGroups = [
 ];
 const defaultSeatCols = Array.from({ length: 15 }, (_, i) => i + 1);
 const MAX_SELECTION = 5;
-const API_BASE =
-  import.meta.env.VITE_BASE_URL?.replace(/\/$/, "") || "http://localhost:8000";
+const DEFAULT_SEAT_LOCK_HOLD_SECONDS = 10 * 60;
+const SEAT_LOCK_WARNING_SECONDS = 60;
 
 export default function SeatSelection() {
   const navigate = useNavigate();
@@ -106,7 +107,17 @@ export default function SeatSelection() {
   const [toastVisible, setToastVisible] = useState(false);
   const toastTimerRef = useRef(null);
   const toastHideRef = useRef(null);
-  const [ticketCounts, setTicketCounts] = useState({ senior: 0, child: 0 });
+  const [pricingPreview, setPricingPreview] = useState(null);
+  const [pricingLoading, setPricingLoading] = useState(false);
+  const [pricingError, setPricingError] = useState("");
+  const [priceLock, setPriceLock] = useState(null);
+  const [seatHoldSeconds, setSeatHoldSeconds] = useState(
+    DEFAULT_SEAT_LOCK_HOLD_SECONDS
+  );
+  const [seatLockBySeat, setSeatLockBySeat] = useState({});
+  const [seatLockSecondsLeft, setSeatLockSecondsLeft] = useState(0);
+  const [seatLockTimedOut, setSeatLockTimedOut] = useState(false);
+  const [queuedToastMessage, setQueuedToastMessage] = useState("");
   const [soldSeatSet, setSoldSeatSet] = useState(() => new Set());
   const [unavailableSeatSet, setUnavailableSeatSet] = useState(() => new Set());
   const [reservedSeatSet, setReservedSeatSet] = useState(() => new Set());
@@ -116,6 +127,9 @@ export default function SeatSelection() {
   const [proceeding, setProceeding] = useState(false);
   const selectedSeatsRef = useRef([]);
   const skipReleaseOnUnmountRef = useRef(false);
+  const pendingSeatSetRef = useRef(new Set());
+  const seatLockBySeatRef = useRef({});
+  const seatLockExpiryHandledRef = useRef(false);
 
   const title = displayMovie?.title || displayMovie?.name || "Hami Teen Bhai";
   const poster =
@@ -125,14 +139,14 @@ export default function SeatSelection() {
     gharjwai;
   const seatSubtitle = "2h 10m | Action, Comedy | May 2018 | UA 13+";
   const totalSeats = selectedSeats.length;
-  const adultCount = Math.max(totalSeats - ticketCounts.senior - ticketCounts.child, 0);
-  const prices = { adult: 250, senior: 200, child: 150 };
-  const totalPrice =
-    adultCount * prices.adult +
-    ticketCounts.senior * prices.senior +
-    ticketCounts.child * prices.child;
-  const basePrice = totalSeats * prices.adult;
-  const discount = Math.max(basePrice - totalPrice, 0);
+  const totalPrice = Number(pricingPreview?.total || pricingPreview?.subtotal || 0);
+  const dynamicBaseSubtotal = Number(pricingPreview?.breakdown?.base_subtotal || 0);
+  const dynamicRuleAdjustment = Number(pricingPreview?.breakdown?.rule_adjustment || 0);
+  const dynamicOccupancyAdjustment = Number(pricingPreview?.breakdown?.occupancy_adjustment || 0);
+  const dynamicByCategory =
+    pricingPreview && typeof pricingPreview.dynamic_by_category === "object"
+      ? pricingPreview.dynamic_by_category
+      : {};
   const selectedShow = useMemo(
     () =>
       selectedShowState ||
@@ -204,6 +218,71 @@ export default function SeatSelection() {
     () => [...selectedSeats].sort((a, b) => seatSortKey(a) - seatSortKey(b)),
     [selectedSeats]
   );
+  const activeSeatLockDeadline = useMemo(() => {
+    if (!selectedSeatLabels.length) return null;
+    const lockDeadlines = selectedSeatLabels
+      .map((seat) => seatLockBySeat[normalizeSeatLabel(seat)])
+      .filter((value) => Number.isFinite(value));
+    if (!lockDeadlines.length) return null;
+    return Math.min(...lockDeadlines);
+  }, [selectedSeatLabels, seatLockBySeat]);
+  const seatLockInWarning =
+    seatLockSecondsLeft > 0 && seatLockSecondsLeft <= SEAT_LOCK_WARNING_SECONDS;
+  const seatLockTimerLabel = activeSeatLockDeadline
+    ? formatCountdown(seatLockSecondsLeft)
+    : "Syncing...";
+
+  const refreshDynamicPricing = useCallback(async () => {
+    if (
+      !bookingMovieId ||
+      !bookingCinemaId ||
+      !bookingDateValue ||
+      !bookingTimeValue ||
+      !selectedSeatLabels.length
+    ) {
+      setPricingPreview(null);
+      setPricingError("");
+      setPriceLock(null);
+      return;
+    }
+
+    setPricingLoading(true);
+    setPricingError("");
+    try {
+      const payload = buildBookingPayload(
+        bookingMovieId,
+        bookingCinemaId,
+        bookingDateValue,
+        bookingTimeValue,
+        bookingShowId,
+        bookingHall,
+        selectedSeatLabels
+      );
+      payload.lock_price = true;
+
+      const response = await calculateBookingTicketPrice(payload);
+      setPricingPreview(response || null);
+      setPriceLock(response?.price_lock || null);
+    } catch (error) {
+      setPricingPreview(null);
+      setPriceLock(null);
+      setPricingError(error?.message || "Unable to calculate dynamic ticket price.");
+    } finally {
+      setPricingLoading(false);
+    }
+  }, [
+    bookingMovieId,
+    bookingCinemaId,
+    bookingDateValue,
+    bookingTimeValue,
+    bookingShowId,
+    bookingHall,
+    selectedSeatLabels,
+  ]);
+
+  useEffect(() => {
+    refreshDynamicPricing();
+  }, [refreshDynamicPricing]);
 
   const applySeatPayload = useCallback((data) => {
     const groups = Array.isArray(data?.seat_groups) && data.seat_groups.length
@@ -240,19 +319,140 @@ export default function SeatSelection() {
     const nextReservedSet = new Set(
       reservedSeats.map((seat) => normalizeSeatLabel(seat)).filter(Boolean)
     );
+    const nextReservedSeatLocks = parseSeatLockDeadlines(data?.reserved_seat_locks);
+    const holdMinutes = Number(data?.reservation_hold_minutes);
+
+    if (Number.isFinite(holdMinutes) && holdMinutes > 0) {
+      setSeatHoldSeconds(Math.max(30, Math.round(holdMinutes * 60)));
+    }
+
+    const currentSelected = Array.isArray(selectedSeatsRef.current)
+      ? selectedSeatsRef.current
+      : [];
+    const currentSelectedLabels = currentSelected
+      .map((seat) => normalizeSeatLabel(seat))
+      .filter(Boolean);
+    const pendingLabels = new Set(
+      Array.from(pendingSeatSetRef.current || [])
+        .map((seat) => normalizeSeatLabel(seat))
+        .filter(Boolean)
+    );
+
+    const timedOutLabels = [];
+    for (const label of currentSelectedLabels) {
+      if (nextSoldSet.has(label) || nextUnavailableSet.has(label)) {
+        continue;
+      }
+      if (nextReservedSet.has(label)) {
+        continue;
+      }
+      if (pendingLabels.has(label)) {
+        continue;
+      }
+      timedOutLabels.push(label);
+    }
+
+    if (timedOutLabels.length) {
+      const seatText = formatSeatLabelList(timedOutLabels);
+      setSeatLockTimedOut(true);
+      setPriceLock(null);
+      setQueuedToastMessage(
+        `Seat hold expired for ${seatText}. Please reselect to continue.`
+      );
+    }
 
     setDynamicSeatGroups(uniqueGroups);
     setDynamicSeatCols(columns.length ? columns : defaultSeatCols);
     setSoldSeatSet(nextSoldSet);
     setUnavailableSeatSet(nextUnavailableSet);
     setReservedSeatSet(nextReservedSet);
+    setSeatLockBySeat((prev) => {
+      const nowMs = Date.now();
+      const next = {};
+      const selectedLabelSet = new Set(currentSelectedLabels);
+      for (const label of selectedLabelSet) {
+        const fromServer = nextReservedSeatLocks[label];
+        const existing = prev[label];
+        const candidate = Number.isFinite(fromServer)
+          ? fromServer
+          : Number.isFinite(existing)
+            ? existing
+            : null;
+        if (Number.isFinite(candidate) && candidate > nowMs) {
+          next[label] = candidate;
+        }
+      }
+      return next;
+    });
     setSelectedSeats((prev) =>
       prev.filter((seat) => {
         const label = normalizeSeatLabel(seat);
-        return !nextSoldSet.has(label) && !nextUnavailableSet.has(label);
+        if (nextSoldSet.has(label) || nextUnavailableSet.has(label)) {
+          return false;
+        }
+        return nextReservedSet.has(label);
       })
     );
   }, []);
+
+  const releaseExpiredSeatLocks = useCallback(
+    async (expiredSeats) => {
+      const normalizedSeats = Array.from(
+        new Set(
+          (Array.isArray(expiredSeats) ? expiredSeats : [])
+            .map((seat) => normalizeSeatLabel(seat))
+            .filter(Boolean)
+        )
+      ).sort((a, b) => seatSortKey(a) - seatSortKey(b));
+      if (!normalizedSeats.length) return;
+
+      const expiredSet = new Set(normalizedSeats);
+      setSelectedSeats((prev) =>
+        prev.filter((seat) => !expiredSet.has(normalizeSeatLabel(seat)))
+      );
+      setSeatLockBySeat((prev) => {
+        const next = { ...prev };
+        for (const seat of normalizedSeats) {
+          delete next[seat];
+        }
+        return next;
+      });
+      setSeatLockTimedOut(true);
+      setPriceLock(null);
+      setQueuedToastMessage(
+        `Seat hold expired for ${formatSeatLabelList(normalizedSeats)}. Please reselect to continue.`
+      );
+
+      if (!bookingMovieId || !bookingCinemaId || !bookingDateValue || !bookingTimeValue) {
+        return;
+      }
+
+      try {
+        const payload = buildBookingPayload(
+          bookingMovieId,
+          bookingCinemaId,
+          bookingDateValue,
+          bookingTimeValue,
+          bookingShowId,
+          bookingHall,
+          normalizedSeats
+        );
+        const data = await releaseBookingSeats(payload);
+        applySeatPayload(data);
+      } catch {
+        // Seat lock already expired server-side; no further action is required.
+      }
+    },
+    [
+      applySeatPayload,
+      bookingMovieId,
+      bookingCinemaId,
+      bookingDateValue,
+      bookingTimeValue,
+      bookingShowId,
+      bookingHall,
+    ]
+  );
 
   const dismissToast = () => {
     setToastOpen(false);
@@ -284,6 +484,12 @@ export default function SeatSelection() {
     }, 3000);
   };
 
+  useEffect(() => {
+    if (!queuedToastMessage) return;
+    showToast(queuedToastMessage);
+    setQueuedToastMessage("");
+  }, [queuedToastMessage, showToast]);
+
   useEffect(() => () => {
     if (toastTimerRef.current) {
       clearTimeout(toastTimerRef.current);
@@ -304,22 +510,14 @@ export default function SeatSelection() {
     return () => window.removeEventListener("scroll", handleScroll);
   }, [toastVisible]);
 
-  useEffect(() => {
-    setTicketCounts((prev) => {
-      if (totalSeats === 0) {
-        return { senior: 0, child: 0 };
-      }
-      const senior = Math.min(prev.senior, totalSeats);
-      const child = Math.min(prev.child, totalSeats - senior);
-      return { senior, child };
-    });
-  }, [totalSeats]);
-
   const fetchSeatLayout = useCallback(async () => {
     if (!bookingMovieId || !bookingCinemaId || !bookingDateValue || !bookingTimeValue) {
       setSoldSeatSet(new Set());
       setUnavailableSeatSet(new Set());
       setReservedSeatSet(new Set());
+      setSeatLockBySeat({});
+      setSeatLockSecondsLeft(0);
+      setSeatLockTimedOut(false);
       setDynamicSeatGroups(defaultSeatGroups);
       setDynamicSeatCols(defaultSeatCols);
       return;
@@ -367,6 +565,8 @@ export default function SeatSelection() {
         setSoldSeatSet(new Set());
         setUnavailableSeatSet(new Set());
         setReservedSeatSet(new Set());
+        setSeatLockBySeat({});
+        setSeatLockSecondsLeft(0);
         setDynamicSeatGroups(defaultSeatGroups);
         setDynamicSeatCols(defaultSeatCols);
       }
@@ -381,6 +581,86 @@ export default function SeatSelection() {
   useEffect(() => {
     selectedSeatsRef.current = selectedSeats;
   }, [selectedSeats]);
+
+  useEffect(() => {
+    pendingSeatSetRef.current = pendingSeatSet;
+  }, [pendingSeatSet]);
+
+  useEffect(() => {
+    seatLockBySeatRef.current = seatLockBySeat;
+  }, [seatLockBySeat]);
+
+  useEffect(() => {
+    if (!selectedSeatLabels.length) {
+      setSeatLockBySeat({});
+      setSeatLockSecondsLeft(0);
+      return;
+    }
+
+    const nowMs = Date.now();
+    const fallbackDeadline = nowMs + (seatHoldSeconds * 1000);
+    setSeatLockBySeat((prev) => {
+      const selectedLabelSet = new Set(
+        selectedSeatLabels.map((seat) => normalizeSeatLabel(seat))
+      );
+      const next = {};
+      let changed = false;
+
+      for (const seatLabel of selectedLabelSet) {
+        const existing = prev[seatLabel];
+        if (Number.isFinite(existing) && existing > nowMs) {
+          next[seatLabel] = existing;
+          continue;
+        }
+        next[seatLabel] = fallbackDeadline;
+        changed = true;
+      }
+
+      if (Object.keys(prev).length !== Object.keys(next).length) {
+        changed = true;
+      }
+
+      return changed ? next : prev;
+    });
+  }, [selectedSeatLabels, seatHoldSeconds]);
+
+  useEffect(() => {
+    if (!activeSeatLockDeadline || !selectedSeatLabels.length) {
+      seatLockExpiryHandledRef.current = false;
+      setSeatLockSecondsLeft(0);
+      return;
+    }
+
+    const tick = () => {
+      const remainingSeconds = Math.max(
+        0,
+        Math.ceil((activeSeatLockDeadline - Date.now()) / 1000)
+      );
+      setSeatLockSecondsLeft(remainingSeconds);
+
+      if (remainingSeconds > 0) {
+        seatLockExpiryHandledRef.current = false;
+        return;
+      }
+      if (seatLockExpiryHandledRef.current) {
+        return;
+      }
+      seatLockExpiryHandledRef.current = true;
+
+      const nowMs = Date.now();
+      const expiredSeats = (selectedSeatsRef.current || []).filter((seat) => {
+        const deadline = seatLockBySeatRef.current[normalizeSeatLabel(seat)];
+        return Number.isFinite(deadline) && deadline <= nowMs;
+      });
+      if (expiredSeats.length) {
+        releaseExpiredSeatLocks(expiredSeats);
+      }
+    };
+
+    tick();
+    const intervalId = setInterval(tick, 1000);
+    return () => clearInterval(intervalId);
+  }, [activeSeatLockDeadline, selectedSeatLabels.length, releaseExpiredSeatLocks]);
 
   useEffect(() => {
     if (!bookingMovieId || !bookingCinemaId || !bookingDateValue || !bookingTimeValue) {
@@ -416,7 +696,12 @@ export default function SeatSelection() {
         bookingHall,
         seatsToRelease
       );
-      createBookingResumeNotification(payload).catch(() => {});
+      releaseBookingSeats({
+        ...payload,
+        track_dropoff: true,
+        dropoff_stage: "BOOKING",
+        dropoff_reason: "LEFT_BOOKING_PROCESS",
+      }).catch(() => {});
     };
   }, [
     bookingMovieId,
@@ -432,6 +717,7 @@ export default function SeatSelection() {
     if (selectedSeats.includes(key)) {
       if (!bookingMovieId || !bookingCinemaId || !bookingDateValue || !bookingTimeValue) {
         setSelectedSeats(selectedSeats.filter((seat) => seat !== key));
+        setSeatLockTimedOut(false);
         return;
       }
       setPendingSeatSet((prev) => {
@@ -452,6 +738,12 @@ export default function SeatSelection() {
         const data = await releaseBookingSeats(payload);
         applySeatPayload(data);
         setSelectedSeats((prev) => prev.filter((seat) => seat !== key));
+        setSeatLockBySeat((prev) => {
+          const next = { ...prev };
+          delete next[normalizedSeat];
+          return next;
+        });
+        setSeatLockTimedOut(false);
       } catch (error) {
         showToast(error.message || "Failed to release seat.");
       } finally {
@@ -479,6 +771,7 @@ export default function SeatSelection() {
 
     if (!bookingMovieId || !bookingCinemaId || !bookingDateValue || !bookingTimeValue) {
       setSelectedSeats([...selectedSeats, key]);
+      setSeatLockTimedOut(false);
       return;
     }
 
@@ -506,9 +799,27 @@ export default function SeatSelection() {
         (conflicts.reserved && conflicts.reserved.length) ||
         (conflicts.invalid && conflicts.invalid.length)
       ) {
-        showToast("Seat is no longer available.");
+        if (conflicts.reserved && conflicts.reserved.length) {
+          showToast("Seat is currently locked. Please pick another seat.");
+        } else if (conflicts.sold && conflicts.sold.length) {
+          showToast("Seat was sold while you were selecting. Please choose another.");
+        } else if (conflicts.unavailable && conflicts.unavailable.length) {
+          showToast("Seat is marked unavailable for this show.");
+        } else {
+          showToast("Seat selection is invalid. Please reselect.");
+        }
         return;
       }
+      const lockMapFromResponse = parseSeatLockDeadlines(data?.reserved_seat_locks);
+      const fallbackLockDeadline = Date.now() + (seatHoldSeconds * 1000);
+      const lockDeadline = Number.isFinite(lockMapFromResponse[normalizedSeat])
+        ? lockMapFromResponse[normalizedSeat]
+        : fallbackLockDeadline;
+      setSeatLockBySeat((prev) => ({
+        ...prev,
+        [normalizedSeat]: lockDeadline,
+      }));
+      setSeatLockTimedOut(false);
       setSelectedSeats((prev) => [...prev, key]);
     } catch (error) {
       showToast(error.message || "Failed to reserve seat.");
@@ -519,43 +830,6 @@ export default function SeatSelection() {
         return next;
       });
     }
-  };
-
-  const increaseCount = (type) => {
-    if (totalSeats === 0) {
-      showToast("Select seats first.");
-      return;
-    }
-
-    if (type === "adult") {
-      if (ticketCounts.senior > 0) {
-        setTicketCounts((prev) => ({ ...prev, senior: prev.senior - 1 }));
-        return;
-      }
-      if (ticketCounts.child > 0) {
-        setTicketCounts((prev) => ({ ...prev, child: prev.child - 1 }));
-      }
-      return;
-    }
-
-    if (adultCount <= 0) {
-      showToast("All seats are already allocated.");
-      return;
-    }
-
-    setTicketCounts((prev) => ({ ...prev, [type]: prev[type] + 1 }));
-  };
-
-  const decreaseCount = (type) => {
-    if (type === "adult") {
-      return;
-    }
-
-    if (ticketCounts[type] <= 0) {
-      return;
-    }
-
-    setTicketCounts((prev) => ({ ...prev, [type]: prev[type] - 1 }));
   };
 
   const renderSelectedSeats = () => {
@@ -606,7 +880,10 @@ export default function SeatSelection() {
     setSelectedDate(nextDate);
     setSelectedTime(nextTime);
     setSelectedSeats([]);
-    setTicketCounts({ senior: 0, child: 0 });
+    setSeatLockBySeat({});
+    setSeatLockSecondsLeft(0);
+    setSeatLockTimedOut(false);
+    setPriceLock(null);
   };
 
   const handleTimeChange = (time) => {
@@ -631,7 +908,42 @@ export default function SeatSelection() {
     }
     setSelectedTime(time);
     setSelectedSeats([]);
-    setTicketCounts({ senior: 0, child: 0 });
+    setSeatLockBySeat({});
+    setSeatLockSecondsLeft(0);
+    setSeatLockTimedOut(false);
+    setPriceLock(null);
+  };
+
+  const handleCancelSelection = async () => {
+    const seatsToRelease = [...selectedSeats];
+    setSelectedSeats([]);
+    setSeatLockBySeat({});
+    setSeatLockSecondsLeft(0);
+    setSeatLockTimedOut(false);
+    setPriceLock(null);
+
+    if (!seatsToRelease.length) {
+      return;
+    }
+    if (!bookingMovieId || !bookingCinemaId || !bookingDateValue || !bookingTimeValue) {
+      return;
+    }
+
+    try {
+      const payload = buildBookingPayload(
+        bookingMovieId,
+        bookingCinemaId,
+        bookingDateValue,
+        bookingTimeValue,
+        bookingShowId,
+        bookingHall,
+        seatsToRelease
+      );
+      const data = await releaseBookingSeats(payload);
+      applySeatPayload(data);
+    } catch {
+      // Ignore release errors during user-initiated reset.
+    }
   };
 
   const handleProceed = async () => {
@@ -641,6 +953,22 @@ export default function SeatSelection() {
     }
     if (!bookingMovieId || !bookingCinemaId || !bookingDateValue || !bookingTimeValue) {
       showToast("Select a valid show before continuing.");
+      return;
+    }
+    if (activeSeatLockDeadline && activeSeatLockDeadline <= Date.now()) {
+      showToast("Seat hold has expired. Please reselect your seats.");
+      return;
+    }
+    if (pricingLoading) {
+      showToast("Pricing is updating. Please wait a moment.");
+      return;
+    }
+    if (pricingError) {
+      showToast(pricingError);
+      return;
+    }
+    if (!pricingPreview) {
+      showToast("Unable to fetch dynamic pricing. Please reselect your seats.");
       return;
     }
 
@@ -679,7 +1007,6 @@ export default function SeatSelection() {
       },
       ticketTotal: totalPrice,
       selectedSeats: selectedSeatLabels,
-      ticketCounts,
       bookingContext: {
         showId: bookingShowId,
         movieId: bookingMovieId,
@@ -688,7 +1015,14 @@ export default function SeatSelection() {
         date: bookingDateValue,
         time: bookingTimeValue,
         selectedSeats: selectedSeatLabels,
+        priceLockToken: priceLock?.token || null,
+        priceLockExpiresAt: priceLock?.expires_at || null,
         userId: currentUser?.id || null,
+      },
+      pricing: {
+        ...(pricingPreview || {}),
+        price_lock_token: priceLock?.token || null,
+        price_lock_expires_at: priceLock?.expires_at || null,
       },
     };
 
@@ -918,97 +1252,93 @@ export default function SeatSelection() {
             <div className="seat-summaryTitle">Selected Seats</div>
             <div className="seat-summarySeats">{renderSelectedSeats()}</div>
 
-            <div className="seat-priceRow">
-              <span>Adult <span className="seat-muted">Npr 250</span></span>
-              <div className="seat-counter">
-                <button className="seat-counterBtn" type="button" disabled>
-                  -
-                </button>
-                <span>{adultCount}</span>
-                <button
-                  className="seat-counterBtn"
-                  type="button"
-                  onClick={() => increaseCount("adult")}
-                  disabled={ticketCounts.senior === 0 && ticketCounts.child === 0}
-                >
-                  +
-                </button>
+            {(selectedSeatLabels.length || seatLockTimedOut) ? (
+              <div
+                className={`seat-lockNotice${
+                  seatLockTimedOut && !selectedSeatLabels.length
+                    ? " seat-lockNotice--expired"
+                    : seatLockInWarning
+                      ? " seat-lockNotice--warning"
+                      : ""
+                }`}
+              >
+                <div className="seat-lockNoticeHeader">
+                  <span className="seat-lockNoticeLabel">Seat Hold Timer</span>
+                  <strong className="seat-lockNoticeTimer">
+                    {selectedSeatLabels.length ? seatLockTimerLabel : "Expired"}
+                  </strong>
+                </div>
+                <p className="seat-lockNoticeText">
+                  {selectedSeatLabels.length
+                    ? "Complete checkout before this timer ends or seats are released automatically."
+                    : "Your previous seat hold expired. Reselect seats to continue."}
+                </p>
               </div>
+            ) : null}
+
+            <div className="seat-pricingIndicator">
+              {pricingPreview?.pricing_indicator || "Price may increase as seats fill."}
             </div>
+            {pricingLoading ? <div className="seat-pricingLoading">Calculating dynamic price...</div> : null}
+            {pricingError ? <div className="seat-pricingError">{pricingError}</div> : null}
+
+            <div className="seat-summarySubTitle">Current Category Prices</div>
+            {Object.keys(dynamicByCategory).length ? (
+              Object.entries(dynamicByCategory).map(([categoryKey, value]) => (
+                <div className="seat-priceRow" key={`category-price-${categoryKey}`}>
+                  <span>
+                    {formatSeatCategoryLabel(categoryKey)}
+                    <span className="seat-muted">
+                      Base Npr {formatNpr(value?.base_price)}
+                    </span>
+                  </span>
+                  <span>Npr {formatNpr(value?.dynamic_price)}</span>
+                </div>
+              ))
+            ) : (
+              <div className="seat-pricingHint">Select seats to load category-wise dynamic prices.</div>
+            )}
 
             <div className="seat-priceRow">
-              <span>Senior <span className="seat-muted">Npr 200</span></span>
-              <div className="seat-counter">
-                <button
-                  className="seat-counterBtn"
-                  type="button"
-                  onClick={() => decreaseCount("senior")}
-                  disabled={ticketCounts.senior === 0}
-                >
-                  -
-                </button>
-                <span>{ticketCounts.senior}</span>
-                <button
-                  className="seat-counterBtn"
-                  type="button"
-                  onClick={() => increaseCount("senior")}
-                  disabled={adultCount === 0}
-                >
-                  +
-                </button>
-              </div>
+              <span>Base Subtotal</span>
+              <span>Npr {formatNpr(dynamicBaseSubtotal)}</span>
             </div>
-
-            <div className="seat-priceRow">
-              <span>Child <span className="seat-muted">Npr 150</span></span>
-              <div className="seat-counter">
-                <button
-                  className="seat-counterBtn"
-                  type="button"
-                  onClick={() => decreaseCount("child")}
-                  disabled={ticketCounts.child === 0}
-                >
-                  -
-                </button>
-                <span>{ticketCounts.child}</span>
-                <button
-                  className="seat-counterBtn"
-                  type="button"
-                  onClick={() => increaseCount("child")}
-                  disabled={adultCount === 0}
-                >
-                  +
-                </button>
+            {dynamicRuleAdjustment !== 0 ? (
+              <div className={`seat-priceRow ${dynamicRuleAdjustment < 0 ? "seat-discountRow" : ""}`}>
+                <span>Rule Adjustments</span>
+                <span>{dynamicRuleAdjustment > 0 ? "+" : ""}Npr {formatNpr(dynamicRuleAdjustment)}</span>
               </div>
-            </div>
+            ) : null}
+            {dynamicOccupancyAdjustment !== 0 ? (
+              <div className={`seat-priceRow ${dynamicOccupancyAdjustment < 0 ? "seat-discountRow" : ""}`}>
+                <span>Occupancy Surge/Discount</span>
+                <span>{dynamicOccupancyAdjustment > 0 ? "+" : ""}Npr {formatNpr(dynamicOccupancyAdjustment)}</span>
+              </div>
+            ) : null}
 
-            {discount > 0 ? (
-              <div className="seat-priceRow seat-discountRow">
-                <span>Discount</span>
-                <span>-Npr {discount}</span>
+            {priceLock?.expires_at ? (
+              <div className="seat-priceLockMeta">
+                Price locked until {formatTimeFromIso(priceLock.expires_at)}
               </div>
             ) : null}
 
             <div className="seat-total">
               <span>Total Payment:</span>
-              <span>Npr {totalPrice}</span>
+              <span>Npr {formatNpr(totalPrice)}</span>
             </div>
 
             <button
               className="seat-payBtn"
               type="button"
               onClick={handleProceed}
-              disabled={totalSeats === 0 || proceeding}
+              disabled={totalSeats === 0 || proceeding || pricingLoading}
             >
               {proceeding ? "Checking Food..." : "Proceed"}
             </button>
             <button
               className="seat-cancelBtn"
               type="button"
-              onClick={() => {
-                setSelectedSeats([]);
-                setTicketCounts({ senior: 0, child: 0 });
-              }}
+              onClick={handleCancelSelection}
             >
               Cancel
             </button>
@@ -1017,6 +1347,52 @@ export default function SeatSelection() {
       </div>
     </div>
   );
+}
+
+function parseSeatLockDeadlines(rawLocks) {
+  if (!rawLocks || typeof rawLocks !== "object") {
+    return {};
+  }
+
+  const nowMs = Date.now();
+  const output = {};
+  Object.entries(rawLocks).forEach(([seat, value]) => {
+    const label = normalizeSeatLabel(seat);
+    const deadline = parseIsoToEpochMs(value);
+    if (!label || !Number.isFinite(deadline) || deadline <= nowMs) {
+      return;
+    }
+    output[label] = deadline;
+  });
+  return output;
+}
+
+function parseIsoToEpochMs(value) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  const epoch = parsed.getTime();
+  return Number.isFinite(epoch) ? epoch : null;
+}
+
+function formatCountdown(value) {
+  const totalSeconds = Math.max(0, Number(value) || 0);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function formatSeatLabelList(labels, maxVisible = 3) {
+  const normalized = Array.from(
+    new Set(
+      (Array.isArray(labels) ? labels : [])
+        .map((seat) => normalizeSeatLabel(seat))
+        .filter(Boolean)
+    )
+  ).sort((a, b) => seatSortKey(a) - seatSortKey(b));
+
+  if (!normalized.length) return "selected seats";
+  if (normalized.length <= maxVisible) return normalized.join(", ");
+  return `${normalized.slice(0, maxVisible).join(", ")} +${normalized.length - maxVisible} more`;
 }
 
 function ensureUniqueGroupRows(groups) {
@@ -1391,6 +1767,29 @@ function buildBookingPayload(
   if (showId) payload.show_id = showId;
   if (hall) payload.hall = hall;
   return payload;
+}
+
+function formatNpr(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "0.00";
+  return numeric.toFixed(2);
+}
+
+function formatSeatCategoryLabel(value) {
+  const key = String(value || "").trim().toLowerCase();
+  if (!key) return "Category";
+  if (key === "vip") return "VIP";
+  return key.slice(0, 1).toUpperCase() + key.slice(1);
+}
+
+function formatTimeFromIso(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 const fallbackShows = [

@@ -38,6 +38,7 @@ import {
 import AdminPageHeader from "./components/AdminPageHeader";
 import { useAdminToast } from "./AdminToastContext";
 import {
+  fetchAdminDropoffAnalytics,
   fetchMovies,
   fetchVendorsAdmin,
   fetchUsersAdmin,
@@ -55,6 +56,7 @@ export default function AdminDashboard() {
   const [users, setUsers] = useState([]);
   const [bookings, setBookings] = useState([]);
   const [shows, setShows] = useState([]);
+  const [dropoffAnalytics, setDropoffAnalytics] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -67,12 +69,13 @@ export default function AdminDashboard() {
           setLoading(true);
           setError("");
         }
-        const [movsData, vendorsData, usersData, bkgsData, showsData] = await Promise.all([
+        const [movsData, vendorsData, usersData, bkgsData, showsData, dropoffData] = await Promise.all([
           fetchMovies().catch(() => []),
           fetchVendorsAdmin().catch(() => []),
           fetchUsersAdmin().catch(() => []),
           fetchAdminBookings().catch(() => []),
           fetchShows().catch(() => []),
+          fetchAdminDropoffAnalytics().catch(() => ({})),
         ]);
 
         if (!active) return;
@@ -82,6 +85,7 @@ export default function AdminDashboard() {
         setUsers(usersData || []);
         setBookings(bkgsData || []);
         setShows(showsData || []);
+        setDropoffAnalytics(dropoffData || {});
         setError("");
       } catch (err) {
         if (!active) return;
@@ -140,6 +144,19 @@ export default function AdminDashboard() {
       cancelledBookings,
     };
   }, [movies, vendors, users, bookings]);
+
+  const dropoffSummary = dropoffAnalytics?.dropoff_summary || {};
+  const dropoffTrend = useMemo(() => {
+    const rows = Array.isArray(dropoffAnalytics?.dropoff_trend)
+      ? dropoffAnalytics.dropoff_trend
+      : [];
+    return rows.map((item) => ({
+      date: item.date,
+      bookingDropoffs: Number(item.booking_process_left || 0),
+      paymentDropoffs: Number(item.payment_process_left || 0),
+      totalDropoffs: Number(item.total_left || 0),
+    }));
+  }, [dropoffAnalytics]);
 
   // Group bookings by status for chart
   const bookingsByStatus = useMemo(() => {
@@ -455,6 +472,13 @@ export default function AdminDashboard() {
       tone: "stat-danger",
       change: calculateTrend.paidTrend,  
     },
+    {
+      label: "Drop-offs",
+      value: Number(dropoffSummary.total_left || 0),
+      icon: AlertCircle,
+      tone: "stat-warning",
+      change: `${Number(dropoffSummary.payment_process_left || 0)} payment exits`,
+    },
   ];
 
   // Generate sparkline data from real revenue data (normalized to fit sparkline)
@@ -535,6 +559,60 @@ export default function AdminDashboard() {
             </div>
           );
         })}
+      </section>
+
+      <section className="admin-card">
+        <div className="admin-card-header">
+          <div>
+            <h5 className="mb-1">Booking Drop-off Trend</h5>
+            <small className="text-muted">People leaving in booking and payment process</small>
+          </div>
+          <div className="d-flex gap-2">
+            <span className="badge-soft warning">
+              Booking: {Number(dropoffSummary.booking_process_left || 0)}
+            </span>
+            <span className="badge-soft danger">
+              Payment: {Number(dropoffSummary.payment_process_left || 0)}
+            </span>
+          </div>
+        </div>
+        {dropoffTrend.length > 0 ? (
+          <ResponsiveContainer width="100%" height={280}>
+            <LineChart data={dropoffTrend}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--admin-border)" />
+              <XAxis dataKey="date" stroke="var(--admin-muted)" />
+              <YAxis stroke="var(--admin-muted)" />
+              <Tooltip
+                contentStyle={{
+                  background: "var(--admin-panel)",
+                  border: "1px solid var(--admin-border)",
+                  color: "var(--admin-text)",
+                }}
+              />
+              <Legend />
+              <Line
+                type="monotone"
+                dataKey="bookingDropoffs"
+                stroke="#f59e0b"
+                strokeWidth={2}
+                name="Booking Process"
+                dot={{ r: 3 }}
+              />
+              <Line
+                type="monotone"
+                dataKey="paymentDropoffs"
+                stroke="#ef4444"
+                strokeWidth={2}
+                name="Payment Process"
+                dot={{ r: 3 }}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        ) : (
+          <p style={{ padding: "20px", textAlign: "center", color: "var(--admin-muted)" }}>
+            No drop-off data yet.
+          </p>
+        )}
       </section>
 
       <section className="admin-grid-2">

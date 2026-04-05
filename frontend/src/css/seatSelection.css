@@ -544,6 +544,107 @@
   margin-bottom: 16px;
 }
 
+.seat-summarySubTitle {
+  margin: 4px 0 8px;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(234, 240, 255, 0.78);
+  font-weight: 800;
+}
+
+.seat-lockNotice {
+  margin: 0 0 12px;
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  background: rgba(56, 189, 248, 0.14);
+  color: #dbeafe;
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.seat-lockNotice--warning {
+  border-color: rgba(245, 158, 11, 0.75);
+  background: rgba(245, 158, 11, 0.18);
+  color: #fef3c7;
+}
+
+.seat-lockNotice--expired {
+  border-color: rgba(239, 68, 68, 0.65);
+  background: rgba(239, 68, 68, 0.16);
+  color: #fecaca;
+}
+
+.seat-lockNoticeHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.seat-lockNoticeLabel {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.seat-lockNoticeTimer {
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: 0.03em;
+}
+
+.seat-lockNoticeText {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.seat-pricingIndicator {
+  margin-bottom: 8px;
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  background: rgba(245, 158, 11, 0.14);
+  color: #fde68a;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.seat-pricingLoading {
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: rgba(167, 179, 214, 0.86);
+}
+
+.seat-pricingError {
+  margin-bottom: 8px;
+  border: 1px solid rgba(239, 68, 68, 0.5);
+  background: rgba(239, 68, 68, 0.12);
+  color: #fecaca;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.seat-pricingHint {
+  border: 1px dashed rgba(255, 255, 255, 0.2);
+  color: rgba(167, 179, 214, 0.88);
+  font-size: 12px;
+  border-radius: 10px;
+  padding: 10px;
+  margin-bottom: 8px;
+}
+
+.seat-priceLockMeta {
+  margin-top: 8px;
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: #93c5fd;
+  font-weight: 700;
+}
+
 .seat-pill {
   padding: 6px 12px;
   border-radius: 999px;

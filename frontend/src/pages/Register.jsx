@@ -1,18 +1,23 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import "../css/register.css";
 import HeroImage1 from "../images/gharjwai.jpg";
 import HeroImage2 from "../images/balidan.jpg";
 import HeroImage3 from "../images/degreemaila.jpg";
 import HeroImage4 from "../images/avengers.jpg";
 import Logo from "../images/logo.png";
+import { useAppContext } from "../context/Appcontext";
+import { buildAuthHeroSlides } from "../lib/authHeroSlides";
+import { API_BASE } from "../lib/apiBase";
 
 const RegisterPage = () => {
+  const initialReferralCode = getReferralCodeFromQuery();
   const [formData, setFormData] = useState({
     first_name: "",
     middle_name: "",
     last_name: "",
     email: "",
     phone_number: "",
+    referral_code: initialReferralCode,
     dob: "",
     password: "",
     confirm_password: "",
@@ -22,18 +27,70 @@ const RegisterPage = () => {
   const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const ctx = safeUseAppContext();
 
-  // Hero Slider Logic
-  const heroImages = [HeroImage1, HeroImage2, HeroImage3, HeroImage4];
+  const heroSlides = useMemo(() => {
+    const dynamicSlides = buildAuthHeroSlides(ctx?.movies, ctx?.showtimes, {
+      nowLimit: 5,
+      soonLimit: 5,
+      maxSlides: 8,
+    });
+    if (dynamicSlides.length) return dynamicSlides;
+
+    return [
+      {
+        id: "fallback-now-1",
+        badge: "Now Showing",
+        title: "Join Mero Ticket today",
+        description:
+          "Create an account to access the latest shows and manage your bookings in one place.",
+        image: HeroImage1,
+      },
+      {
+        id: "fallback-now-2",
+        badge: "Now Showing",
+        title: "Fast booking, better movie nights",
+        description:
+          "Sign up once and enjoy quick checkout for the movies you love.",
+        image: HeroImage2,
+      },
+      {
+        id: "fallback-soon-1",
+        badge: "Coming Soon",
+        title: "Be ready for upcoming releases",
+        description:
+          "Register now and get set for upcoming movies as soon as they open.",
+        image: HeroImage3,
+      },
+      {
+        id: "fallback-soon-2",
+        badge: "Coming Soon",
+        title: "Never miss the next premiere",
+        description:
+          "Your account keeps booking simple when the next big title arrives.",
+        image: HeroImage4,
+      },
+    ];
+  }, [ctx?.movies, ctx?.showtimes]);
+
   const [currentSlide, setCurrentSlide] = useState(0);
+  const activeSlide = heroSlides[currentSlide] || heroSlides[0] || null;
 
   useEffect(() => {
+    if (heroSlides.length <= 1) return undefined;
     const interval = setInterval(
-      () => setCurrentSlide((prev) => (prev + 1) % heroImages.length),
+      () => setCurrentSlide((prev) => (prev + 1) % heroSlides.length),
       4000
     );
     return () => clearInterval(interval);
-  }, [heroImages.length]);
+  }, [heroSlides.length]);
+
+  useEffect(() => {
+    setCurrentSlide((prev) => {
+      if (!heroSlides.length) return 0;
+      return prev >= heroSlides.length ? 0 : prev;
+    });
+  }, [heroSlides.length]);
 
   const handleChange = (e) => {
     setFormData((prev) => ({ ...prev, [e.target.name]: e.target.value }));
@@ -75,10 +132,16 @@ const RegisterPage = () => {
     setLoading(true);
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/api/auth/register/", {
+      const payload = {
+        ...formData,
+        referral_code: String(formData.referral_code || "").trim().toUpperCase(),
+        device_fingerprint: buildDeviceFingerprint(),
+      };
+
+      const response = await fetch(`${API_BASE}/api/auth/register/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(formData),
+        body: JSON.stringify(payload),
       });
 
       const text = await response.text();
@@ -87,13 +150,15 @@ const RegisterPage = () => {
 
       if (!response.ok) throw new Error(data.message || "Registration failed");
 
-      setSuccess(data.message || "Registration successful");
+      const referralMessage = data?.referral?.message ? ` ${data.referral.message}` : "";
+      setSuccess(`${data.message || "Registration successful"}${referralMessage}`.trim());
       setFormData({
         first_name: "",
         middle_name: "",
         last_name: "",
         email: "",
         phone_number: "",
+        referral_code: initialReferralCode,
         dob: "",
         password: "",
         confirm_password: "",
@@ -147,6 +212,22 @@ const RegisterPage = () => {
                   onChange={handleChange}
                   disabled={loading}
                   required
+                />
+              </div>
+            </label>
+
+            {/* Date of Birth */}
+            <label className="mt-label">
+              Referral Code (Optional)
+              <div className="mt-input-wrapper">
+                <span className="mt-icon material-symbols-outlined">redeem</span>
+                <input
+                  type="text"
+                  name="referral_code"
+                  placeholder="Enter referral code"
+                  value={formData.referral_code}
+                  onChange={handleChange}
+                  disabled={loading}
                 />
               </div>
             </label>
@@ -272,16 +353,21 @@ const RegisterPage = () => {
         {/* RIGHT SIDE - HERO SLIDER */}
         <div
           className="mt-login-right"
-          style={{ backgroundImage: `url(${heroImages[currentSlide]})` }}
+          style={{
+            backgroundImage: activeSlide?.image ? `url(${activeSlide.image})` : "none",
+          }}
         >
           <div className="mt-hero-card-overlay">
-            <div className="mt-hero-badge">For Movie Lovers</div>
-            <h2>Join Mero Ticket today</h2>
-            <p>Create an account to access exclusive deals and personalized recommendations.</p>
+            <div className="mt-hero-badge">{activeSlide?.badge || "Now Showing"}</div>
+            <h2>{activeSlide?.title || "Join Mero Ticket today"}</h2>
+            <p>
+              {activeSlide?.description ||
+                "Create an account to access exclusive deals and personalized recommendations."}
+            </p>
             <div className="mt-carousel-dots">
-              {heroImages.map((_, index) => (
+              {heroSlides.map((slide, index) => (
                 <span
-                  key={index}
+                  key={slide.id || index}
                   className={`dot ${index === currentSlide ? "active" : ""}`}
                   onClick={() => setCurrentSlide(index)}
                 ></span>
@@ -295,3 +381,36 @@ const RegisterPage = () => {
 };
 
 export default RegisterPage;
+
+function safeUseAppContext() {
+  try {
+    return useAppContext?.();
+  } catch {
+    return null;
+  }
+}
+
+function getReferralCodeFromQuery() {
+  if (typeof window === "undefined") return "";
+  const params = new URLSearchParams(window.location.search);
+  return String(params.get("ref") || params.get("referral") || "").trim().toUpperCase();
+}
+
+function buildDeviceFingerprint() {
+  if (typeof window === "undefined") return "";
+
+  const source = [
+    window.navigator?.userAgent || "",
+    window.navigator?.language || "",
+    String(window.screen?.width || ""),
+    String(window.screen?.height || ""),
+    String(new Date().getTimezoneOffset()),
+  ].join("|");
+
+  let hash = 0;
+  for (let i = 0; i < source.length; i += 1) {
+    hash = ((hash << 5) - hash) + source.charCodeAt(i);
+    hash |= 0;
+  }
+  return `web-${Math.abs(hash)}`;
+}

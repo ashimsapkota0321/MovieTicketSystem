@@ -5,7 +5,6 @@ import {
   clearAuthSession,
   clearStoredRoleData,
   getAuthSession,
-  getVendorStaffRole,
   isVendorOwner,
 } from "../lib/authSession";
 
@@ -17,12 +16,9 @@ export default function VendorTopbar({ onToggleSidebar, onToggleTheme, theme = "
   const [vendor, setVendor] = useState(() => getStoredVendor());
   const [searchTerm, setSearchTerm] = useState("");
   const displayName = vendor?.name || vendor?.username || "Vendor";
-  const staffRole = getVendorStaffRole();
   const actorLabel = isVendorOwner()
     ? "Vendor Admin"
-    : staffRole === "MANAGER"
-      ? "Manager"
-      : "Cashier";
+    : "Staff";
   const greeting = getTimeGreeting();
   const avatarSrc = getAvatar(vendor);
   const initial = getInitial(displayName || vendor?.username || "V");

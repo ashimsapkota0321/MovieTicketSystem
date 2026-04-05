@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import "../css/Login.css";
 import HeroImage1 from "../images/gharjwai.jpg";
@@ -6,14 +6,14 @@ import HeroImage2 from "../images/balidan.jpg";
 import HeroImage3 from "../images/degreemaila.jpg";
 import HeroImage4 from "../images/avengers.jpg";
 import Logo from "../images/logo.png";
+import { useAppContext } from "../context/Appcontext";
+import { buildAuthHeroSlides } from "../lib/authHeroSlides";
 import {
   getStoredRoleData,
   storeAuthSession,
   storeRoleData,
 } from "../lib/authSession";
-
-const API_BASE =
-  import.meta.env.VITE_BASE_URL?.replace(/\/$/, "") || "http://localhost:8000";
+import { API_BASE } from "../lib/apiBase";
 
 const LoginPage = () => {
   const navigate = useNavigate();
@@ -24,19 +24,71 @@ const LoginPage = () => {
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
+  const ctx = safeUseAppContext();
 
-  // hero images array
-  const heroImages = [HeroImage1, HeroImage2, HeroImage3,HeroImage4];
+  const heroSlides = useMemo(() => {
+    const dynamicSlides = buildAuthHeroSlides(ctx?.movies, ctx?.showtimes, {
+      nowLimit: 5,
+      soonLimit: 5,
+      maxSlides: 8,
+    });
+    if (dynamicSlides.length) return dynamicSlides;
+
+    return [
+      {
+        id: "fallback-now-1",
+        badge: "Now Showing",
+        title: "Book your next movie in seconds",
+        description:
+          "Discover the latest shows, compare vendors, and secure your seats with a single tap.",
+        image: HeroImage1,
+      },
+      {
+        id: "fallback-now-2",
+        badge: "Now Showing",
+        title: "Your favorite movies are one tap away",
+        description:
+          "Find shows near you, pick seats faster, and enjoy a smoother booking experience.",
+        image: HeroImage2,
+      },
+      {
+        id: "fallback-soon-1",
+        badge: "Coming Soon",
+        title: "Upcoming releases are almost here",
+        description:
+          "Sign in to stay ready for new releases and grab your seats as soon as they go live.",
+        image: HeroImage3,
+      },
+      {
+        id: "fallback-soon-2",
+        badge: "Coming Soon",
+        title: "Stay ready for the next big premiere",
+        description:
+          "Track upcoming movies and be first in line when bookings open.",
+        image: HeroImage4,
+      },
+    ];
+  }, [ctx?.movies, ctx?.showtimes]);
+
   const [currentSlide, setCurrentSlide] = useState(0);
+  const activeSlide = heroSlides[currentSlide] || heroSlides[0] || null;
 
-  // auto-slide with infinite loop
+  // Auto-slide hero entries when more than one slide is available.
   useEffect(() => {
+    if (heroSlides.length <= 1) return undefined;
     const interval = setInterval(() => {
-      setCurrentSlide((prev) => (prev + 1) % heroImages.length);
+      setCurrentSlide((prev) => (prev + 1) % heroSlides.length);
     }, 4000); // 4 seconds
 
     return () => clearInterval(interval);
-  }, [heroImages.length]);
+  }, [heroSlides.length]);
+
+  useEffect(() => {
+    setCurrentSlide((prev) => {
+      if (!heroSlides.length) return 0;
+      return prev >= heroSlides.length ? 0 : prev;
+    });
+  }, [heroSlides.length]);
 
   const validateEmail = (email) =>
     /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
@@ -278,21 +330,21 @@ const LoginPage = () => {
         <div
           className="mt-login-right"
           style={{
-            backgroundImage: `url(${heroImages[currentSlide]})`,
+            backgroundImage: activeSlide?.image ? `url(${activeSlide.image})` : "none",
           }}
         >
           <div className="mt-hero-card-overlay">
-            <div className="mt-hero-badge">Now Showing</div>
-            <h2>Book your next movie in seconds</h2>
+            <div className="mt-hero-badge">{activeSlide?.badge || "Now Showing"}</div>
+            <h2>{activeSlide?.title || "Book your next movie in seconds"}</h2>
             <p>
-              Discover the latest shows, compare vendors, and secure your
-              seats with a single tap.
+              {activeSlide?.description ||
+                "Discover the latest shows, compare vendors, and secure your seats with a single tap."}
             </p>
 
             <div className="mt-carousel-dots">
-              {heroImages.map((_, index) => (
+              {heroSlides.map((slide, index) => (
                 <span
-                  key={index}
+                  key={slide.id || index}
                   className={`dot ${
                     index === currentSlide ? "active" : ""
                   }`}
@@ -308,6 +360,14 @@ const LoginPage = () => {
 };
 
 export default LoginPage;
+
+function safeUseAppContext() {
+  try {
+    return useAppContext?.();
+  } catch {
+    return null;
+  }
+}
 
 function getAccountKey(user) {
   if (!user) return "";

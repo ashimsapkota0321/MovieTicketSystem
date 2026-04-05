@@ -31,40 +31,47 @@ export const AppProvider = (props) => {
   const [isLoading, setIsLoading] = useState(false);
   const [selectedLocation, setSelectedLocation] = useState(getInitialLocation);
 
+  const resolveSettledList = (settledResult) => {
+    if (!settledResult || settledResult.status !== "fulfilled") return [];
+    return Array.isArray(settledResult.value) ? settledResult.value : [];
+  };
+
+  const loadCatalogLists = async (params) => {
+    const [moviesResult, showsResult, cinemasResult] = await Promise.allSettled([
+      fetchMovies(params),
+      fetchShows(params),
+      fetchCinemas(params),
+    ]);
+
+    return {
+      movieList: resolveSettledList(moviesResult),
+      showList: resolveSettledList(showsResult),
+      vendorList: resolveSettledList(cinemasResult),
+    };
+  };
+
   const refreshCatalog = useCallback(async () => {
     setIsLoading(true);
     try {
       const scopeByCity = shouldScopeCatalogByCity();
       const scopedParams =
         scopeByCity && selectedLocation ? { city: selectedLocation } : {};
-      let [movieList, showList, vendorList] = await Promise.all([
-        fetchMovies(scopedParams),
-        fetchShows(scopedParams),
-        fetchCinemas(scopedParams),
-      ]);
 
-      // If the chosen city has no catalog entries, fall back to all cities.
-      if (
+      let { movieList, showList, vendorList } = await loadCatalogLists(scopedParams);
+
+      // If city-scoped queries return no catalog data, retry without city scope.
+      const shouldRetryUnscoped =
         scopeByCity &&
-        selectedLocation &&
-        (!Array.isArray(movieList) || movieList.length === 0) &&
-        (!Array.isArray(showList) || showList.length === 0)
-      ) {
-        const [fallbackMovies, fallbackShows, fallbackVendors] = await Promise.all([
-          fetchMovies({}),
-          fetchShows({}),
-          fetchCinemas({}),
-        ]);
-        const hasFallbackData =
-          (Array.isArray(fallbackMovies) && fallbackMovies.length > 0) ||
-          (Array.isArray(fallbackShows) && fallbackShows.length > 0) ||
-          (Array.isArray(fallbackVendors) && fallbackVendors.length > 0);
-        if (hasFallbackData) {
-          movieList = fallbackMovies;
-          showList = fallbackShows;
-          vendorList = fallbackVendors;
-          setSelectedLocation("");
-        }
+        Boolean(selectedLocation) &&
+        movieList.length === 0 &&
+        showList.length === 0 &&
+        vendorList.length === 0;
+
+      if (shouldRetryUnscoped) {
+        const fallback = await loadCatalogLists({});
+        movieList = fallback.movieList;
+        showList = fallback.showList;
+        vendorList = fallback.vendorList;
       }
 
       setMovies(movieList || []);

@@ -5,6 +5,7 @@ import HeroImage2 from "../images/balidan.jpg";
 import HeroImage3 from "../images/degreemaila.jpg";
 import HeroImage4 from "../images/avengers.jpg";
 import Logo from "../images/logo.png";
+import { API_BASE } from "../lib/apiBase";
 
 const ForgotPasswordPage = () => {
   const [step, setStep] = useState(1); // 1: email, 2: otp, 3: password
@@ -69,7 +70,7 @@ const ForgotPasswordPage = () => {
 
     try {
       const response = await fetch(
-        "http://127.0.0.1:8000/api/auth/forgot-password/",
+        `${API_BASE}/api/auth/forgot-password/`,
         {
           method: "POST",
           headers: {
@@ -93,9 +94,9 @@ const ForgotPasswordPage = () => {
         throw new Error(message || "Failed to send OTP");
       }
 
-      setSuccess("OTP sent to your email");
+      setSuccess(data?.message || "OTP sent to your email");
       setStep(2);
-      setOtpTimer(240);+
+      setOtpTimer(240);
       setResendTimer(60);
     } catch (err) {
       setError(err.message || "An error occurred");
@@ -124,7 +125,7 @@ const ForgotPasswordPage = () => {
 
     try {
       const response = await fetch(
-        "http://127.0.0.1:8000/api/auth/verify-otp/",
+        `${API_BASE}/api/auth/verify-otp/`,
         {
           method: "POST",
           headers: {
@@ -182,7 +183,7 @@ const ForgotPasswordPage = () => {
 
     try {
       const response = await fetch(
-        "http://127.0.0.1:8000/api/auth/reset-password/",
+        `${API_BASE}/api/auth/reset-password/`,
         {
           method: "POST",
           headers: {

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { fetchNotifications, markNotificationsRead } from "../lib/catalogApi";
 import { getAuthSession } from "../lib/authSession";
+import { API_BASE } from "../lib/apiBase";
 import api from "../api/api";
 import "../css/customerPages.css";
 
@@ -15,9 +16,6 @@ const EVENT_LABELS = {
   BOOKING_CANCELLED: "Booking Cancelled",
   REFUND_PROCESSED: "Refund",
 };
-
-const API_BASE =
-  import.meta.env.VITE_BASE_URL?.replace(/\/$/, "") || "http://localhost:8000";
 
 export default function Notifications() {
   const navigate = useNavigate();

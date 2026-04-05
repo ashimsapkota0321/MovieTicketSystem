@@ -176,6 +176,8 @@ export default function VendorDashboard() {
   const weeklyBookings = analytics.weekly_bookings || [];
   const bookingValueStats = analytics.booking_value_stats || {};
   const revenuePerShow = analytics.revenue_per_show || [];
+  const dropoffSummary = analytics.dropoff_summary || {};
+  const dropoffTrend = analytics.dropoff_trend || [];
 
   const COLORS = ["#10b981", "#f59e0b", "#3b82f6", "#ef4444", "#8b5cf6", "#ec4899"];
 
@@ -210,6 +212,13 @@ export default function VendorDashboard() {
       delta: `${topFoodItems.length} Menu Items`,
       icon: ShoppingCart,
       tone: "danger",
+    },
+    {
+      label: "Drop-offs",
+      value: Number(dropoffSummary.total_left || 0),
+      delta: `${Number(dropoffSummary.payment_process_left || 0)} Payment exits`,
+      icon: TrendingDown,
+      tone: "warning",
     },
   ];
 
@@ -505,6 +514,59 @@ export default function VendorDashboard() {
           </ResponsiveContainer>
         ) : (
           <p className="text-muted">No trend data available</p>
+        )}
+      </section>
+
+      <section className="vendor-card">
+        <div className="vendor-card-header">
+          <div>
+            <h3>Booking Drop-off Trend</h3>
+            <p>Users leaving booking and payment process</p>
+          </div>
+          <div className="d-flex gap-2">
+            <span className="badge text-bg-warning">
+              Booking: {Number(dropoffSummary.booking_process_left || 0)}
+            </span>
+            <span className="badge text-bg-danger">
+              Payment: {Number(dropoffSummary.payment_process_left || 0)}
+            </span>
+          </div>
+        </div>
+        {dropoffTrend.length > 0 ? (
+          <ResponsiveContainer width="100%" height={280}>
+            <LineChart data={dropoffTrend}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--vendor-border)" />
+              <XAxis dataKey="date" stroke="var(--vendor-muted)" />
+              <YAxis stroke="var(--vendor-muted)" />
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: "var(--vendor-panel)",
+                  border: "1px solid var(--vendor-border)",
+                  color: "var(--vendor-text)",
+                  borderRadius: "8px",
+                }}
+              />
+              <Legend />
+              <Line
+                type="monotone"
+                dataKey="booking_process_left"
+                stroke="#f59e0b"
+                strokeWidth={2}
+                name="Booking Process"
+                dot={{ r: 3 }}
+              />
+              <Line
+                type="monotone"
+                dataKey="payment_process_left"
+                stroke="#ef4444"
+                strokeWidth={2}
+                name="Payment Process"
+                dot={{ r: 3 }}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        ) : (
+          <p className="text-muted">No drop-off data available</p>
         )}
       </section>
 
