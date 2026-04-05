@@ -20,6 +20,14 @@ from .models import (
     Review,
     Coupon,
     Notification,
+    BackgroundJob,
+    LoyaltyProgramConfig,
+    UserLoyaltyWallet,
+    LoyaltyTransaction,
+    LoyaltyPromotion,
+    VendorLoyaltyRule,
+    Reward,
+    RewardRedemption,
     Combo,
     ComboItem,
     Order,
@@ -251,6 +259,109 @@ class CouponAdmin(admin.ModelAdmin):
     ordering = ("-created_at",)
 
 
+@admin.register(LoyaltyProgramConfig)
+class LoyaltyProgramConfigAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "points_per_currency_unit",
+        "first_booking_bonus",
+        "points_expiry_months",
+        "is_active",
+        "updated_at",
+    )
+    list_filter = ("is_active",)
+
+
+@admin.register(VendorLoyaltyRule)
+class VendorLoyaltyRuleAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "vendor",
+        "points_per_currency_unit",
+        "first_booking_bonus",
+        "bonus_multiplier",
+        "is_active",
+    )
+    search_fields = ("vendor__name", "vendor__email")
+    list_filter = ("is_active",)
+
+
+@admin.register(UserLoyaltyWallet)
+class UserLoyaltyWalletAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "user",
+        "tier",
+        "total_points",
+        "available_points",
+        "lifetime_points",
+        "updated_at",
+    )
+    search_fields = ("user__email", "user__first_name", "user__last_name")
+    list_filter = ("tier",)
+
+
+@admin.register(LoyaltyPromotion)
+class LoyaltyPromotionAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "title",
+        "promo_type",
+        "vendor",
+        "bonus_multiplier",
+        "bonus_flat_points",
+        "is_active",
+    )
+    search_fields = ("title", "trigger_code")
+    list_filter = ("promo_type", "is_active")
+
+
+@admin.register(Reward)
+class RewardAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "title",
+        "reward_type",
+        "vendor",
+        "points_required",
+        "redeemed_count",
+        "is_active",
+        "expiry_date",
+    )
+    search_fields = ("title",)
+    list_filter = ("reward_type", "is_active", "vendor")
+
+
+@admin.register(RewardRedemption)
+class RewardRedemptionAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "user",
+        "reward",
+        "booking",
+        "points_used",
+        "status",
+        "created_at",
+    )
+    search_fields = ("user__email", "redemption_code")
+    list_filter = ("status", "reward__reward_type")
+
+
+@admin.register(LoyaltyTransaction)
+class LoyaltyTransactionAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "user",
+        "transaction_type",
+        "points",
+        "reference_type",
+        "reference_id",
+        "created_at",
+    )
+    search_fields = ("user__email", "reference_id", "idempotency_key")
+    list_filter = ("transaction_type", "reference_type", "is_expired")
+
+
 @admin.register(Notification)
 class NotificationAdmin(admin.ModelAdmin):
     list_display = (
@@ -264,6 +375,23 @@ class NotificationAdmin(admin.ModelAdmin):
     )
     search_fields = ("title", "message", "recipient_email")
     list_filter = ("recipient_role", "event_type", "channel", "is_read")
+    ordering = ("-created_at",)
+
+
+@admin.register(BackgroundJob)
+class BackgroundJobAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "job_type",
+        "status",
+        "attempts",
+        "max_attempts",
+        "available_at",
+        "created_at",
+        "finished_at",
+    )
+    search_fields = ("job_type", "error_message")
+    list_filter = ("job_type", "status")
     ordering = ("-created_at",)
 
 

@@ -4,13 +4,19 @@ from __future__ import annotations
 
 from typing import Any
 
+from django.db.models import Q
 from rest_framework import viewsets
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny
 
 from .models import Movie, MovieCredit, Person, Review
-from .permissions import IsAdmin, IsAdminOrReadOnly, is_admin_request
+from .permissions import (
+    IsAdmin,
+    IsAdminOrReadOnly,
+    is_admin_request,
+    resolve_customer,
+)
 from .serializers import (
     MovieAdminReadSerializer,
     MovieAdminWriteSerializer,
@@ -93,10 +99,10 @@ class ReviewViewSet(viewsets.ModelViewSet):
         return ReviewSerializer
 
     def get_permissions(self):
-        """Allow list/retrieve/create for everyone; restrict other actions to admin."""
-        if self.action in ("list", "retrieve", "create"):
+        """Allow public reads and controlled writes based on actor identity."""
+        if self.action in ("list", "retrieve"):
             return [AllowAny()]
-        return [IsAdmin()]
+        return [AllowAny()]
 
     def get_queryset(self):
         """Filter reviews by movie/user and respect approval status for non-admins."""
@@ -111,14 +117,59 @@ class ReviewViewSet(viewsets.ModelViewSet):
             qs = qs.filter(movie_id=movie_id)
         if user_id:
             qs = qs.filter(user_id=user_id)
+        customer = resolve_customer(self.request)
         if not is_admin_request(self.request):
-            qs = qs.filter(is_approved=True)
+            visible_filter = Q(is_approved=True)
+            if customer:
+                visible_filter |= Q(user_id=customer.id)
+            qs = qs.filter(visible_filter)
         return qs
 
+    def _assert_owner_or_admin(self, review: Review) -> None:
+        """Ensure only review owner (customer) or admin can mutate review."""
+        if is_admin_request(self.request):
+            return
+        customer = resolve_customer(self.request)
+        if not customer:
+            raise PermissionDenied("Authentication required.")
+        if review.user_id != customer.id:
+            raise PermissionDenied("You can only modify your own review.")
+
     def perform_create(self, serializer):
-        """Enforce unique user/movie reviews."""
+        """Enforce unique user/movie reviews and customer ownership on create."""
+        customer = resolve_customer(self.request)
+        if not is_admin_request(self.request) and not customer:
+            raise PermissionDenied("Authentication required.")
+
         movie = serializer.validated_data.get("movie")
         user = serializer.validated_data.get("user")
+        if not is_admin_request(self.request):
+            user = customer
+
         if movie and user and Review.objects.filter(movie=movie, user=user).exists():
             raise ValidationError("You have already reviewed this movie.")
-        serializer.save()
+
+        if is_admin_request(self.request):
+            serializer.save()
+            return
+        serializer.save(user=user)
+
+    def perform_update(self, serializer):
+        """Allow updates only for review owner or admin."""
+        review = serializer.instance
+        self._assert_owner_or_admin(review)
+
+        if is_admin_request(self.request):
+            serializer.save()
+            return
+
+        serializer.save(
+            user=review.user,
+            movie=review.movie,
+            is_approved=review.is_approved,
+        )
+
+    def perform_destroy(self, instance):
+        """Allow deletion only for review owner or admin."""
+        self._assert_owner_or_admin(instance)
+        instance.delete()

@@ -30,6 +30,10 @@ def register(request: Any):
                     "password",
                     "confirm_password",
                 ],
+                "optional_fields": [
+                    "referral_code",
+                    "device_fingerprint",
+                ],
             },
             status=status.HTTP_200_OK,
         )

@@ -22,6 +22,7 @@ from ..utils import coalesce
 def shows(request: Any):
     """List shows or create a new show."""
     if request.method == "GET":
+        dashboard_scope = is_admin_request(request) or is_vendor_request(request)
         movie_id = request.query_params.get("movie_id") or request.query_params.get(
             "movieId"
         )
@@ -30,7 +31,7 @@ def shows(request: Any):
         )
         # Admin/vendor dashboards own their scope already; avoid city over-filtering.
         city = None
-        if not (is_admin_request(request) or is_vendor_request(request)):
+        if not dashboard_scope:
             city = coalesce(request.query_params, "city", "location")
         shows_qs = selectors.list_shows(
             request=request,
@@ -38,7 +39,11 @@ def shows(request: Any):
             vendor_id=vendor_id,
             city=city,
         )
-        payload = [selectors.build_show_payload(show) for show in shows_qs]
+        running_status_label = "ongoing" if dashboard_scope else None
+        payload = [
+            selectors.build_show_payload(show, running_status_label=running_status_label)
+            for show in shows_qs
+        ]
         return Response({"shows": payload}, status=status.HTTP_200_OK)
 
     payload, status_code = services.create_show(request)

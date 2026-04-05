@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import random
 import re
@@ -16,14 +17,20 @@ from .models import (
     Banner,
     CollabDetails,
     Collaborator,
+    LoyaltyPromotion,
+    LoyaltyTransaction,
     HomeSlide,
     Movie,
     MovieCredit,
     MovieGenre,
     Person,
+    Reward,
+    RewardRedemption,
     Review,
     Show,
     User,
+    UserLoyaltyWallet,
+    VendorLoyaltyRule,
     Vendor,
 )
 from .utils import build_media_url, normalize_phone_number
@@ -57,11 +64,193 @@ def generate_unique_username(first_name: str, last_name: str) -> str:
             return username
 
 
+def _coerce_credit_list(value: Any, *, field_name: str) -> Optional[list[Any]]:
+    """Normalize a credit payload field into a list when provided."""
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ValidationError(
+                {field_name: f"Invalid JSON payload: {exc.msg}"}
+            ) from exc
+        if not isinstance(parsed, list):
+            raise ValidationError({field_name: "Expected a list of credit objects."})
+        return parsed
+    raise ValidationError({field_name: "Expected a list of credit objects."})
+
+
+def _normalize_credit_role_type(
+    value: Any,
+    *,
+    default_role_type: Optional[str] = None,
+) -> Optional[str]:
+    """Normalize role type values into MovieCredit choices."""
+    raw_value = str(value or default_role_type or "").strip().upper()
+    if raw_value in {MovieCredit.ROLE_CAST, "ACTOR", "ACTRESS"}:
+        return MovieCredit.ROLE_CAST
+    if raw_value in {MovieCredit.ROLE_CREW, "STAFF"}:
+        return MovieCredit.ROLE_CREW
+    return None
+
+
+def _normalize_person_credit_input(person_data: Any) -> dict[str, Any]:
+    """Normalize person keys accepted by credit payloads."""
+    source = person_data if isinstance(person_data, dict) else {}
+    normalized: dict[str, Any] = {}
+
+    mappings = {
+        "id": source.get("id"),
+        "full_name": source.get("full_name") or source.get("fullName") or source.get("name"),
+        "photo": source.get("photo"),
+        "photo_url": source.get("photo_url") or source.get("photoUrl"),
+        "photo_upload_key": source.get("photo_upload_key") or source.get("photoUploadKey"),
+        "bio": source.get("bio"),
+        "date_of_birth": source.get("date_of_birth") or source.get("dateOfBirth"),
+        "nationality": source.get("nationality"),
+        "instagram": source.get("instagram"),
+        "imdb": source.get("imdb"),
+        "facebook": source.get("facebook"),
+    }
+    for key, value in mappings.items():
+        if value is not None:
+            normalized[key] = value
+
+    return normalized
+
+
+def _normalize_credit_input_item(
+    item: Any,
+    *,
+    default_role_type: Optional[str] = None,
+) -> Optional[dict[str, Any]]:
+    """Normalize one credit item into serializer write schema."""
+    if not isinstance(item, dict):
+        return None
+
+    role_type = _normalize_credit_role_type(
+        item.get("role_type")
+        or item.get("roleType")
+        or item.get("credit_type")
+        or item.get("creditType"),
+        default_role_type=default_role_type,
+    )
+    if not role_type:
+        return None
+
+    role_value = (
+        item.get("role")
+        or item.get("role_name")
+        or item.get("roleName")
+        or item.get("character_name")
+        or item.get("characterName")
+        or item.get("job_title")
+        or item.get("jobTitle")
+        or item.get("department")
+    )
+    character_name = (
+        item.get("character_name")
+        or item.get("characterName")
+        or item.get("role_name")
+        or item.get("roleName")
+    )
+    job_title = item.get("job_title") or item.get("jobTitle") or item.get("department")
+    if not character_name and role_type == MovieCredit.ROLE_CAST:
+        character_name = role_value
+    if not job_title and role_type == MovieCredit.ROLE_CREW:
+        job_title = role_value
+
+    person_payload = _normalize_person_credit_input(
+        item.get("person") if isinstance(item.get("person"), dict) else item.get("person_data")
+    )
+    if not person_payload.get("full_name") and not person_payload.get("id"):
+        fallback_name = item.get("full_name") or item.get("fullName") or item.get("name")
+        if fallback_name:
+            person_payload["full_name"] = fallback_name
+
+    normalized: dict[str, Any] = {
+        "role_type": role_type,
+    }
+
+    credit_id = item.get("id")
+    if credit_id is not None:
+        normalized["id"] = credit_id
+
+    character_name_value = character_name
+    if character_name_value is not None:
+        normalized["character_name"] = character_name_value
+
+    job_title_value = job_title
+    if job_title_value is not None:
+        normalized["job_title"] = job_title_value
+
+    position_value = item.get("position")
+    if position_value is None:
+        position_value = item.get("order")
+    if position_value is not None:
+        normalized["position"] = position_value
+
+    person_id = item.get("person_id") or item.get("personId")
+    if person_id not in (None, ""):
+        normalized["person_id"] = person_id
+
+    if person_payload:
+        normalized["person"] = person_payload
+
+    return normalized
+
+
+def _extract_movie_credits_input(payload: dict[str, Any]) -> Optional[list[dict[str, Any]]]:
+    """Extract and normalize credits from credits/cast/crew payload formats."""
+    if "credits" in payload:
+        credits_input = _coerce_credit_list(payload.get("credits"), field_name="credits")
+        normalized = [
+            item
+            for item in (
+                _normalize_credit_input_item(entry)
+                for entry in (credits_input or [])
+            )
+            if item
+        ]
+        return normalized
+
+    cast = _coerce_credit_list(payload.get("cast"), field_name="cast") if "cast" in payload else None
+    crew = _coerce_credit_list(payload.get("crew"), field_name="crew") if "crew" in payload else None
+    if cast is None and crew is None:
+        return None
+
+    normalized: list[dict[str, Any]] = []
+    for entry in cast or []:
+        item = _normalize_credit_input_item(
+            entry,
+            default_role_type=MovieCredit.ROLE_CAST,
+        )
+        if item:
+            normalized.append(item)
+    for entry in crew or []:
+        item = _normalize_credit_input_item(
+            entry,
+            default_role_type=MovieCredit.ROLE_CREW,
+        )
+        if item:
+            normalized.append(item)
+    return normalized
+
+
 def _resolve_person_payload(
     person_id: Optional[int] = None,
     person_data: Optional[dict[str, Any]] = None,
     id_error_key: str = "person_id",
     data_error_key: str = "person",
+    request: Optional[Any] = None,
 ) -> Person:
     """Resolve a person from an ID or create one from payload data."""
     if person_id:
@@ -77,7 +266,12 @@ def _resolve_person_payload(
         except Person.DoesNotExist:
             raise ValidationError({data_error_key: "Person not found."})
 
-    full_name = (person_data.get("full_name") or "").strip()
+    full_name = (
+        person_data.get("full_name")
+        or person_data.get("fullName")
+        or person_data.get("name")
+        or ""
+    ).strip()
     if not full_name:
         raise ValidationError(
             {data_error_key: "full_name is required to create a new person."}
@@ -87,12 +281,17 @@ def _resolve_person_payload(
     if existing:
         return existing
 
+    upload_key = person_data.get("photo_upload_key") or person_data.get("photoUploadKey")
+    uploaded_photo = None
+    if request is not None and upload_key and hasattr(request, "FILES"):
+        uploaded_photo = request.FILES.get(upload_key)
+
     return Person.objects.create(
         full_name=full_name,
-        photo=person_data.get("photo"),
-        photo_url=person_data.get("photo_url"),
+        photo=uploaded_photo or person_data.get("photo"),
+        photo_url=person_data.get("photo_url") or person_data.get("photoUrl"),
         bio=person_data.get("bio"),
-        date_of_birth=person_data.get("date_of_birth"),
+        date_of_birth=person_data.get("date_of_birth") or person_data.get("dateOfBirth"),
         nationality=person_data.get("nationality"),
         instagram=person_data.get("instagram"),
         imdb=person_data.get("imdb"),
@@ -102,6 +301,10 @@ def _resolve_person_payload(
 
 class UserRegistrationSerializer(serializers.ModelSerializer):
     phone_number = serializers.CharField(required=True)
+    referral_code = serializers.CharField(required=False, allow_blank=True, write_only=True)
+    referralCode = serializers.CharField(required=False, allow_blank=True, write_only=True)
+    device_fingerprint = serializers.CharField(required=False, allow_blank=True, write_only=True)
+    deviceFingerprint = serializers.CharField(required=False, allow_blank=True, write_only=True)
     password = serializers.CharField(
         write_only=True,
         style={"input_type": "password"},
@@ -122,6 +325,10 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
             "first_name",
             "middle_name",
             "last_name",
+            "referral_code",
+            "referralCode",
+            "device_fingerprint",
+            "deviceFingerprint",
             "password",
             "confirm_password",
         ]
@@ -151,6 +358,16 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         """Ensure password confirmation matches."""
+        referral_code = attrs.get("referral_code") or attrs.get("referralCode")
+        if referral_code is not None:
+            attrs["referral_code"] = str(referral_code).strip().upper()
+        attrs.pop("referralCode", None)
+
+        device_fingerprint = attrs.get("device_fingerprint") or attrs.get("deviceFingerprint")
+        if device_fingerprint is not None:
+            attrs["device_fingerprint"] = str(device_fingerprint).strip()[:128]
+        attrs.pop("deviceFingerprint", None)
+
         if attrs["password"] != attrs["confirm_password"]:
             raise serializers.ValidationError(
                 {"confirm_password": PASSWORD_MISMATCH_MESSAGE}
@@ -160,6 +377,8 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         """Create a new user with a generated username and hashed password."""
         validated_data.pop("confirm_password")
+        validated_data.pop("referral_code", None)
+        validated_data.pop("device_fingerprint", None)
         logger.info(f"Creating user with data: {validated_data}")
 
         first_name = validated_data["first_name"].strip()
@@ -321,10 +540,15 @@ class PersonWriteSerializer(serializers.ModelSerializer):
 class PersonInputSerializer(serializers.Serializer):
     id = serializers.IntegerField(required=False)
     full_name = serializers.CharField(required=False, allow_blank=False)
+    fullName = serializers.CharField(required=False, allow_blank=False, write_only=True)
     photo = serializers.ImageField(required=False, allow_null=True)
     photo_url = serializers.URLField(required=False, allow_null=True, allow_blank=True)
+    photoUrl = serializers.URLField(required=False, allow_null=True, allow_blank=True, write_only=True)
+    photo_upload_key = serializers.CharField(required=False, allow_blank=True, write_only=True)
+    photoUploadKey = serializers.CharField(required=False, allow_blank=True, write_only=True)
     bio = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     date_of_birth = serializers.DateField(required=False, allow_null=True)
+    dateOfBirth = serializers.DateField(required=False, allow_null=True, write_only=True)
     nationality = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     instagram = serializers.URLField(required=False, allow_null=True, allow_blank=True)
     imdb = serializers.URLField(required=False, allow_null=True, allow_blank=True)
@@ -332,6 +556,28 @@ class PersonInputSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         """Require either a person ID or full name."""
+        full_name = attrs.get("full_name") or attrs.get("fullName")
+        if full_name:
+            attrs["full_name"] = str(full_name).strip()
+        attrs.pop("fullName", None)
+
+        photo_url = attrs.get("photo_url") or attrs.get("photoUrl")
+        if photo_url is not None:
+            attrs["photo_url"] = photo_url
+        attrs.pop("photoUrl", None)
+
+        date_of_birth = attrs.get("date_of_birth") or attrs.get("dateOfBirth")
+        if date_of_birth is not None:
+            attrs["date_of_birth"] = date_of_birth
+        attrs.pop("dateOfBirth", None)
+
+        photo_upload_key = attrs.get("photo_upload_key") or attrs.get("photoUploadKey")
+        if photo_upload_key:
+            attrs["photo_upload_key"] = str(photo_upload_key).strip()
+        else:
+            attrs.pop("photo_upload_key", None)
+        attrs.pop("photoUploadKey", None)
+
         if not attrs.get("id") and not attrs.get("full_name"):
             raise ValidationError("Person id or full_name is required.")
         return attrs
@@ -383,7 +629,11 @@ class MovieCreditWriteSerializer(serializers.ModelSerializer):
         """Create a credit and resolve the referenced person."""
         person_id = validated_data.pop("person_id", None)
         person_data = validated_data.pop("person", None)
-        person = _resolve_person_payload(person_id, person_data)
+        person = _resolve_person_payload(
+            person_id,
+            person_data,
+            request=self.context.get("request"),
+        )
         return MovieCredit.objects.create(person=person, **validated_data)
 
     def update(self, instance, validated_data):
@@ -391,7 +641,11 @@ class MovieCreditWriteSerializer(serializers.ModelSerializer):
         person_id = validated_data.pop("person_id", None)
         person_data = validated_data.pop("person", None)
         if person_id or person_data:
-            instance.person = _resolve_person_payload(person_id, person_data)
+            instance.person = _resolve_person_payload(
+                person_id,
+                person_data,
+                request=self.context.get("request"),
+            )
         return super().update(instance, validated_data)
 
 
@@ -509,6 +763,8 @@ class MovieAdminWriteSerializer(serializers.ModelSerializer):
             "longDescription": "long_description",
             "durationMinutes": "duration_minutes",
             "releaseDate": "release_date",
+            "posterImage": "poster_image",
+            "bannerImage": "banner_image",
             "posterUrl": "poster_url",
             "trailerUrl": "trailer_url",
             "isActive": "is_active",
@@ -517,24 +773,50 @@ class MovieAdminWriteSerializer(serializers.ModelSerializer):
         for source_key, target_key in aliases.items():
             if source_key in mutable and target_key not in mutable:
                 mutable[target_key] = mutable.get(source_key)
+
+        # Ignore empty image placeholders on PATCH to preserve existing files.
+        if self.instance and self.partial:
+            for image_field in ("poster_image", "banner_image"):
+                if image_field not in mutable:
+                    continue
+                raw_value = mutable.get(image_field)
+                if raw_value is None:
+                    del mutable[image_field]
+                    continue
+                if isinstance(raw_value, str) and raw_value.strip().lower() in {
+                    "",
+                    "null",
+                    "undefined",
+                }:
+                    del mutable[image_field]
+
+        normalized_credits = _extract_movie_credits_input(mutable)
+        if normalized_credits is not None:
+            mutable["credits"] = normalized_credits
+
         return super().to_internal_value(mutable)
 
     def _sync_credits(self, movie, credits_data):
         """Synchronize credits for a movie, creating/updating/removing as needed."""
         existing = {credit.id: credit for credit in movie.credits.all()}
         seen_ids = set()
+        request = self.context.get("request")
         for idx, credit_payload in enumerate(credits_data):
             credit_id = credit_payload.get("id")
             position = credit_payload.get("position")
             if position is None:
                 position = idx + 1
+            role_type = _normalize_credit_role_type(credit_payload.get("role_type"))
+            if not role_type:
+                continue
             person = _resolve_person_payload(
                 credit_payload.get("person_id"),
                 credit_payload.get("person"),
+                request=request,
             )
             if credit_id and credit_id in existing:
                 credit = existing[credit_id]
-                credit.role_type = credit_payload.get("role_type")
+                credit.role_type = role_type
                 credit.character_name = credit_payload.get("character_name")
                 credit.job_title = credit_payload.get("job_title")
                 credit.position = position
@@ -545,7 +827,7 @@ class MovieAdminWriteSerializer(serializers.ModelSerializer):
                 credit = MovieCredit.objects.create(
                     movie=movie,
                     person=person,
-                    role_type=credit_payload.get("role_type"),
+                    role_type=role_type,
                     character_name=credit_payload.get("character_name"),
                     job_title=credit_payload.get("job_title"),
                     position=position,
@@ -992,3 +1274,118 @@ class BannerListSerializer(serializers.ModelSerializer):
             "bannerImage": banner_image,
             "status": movie.status,
         }
+
+
+class UserLoyaltyWalletSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UserLoyaltyWallet
+        fields = [
+            "user",
+            "total_points",
+            "available_points",
+            "lifetime_points",
+            "tier",
+            "created_at",
+            "updated_at",
+        ]
+
+
+class LoyaltyTransactionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LoyaltyTransaction
+        fields = [
+            "id",
+            "user",
+            "transaction_type",
+            "points",
+            "reference_type",
+            "reference_id",
+            "idempotency_key",
+            "expires_at",
+            "is_expired",
+            "metadata",
+            "created_at",
+        ]
+
+
+class RewardSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Reward
+        fields = [
+            "id",
+            "title",
+            "description",
+            "points_required",
+            "reward_type",
+            "discount_amount",
+            "discount_percent",
+            "max_discount_amount",
+            "vendor",
+            "stock_limit",
+            "redeemed_count",
+            "expiry_date",
+            "is_active",
+            "is_stackable_with_coupon",
+            "created_at",
+            "updated_at",
+        ]
+
+
+class RewardRedemptionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RewardRedemption
+        fields = [
+            "id",
+            "user",
+            "reward",
+            "points_used",
+            "booking",
+            "status",
+            "redemption_code",
+            "expires_at",
+            "used_at",
+            "metadata",
+            "created_at",
+        ]
+
+
+class VendorLoyaltyRuleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = VendorLoyaltyRule
+        fields = [
+            "vendor",
+            "points_per_currency_unit",
+            "first_booking_bonus",
+            "bonus_multiplier",
+            "is_active",
+            "created_at",
+            "updated_at",
+        ]
+
+
+class LoyaltyPromotionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LoyaltyPromotion
+        fields = [
+            "id",
+            "title",
+            "description",
+            "promo_type",
+            "trigger_code",
+            "vendor",
+            "bonus_multiplier",
+            "bonus_flat_points",
+            "stackable",
+            "starts_at",
+            "ends_at",
+            "is_active",
+            "created_at",
+            "updated_at",
+        ]
+
+
+class LoyaltyCheckoutPreviewSerializer(serializers.Serializer):
+    subtotal = serializers.DecimalField(max_digits=10, decimal_places=2)
+    points_to_redeem = serializers.IntegerField(required=False, min_value=0)
+    reward_id = serializers.IntegerField(required=False, min_value=1)
+    vendor_id = serializers.IntegerField(required=False, min_value=1)

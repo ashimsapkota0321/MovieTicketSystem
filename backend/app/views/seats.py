@@ -14,6 +14,18 @@ from ..permissions import vendor_required
 
 @api_view(["GET", "POST"])
 @vendor_required
+def vendor_halls(request: Any):
+    """List vendor halls or create next auto-generated hall."""
+    if request.method == "GET":
+        payload, status_code = services.list_vendor_halls(request)
+        return Response(payload, status=status_code)
+
+    payload, status_code = services.create_vendor_hall(request)
+    return Response(payload, status=status_code)
+
+
+@api_view(["GET", "POST"])
+@vendor_required
 def vendor_seat_layout(request: Any):
     """List or save vendor hall seat layout."""
     if request.method == "GET":

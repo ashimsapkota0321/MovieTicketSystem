@@ -93,6 +93,46 @@ def vendor_pricing_rule_detail(request: Any, rule_id: int):
     return Response(payload, status=status_code)
 
 
+@api_view(["GET", "POST"])
+@admin_required
+def admin_pricing_rules(request: Any):
+    """List or create pricing rules (global and vendor-scoped) for admin."""
+    if request.method == "GET":
+        payload, status_code = services.list_admin_pricing_rules(request)
+        return Response(payload, status=status_code)
+
+    payload, status_code = services.create_admin_pricing_rule(request)
+    return Response(payload, status=status_code)
+
+
+@api_view(["PATCH", "DELETE"])
+@admin_required
+def admin_pricing_rule_detail(request: Any, rule_id: int):
+    """Update or delete one pricing rule as admin."""
+    rule = PricingRule.objects.filter(id=rule_id).first()
+    if not rule:
+        return Response({"message": "Pricing rule not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == "PATCH":
+        payload, status_code = services.update_admin_pricing_rule(request, rule)
+        return Response(payload, status=status_code)
+
+    payload, status_code = services.delete_admin_pricing_rule(rule)
+    return Response(payload, status=status_code)
+
+
+@api_view(["GET", "POST"])
+@vendor_required
+def vendor_show_base_prices(request: Any):
+    """List or upsert per-show base prices for vendor dynamic pricing engine."""
+    if request.method == "GET":
+        payload, status_code = services.list_vendor_show_base_prices(request)
+        return Response(payload, status=status_code)
+
+    payload, status_code = services.upsert_vendor_show_base_prices(request)
+    return Response(payload, status=status_code)
+
+
 @api_view(["GET"])
 @vendor_required
 def vendor_wallet_balance(request: Any):

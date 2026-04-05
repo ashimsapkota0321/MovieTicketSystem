@@ -19,8 +19,13 @@ from .models import (
     Ticket,
     Vendor,
 )
-from .permissions import resolve_vendor
-from .utils import build_media_url, extract_youtube_id
+from .permissions import is_admin_request, is_vendor_request, resolve_vendor
+from .utils import (
+    build_media_url,
+    combine_date_time_utc,
+    ensure_utc_datetime,
+    extract_youtube_id,
+)
 
 LISTING_STATUS_NOW = "Now Showing"
 LISTING_STATUS_COMING = "Coming Soon"
@@ -34,11 +39,7 @@ BOOKING_CLOSE_BEFORE_START_MINUTES = Show.BOOKING_CLOSE_BEFORE_START_MINUTES
 def _combine_local_show_datetime(show_date, show_time):
     if not show_date or not show_time:
         return None
-    combined = datetime.combine(show_date, show_time)
-    now = timezone.now()
-    if timezone.is_aware(now):
-        return timezone.make_aware(combined, timezone.get_current_timezone())
-    return combined
+    return combine_date_time_utc(show_date, show_time)
 
 
 def _show_start_before_or_at(moment: datetime) -> Q:
@@ -72,7 +73,7 @@ def _show_end_before_or_at(moment: datetime) -> Q:
 
 
 def get_show_lifecycle_state(show: Show, now: Optional[datetime] = None) -> dict[str, Any]:
-    now = now or timezone.now()
+    now = ensure_utc_datetime(now or timezone.now())
     start_dt = _combine_local_show_datetime(show.show_date, show.start_time)
     end_dt = _combine_local_show_datetime(show.show_date, show.end_time or show.start_time)
     if not start_dt:
@@ -107,7 +108,7 @@ def is_show_booking_open(show: Show, now: Optional[datetime] = None) -> bool:
 
 
 def sync_show_lifecycle_statuses(now: Optional[datetime] = None) -> dict[str, int]:
-    now = now or timezone.now()
+    now = ensure_utc_datetime(now or timezone.now())
     updated = {
         SHOW_STATUS_UPCOMING: 0,
         SHOW_STATUS_RUNNING: 0,
@@ -124,13 +125,13 @@ def sync_show_lifecycle_statuses(now: Optional[datetime] = None) -> dict[str, in
 
 
 def list_available_shows(now: Optional[datetime] = None):
-    now = now or timezone.now()
+    now = ensure_utc_datetime(now or timezone.now())
     cutoff = now + timedelta(minutes=BOOKING_CLOSE_BEFORE_START_MINUTES)
     return Show.objects.filter(_show_start_after(cutoff)).exclude(status__iexact=SHOW_STATUS_COMPLETED)
 
 
 def list_booking_closed_shows(now: Optional[datetime] = None):
-    now = now or timezone.now()
+    now = ensure_utc_datetime(now or timezone.now())
     cutoff = now + timedelta(minutes=BOOKING_CLOSE_BEFORE_START_MINUTES)
     return Show.objects.filter(_show_start_before_or_at(cutoff)).filter(_show_start_after(now)).exclude(
         status__iexact=SHOW_STATUS_COMPLETED
@@ -138,12 +139,12 @@ def list_booking_closed_shows(now: Optional[datetime] = None):
 
 
 def list_running_shows(now: Optional[datetime] = None):
-    now = now or timezone.now()
+    now = ensure_utc_datetime(now or timezone.now())
     return Show.objects.filter(_show_start_before_or_at(now)).exclude(_show_end_before_or_at(now))
 
 
 def list_completed_shows(now: Optional[datetime] = None):
-    now = now or timezone.now()
+    now = ensure_utc_datetime(now or timezone.now())
     return Show.objects.filter(_show_end_before_or_at(now))
 
 
@@ -523,12 +524,18 @@ def list_shows(
         "-show_date", "-start_time"
     )
     queryset = queryset.exclude(status__iexact=SHOW_STATUS_COMPLETED)
+    dashboard_scope = bool(
+        request is not None and (is_admin_request(request) or is_vendor_request(request))
+    )
 
     vendor = resolve_vendor(request) if request is not None else None
     if vendor:
         queryset = queryset.filter(vendor_id=vendor.id)
     elif vendor_id:
         queryset = queryset.filter(vendor_id=vendor_id)
+
+    if not dashboard_scope:
+        queryset = queryset.exclude(status__iexact=SHOW_STATUS_RUNNING)
 
     if movie_id:
         queryset = queryset.filter(movie_id=movie_id)
@@ -548,9 +555,16 @@ def get_show(show_id: int) -> Optional[Show]:
         return None
 
 
-def build_show_payload(show: Show) -> dict[str, Any]:
+def build_show_payload(
+    show: Show,
+    *,
+    running_status_label: Optional[str] = None,
+) -> dict[str, Any]:
     """Build the payload for a show listing."""
     lifecycle = get_show_lifecycle_state(show)
+    status_value = lifecycle["status"]
+    if status_value == SHOW_STATUS_RUNNING and running_status_label:
+        status_value = str(running_status_label).strip() or status_value
     return {
         "id": show.id,
         "movieId": show.movie_id,
@@ -564,7 +578,7 @@ def build_show_payload(show: Show) -> dict[str, Any]:
         "end": show.end_time.strftime("%H:%M") if show.end_time else None,
         "screenType": show.screen_type,
         "price": float(show.price) if show.price is not None else None,
-        "status": lifecycle["status"],
+        "status": status_value,
         "listingStatus": show.listing_status,
         "bookingOpen": bool(lifecycle["booking_open"]),
         "bookingCloseAt": lifecycle["booking_close_at"].isoformat()

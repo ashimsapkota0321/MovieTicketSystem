@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+import uuid
+from datetime import timedelta
 
 from django.contrib.auth.hashers import check_password, identify_hasher, make_password
 from django.core.exceptions import ValidationError
@@ -10,6 +11,8 @@ from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.utils import timezone
 from django.utils.text import slugify
+
+from .utils import combine_date_time_utc
 
 
 def _unique_slugify(
@@ -35,6 +38,10 @@ class User(models.Model):
     phone_number = models.CharField(max_length=13, unique=True)
     email = models.EmailField(unique=True)
     username = models.CharField(max_length=50, unique=True, blank=True, null=True)
+    referral_code = models.CharField(max_length=20, unique=True, blank=True, null=True, db_index=True)
+    signup_ip_address = models.CharField(max_length=45, blank=True, null=True)
+    signup_user_agent = models.CharField(max_length=255, blank=True, null=True)
+    signup_device_fingerprint = models.CharField(max_length=128, blank=True, null=True)
     profile_image = models.ImageField(upload_to="profile_images/", blank=True, null=True)
     dob = models.DateField()
     first_name = models.CharField(max_length=50)
@@ -167,6 +174,29 @@ class Vendor(models.Model):
         return self.name or self.username or self.email
 
 
+class VendorLoyaltyRule(models.Model):
+    vendor = models.OneToOneField(Vendor, on_delete=models.CASCADE, related_name="loyalty_rule")
+    points_per_currency_unit = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        blank=True,
+        null=True,
+        help_text="Currency amount required to earn one point for this vendor.",
+    )
+    first_booking_bonus = models.PositiveIntegerField(blank=True, null=True)
+    bonus_multiplier = models.DecimalField(max_digits=5, decimal_places=2, default=1)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "vendor_loyalty_rules"
+        ordering = ["-updated_at", "-id"]
+
+    def __str__(self):
+        return f"Loyalty Rule {self.vendor_id}"
+
+
 class VendorStaff(models.Model):
     ROLE_CASHIER = "CASHIER"
     ROLE_MANAGER = "MANAGER"
@@ -291,7 +321,7 @@ class Show(models.Model):
         (STATUS_RUNNING, "Running"),
         (STATUS_COMPLETED, "Completed"),
     ]
-    BOOKING_CLOSE_BEFORE_START_MINUTES = 30
+    BOOKING_CLOSE_BEFORE_START_MINUTES = 10
 
     vendor = models.ForeignKey(Vendor, on_delete=models.CASCADE, related_name="shows")
     movie = models.ForeignKey(Movie, on_delete=models.CASCADE, related_name="shows")
@@ -321,11 +351,7 @@ class Show(models.Model):
     def _combine_local_datetime(self, when_time):
         if not self.show_date or not when_time:
             return None
-        combined = datetime.combine(self.show_date, when_time)
-        now = timezone.now()
-        if timezone.is_aware(now):
-            return timezone.make_aware(combined, timezone.get_current_timezone())
-        return combined
+        return combine_date_time_utc(self.show_date, when_time)
 
     @property
     def start_datetime(self):
@@ -351,6 +377,29 @@ class Show(models.Model):
 
 
 class PricingRule(models.Model):
+    DAY_OF_WEEK_ALL = "ALL"
+    DAY_OF_WEEK_WEEKDAY = "WEEKDAY"
+    DAY_OF_WEEK_WEEKEND = "WEEKEND"
+    DAY_OF_WEEK_MON = "MON"
+    DAY_OF_WEEK_TUE = "TUE"
+    DAY_OF_WEEK_WED = "WED"
+    DAY_OF_WEEK_THU = "THU"
+    DAY_OF_WEEK_FRI = "FRI"
+    DAY_OF_WEEK_SAT = "SAT"
+    DAY_OF_WEEK_SUN = "SUN"
+    DAY_OF_WEEK_CHOICES = [
+        (DAY_OF_WEEK_ALL, "All Days"),
+        (DAY_OF_WEEK_WEEKDAY, "Weekday"),
+        (DAY_OF_WEEK_WEEKEND, "Weekend"),
+        (DAY_OF_WEEK_MON, "Monday"),
+        (DAY_OF_WEEK_TUE, "Tuesday"),
+        (DAY_OF_WEEK_WED, "Wednesday"),
+        (DAY_OF_WEEK_THU, "Thursday"),
+        (DAY_OF_WEEK_FRI, "Friday"),
+        (DAY_OF_WEEK_SAT, "Saturday"),
+        (DAY_OF_WEEK_SUN, "Sunday"),
+    ]
+
     DAY_TYPE_ALL = "ALL"
     DAY_TYPE_WEEKDAY = "WEEKDAY"
     DAY_TYPE_WEEKEND = "WEEKEND"
@@ -365,12 +414,18 @@ class PricingRule(models.Model):
     SEAT_CATEGORY_EXECUTIVE = "EXECUTIVE"
     SEAT_CATEGORY_PREMIUM = "PREMIUM"
     SEAT_CATEGORY_VIP = "VIP"
+    SEAT_CATEGORY_SILVER = "SILVER"
+    SEAT_CATEGORY_GOLD = "GOLD"
+    SEAT_CATEGORY_PLATINUM = "PLATINUM"
     SEAT_CATEGORY_CHOICES = [
         (SEAT_CATEGORY_ALL, "All Categories"),
         (SEAT_CATEGORY_NORMAL, "Normal"),
         (SEAT_CATEGORY_EXECUTIVE, "Executive"),
         (SEAT_CATEGORY_PREMIUM, "Premium"),
         (SEAT_CATEGORY_VIP, "VIP"),
+        (SEAT_CATEGORY_SILVER, "Silver"),
+        (SEAT_CATEGORY_GOLD, "Gold"),
+        (SEAT_CATEGORY_PLATINUM, "Platinum"),
     ]
 
     ADJUSTMENT_FIXED = "FIXED"
@@ -384,18 +439,44 @@ class PricingRule(models.Model):
         (ADJUSTMENT_MULTIPLIER, "Multiply"),
     ]
 
-    vendor = models.ForeignKey(Vendor, on_delete=models.CASCADE, related_name="pricing_rules")
+    vendor = models.ForeignKey(
+        Vendor,
+        on_delete=models.CASCADE,
+        related_name="pricing_rules",
+        blank=True,
+        null=True,
+    )
     movie = models.ForeignKey(Movie, on_delete=models.CASCADE, related_name="pricing_rules", blank=True, null=True)
     name = models.CharField(max_length=120)
     hall = models.CharField(max_length=80, blank=True, null=True)
+    day_of_week = models.CharField(max_length=20, choices=DAY_OF_WEEK_CHOICES, default=DAY_OF_WEEK_ALL)
+    start_time = models.TimeField(blank=True, null=True)
+    end_time = models.TimeField(blank=True, null=True)
     seat_category = models.CharField(max_length=20, choices=SEAT_CATEGORY_CHOICES, default=SEAT_CATEGORY_ALL)
     day_type = models.CharField(max_length=20, choices=DAY_TYPE_CHOICES, default=DAY_TYPE_ALL)
+    occupancy_threshold = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        blank=True,
+        null=True,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+    )
+    price_multiplier = models.DecimalField(
+        max_digits=8,
+        decimal_places=4,
+        blank=True,
+        null=True,
+        validators=[MinValueValidator(0.01)],
+    )
+    flat_adjustment = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
     is_festival_pricing = models.BooleanField(default=False)
     festival_name = models.CharField(max_length=80, blank=True, null=True)
     start_date = models.DateField(blank=True, null=True)
     end_date = models.DateField(blank=True, null=True)
     adjustment_type = models.CharField(max_length=20, choices=ADJUSTMENT_TYPE_CHOICES, default=ADJUSTMENT_INCREMENT)
     adjustment_value = models.DecimalField(max_digits=10, decimal_places=2)
+    min_price_cap = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
+    max_price_cap = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
     priority = models.PositiveIntegerField(default=100)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -404,9 +485,62 @@ class PricingRule(models.Model):
     class Meta:
         db_table = "pricing_rules"
         ordering = ["priority", "id"]
+        indexes = [
+            models.Index(fields=["vendor", "is_active", "priority"]),
+            models.Index(fields=["is_active", "day_of_week", "seat_category"]),
+            models.Index(fields=["movie", "hall"]),
+        ]
+
+    def clean(self):
+        errors = {}
+        if self.start_date and self.end_date and self.start_date > self.end_date:
+            errors["end_date"] = "end_date must be on or after start_date."
+        if (
+            self.min_price_cap is not None
+            and self.max_price_cap is not None
+            and self.min_price_cap > self.max_price_cap
+        ):
+            errors["max_price_cap"] = "max_price_cap must be >= min_price_cap."
+        if self.min_price_cap is not None and self.min_price_cap < 0:
+            errors["min_price_cap"] = "min_price_cap must be non-negative."
+        if self.max_price_cap is not None and self.max_price_cap < 0:
+            errors["max_price_cap"] = "max_price_cap must be non-negative."
+        if errors:
+            raise ValidationError(errors)
 
     def __str__(self):
-        return f"{self.vendor_id} - {self.name}"
+        owner = f"vendor {self.vendor_id}" if self.vendor_id else "global"
+        return f"{owner} - {self.name}"
+
+
+class ShowBasePrice(models.Model):
+    show = models.ForeignKey(Show, on_delete=models.CASCADE, related_name="base_prices")
+    seat_category = models.CharField(
+        max_length=20,
+        choices=PricingRule.SEAT_CATEGORY_CHOICES,
+        default=PricingRule.SEAT_CATEGORY_NORMAL,
+    )
+    base_price = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(0)])
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "show_base_prices"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["show", "seat_category"],
+                name="unique_show_seat_category_base_price",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["show", "is_active"]),
+            models.Index(fields=["seat_category", "is_active"]),
+        ]
+        ordering = ["show_id", "seat_category", "id"]
+
+    def __str__(self):
+        return f"Show {self.show_id} {self.seat_category} - {self.base_price}"
 
 
 class VendorCancellationPolicy(models.Model):
@@ -579,7 +713,27 @@ class OTPVerification(models.Model):
 
 
 class Ticket(models.Model):
+    ticket_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False, db_index=True)
     reference = models.CharField(max_length=20, unique=True)
+    user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        related_name="tickets",
+        blank=True,
+        null=True,
+    )
+    show = models.ForeignKey(
+        Show,
+        on_delete=models.SET_NULL,
+        related_name="tickets",
+        blank=True,
+        null=True,
+    )
+    seats = models.CharField(max_length=255, blank=True, null=True)
+    show_datetime = models.DateTimeField(blank=True, null=True)
+    payment_status = models.CharField(max_length=20, default="PENDING")
+    token_expires_at = models.DateTimeField(blank=True, null=True)
+    is_used = models.BooleanField(default=False)
     payload = models.JSONField()
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -625,6 +779,13 @@ class TicketValidationScan(models.Model):
         Vendor,
         on_delete=models.SET_NULL,
         related_name="performed_ticket_scans",
+        blank=True,
+        null=True,
+    )
+    vendor_staff = models.ForeignKey(
+        "VendorStaff",
+        on_delete=models.SET_NULL,
+        related_name="ticket_validation_scans",
         blank=True,
         null=True,
     )
@@ -871,7 +1032,298 @@ class Coupon(models.Model):
         return self.code
 
 
+class Reward(models.Model):
+    TYPE_DISCOUNT = "DISCOUNT"
+    TYPE_FREE_TICKET = "FREE_TICKET"
+    TYPE_CASHBACK = "CASHBACK"
+    TYPE_CHOICES = [
+        (TYPE_DISCOUNT, "Discount"),
+        (TYPE_FREE_TICKET, "Free Ticket"),
+        (TYPE_CASHBACK, "Cashback"),
+    ]
+
+    title = models.CharField(max_length=140)
+    description = models.TextField(blank=True, null=True)
+    points_required = models.PositiveIntegerField(default=0)
+    reward_type = models.CharField(max_length=20, choices=TYPE_CHOICES, default=TYPE_DISCOUNT)
+    discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    discount_percent = models.DecimalField(max_digits=5, decimal_places=2, blank=True, null=True)
+    max_discount_amount = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
+    vendor = models.ForeignKey(
+        Vendor,
+        on_delete=models.SET_NULL,
+        related_name="rewards",
+        blank=True,
+        null=True,
+    )
+    stock_limit = models.PositiveIntegerField(blank=True, null=True)
+    redeemed_count = models.PositiveIntegerField(default=0)
+    expiry_date = models.DateTimeField(blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+    is_stackable_with_coupon = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "rewards"
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["is_active", "expiry_date"]),
+            models.Index(fields=["vendor", "is_active"]),
+            models.Index(fields=["points_required"]),
+        ]
+
+    def __str__(self):
+        return self.title
+
+
+class SubscriptionPlan(models.Model):
+    TIER_SILVER = "SILVER"
+    TIER_GOLD = "GOLD"
+    TIER_PLATINUM = "PLATINUM"
+    TIER_CHOICES = [
+        (TIER_SILVER, "Silver"),
+        (TIER_GOLD, "Gold"),
+        (TIER_PLATINUM, "Platinum"),
+    ]
+
+    DISCOUNT_TYPE_NONE = "NONE"
+    DISCOUNT_TYPE_PERCENTAGE = "PERCENTAGE"
+    DISCOUNT_TYPE_FIXED = "FIXED"
+    DISCOUNT_TYPE_CHOICES = [
+        (DISCOUNT_TYPE_NONE, "None"),
+        (DISCOUNT_TYPE_PERCENTAGE, "Percentage"),
+        (DISCOUNT_TYPE_FIXED, "Fixed"),
+    ]
+
+    vendor = models.ForeignKey(
+        Vendor,
+        on_delete=models.CASCADE,
+        related_name="subscription_plans",
+        blank=True,
+        null=True,
+    )
+    code = models.CharField(max_length=40, unique=True, db_index=True)
+    name = models.CharField(max_length=120)
+    description = models.TextField(blank=True, null=True)
+    tier = models.CharField(max_length=20, choices=TIER_CHOICES, default=TIER_SILVER)
+    duration_days = models.PositiveIntegerField(default=30)
+    price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    currency = models.CharField(max_length=10, default="NPR")
+    discount_type = models.CharField(max_length=20, choices=DISCOUNT_TYPE_CHOICES, default=DISCOUNT_TYPE_NONE)
+    discount_value = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    max_discount_amount = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
+    free_tickets_total = models.PositiveIntegerField(default=0)
+    early_access_hours = models.PositiveIntegerField(default=0)
+    special_pricing_percent = models.DecimalField(max_digits=5, decimal_places=2, blank=True, null=True)
+    subscription_only_access = models.BooleanField(default=False)
+    allow_multiple_active = models.BooleanField(default=False)
+    is_stackable_with_coupon = models.BooleanField(default=True)
+    is_stackable_with_loyalty = models.BooleanField(default=True)
+    is_stackable_with_referral_wallet = models.BooleanField(default=True)
+    is_public = models.BooleanField(default=True)
+    is_active = models.BooleanField(default=True)
+    priority = models.PositiveIntegerField(default=100)
+    valid_from = models.DateTimeField(blank=True, null=True)
+    valid_until = models.DateTimeField(blank=True, null=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "subscription_plans"
+        ordering = ["priority", "-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["vendor", "is_active"]),
+            models.Index(fields=["tier", "is_active"]),
+            models.Index(fields=["is_public", "is_active"]),
+            models.Index(fields=["valid_from", "valid_until"]),
+        ]
+
+    def clean(self):
+        errors = {}
+        if self.discount_value is None or self.discount_value < 0:
+            errors["discount_value"] = "Discount value must be non-negative."
+        if (
+            self.discount_type == self.DISCOUNT_TYPE_PERCENTAGE
+            and self.discount_value is not None
+            and self.discount_value > 100
+        ):
+            errors["discount_value"] = "Percentage discount cannot exceed 100."
+        if self.max_discount_amount is not None and self.max_discount_amount < 0:
+            errors["max_discount_amount"] = "Max discount amount must be non-negative."
+        if self.special_pricing_percent is not None and self.special_pricing_percent < 0:
+            errors["special_pricing_percent"] = "Special pricing percent must be non-negative."
+        if self.valid_from and self.valid_until and self.valid_from > self.valid_until:
+            errors["valid_until"] = "valid_until must be after valid_from."
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        if self.code:
+            self.code = str(self.code).strip().upper()
+        if self.currency:
+            self.currency = str(self.currency).strip().upper()[:10]
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        scope = f"Vendor:{self.vendor_id}" if self.vendor_id else "Global"
+        return f"{self.name} ({scope})"
+
+
+class UserSubscription(models.Model):
+    STATUS_ACTIVE = "ACTIVE"
+    STATUS_CANCELLED = "CANCELLED"
+    STATUS_EXPIRED = "EXPIRED"
+    STATUS_PENDING_PAYMENT = "PENDING_PAYMENT"
+    STATUS_CHOICES = [
+        (STATUS_ACTIVE, "Active"),
+        (STATUS_CANCELLED, "Cancelled"),
+        (STATUS_EXPIRED, "Expired"),
+        (STATUS_PENDING_PAYMENT, "Pending Payment"),
+    ]
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="subscriptions")
+    plan = models.ForeignKey(
+        SubscriptionPlan,
+        on_delete=models.CASCADE,
+        related_name="user_subscriptions",
+    )
+    vendor = models.ForeignKey(
+        Vendor,
+        on_delete=models.SET_NULL,
+        related_name="user_subscriptions",
+        blank=True,
+        null=True,
+    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_ACTIVE)
+    start_at = models.DateTimeField(default=timezone.now)
+    end_at = models.DateTimeField()
+    cancel_at_period_end = models.BooleanField(default=False)
+    cancelled_at = models.DateTimeField(blank=True, null=True)
+    upgraded_from = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        related_name="upgraded_children",
+        blank=True,
+        null=True,
+    )
+    remaining_free_tickets = models.PositiveIntegerField(default=0)
+    used_free_tickets = models.PositiveIntegerField(default=0)
+    total_discount_used = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "user_subscriptions"
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["user", "status", "end_at"]),
+            models.Index(fields=["vendor", "status", "end_at"]),
+            models.Index(fields=["plan", "status"]),
+            models.Index(fields=["status", "end_at"]),
+        ]
+
+    def __str__(self):
+        return f"UserSubscription {self.id} ({self.status})"
+
+
+class SubscriptionTransaction(models.Model):
+    TYPE_PURCHASE = "PURCHASE"
+    TYPE_RENEWAL = "RENEWAL"
+    TYPE_UPGRADE = "UPGRADE"
+    TYPE_PRORATION = "PRORATION"
+    TYPE_DISCOUNT_APPLIED = "DISCOUNT_APPLIED"
+    TYPE_FREE_TICKET_APPLIED = "FREE_TICKET_APPLIED"
+    TYPE_REFUND = "REFUND"
+    TYPE_CANCEL = "CANCEL"
+    TYPE_EXPIRE = "EXPIRE"
+    TYPE_CHOICES = [
+        (TYPE_PURCHASE, "Purchase"),
+        (TYPE_RENEWAL, "Renewal"),
+        (TYPE_UPGRADE, "Upgrade"),
+        (TYPE_PRORATION, "Proration"),
+        (TYPE_DISCOUNT_APPLIED, "Discount Applied"),
+        (TYPE_FREE_TICKET_APPLIED, "Free Ticket Applied"),
+        (TYPE_REFUND, "Refund"),
+        (TYPE_CANCEL, "Cancel"),
+        (TYPE_EXPIRE, "Expire"),
+    ]
+
+    STATUS_PENDING = "PENDING"
+    STATUS_SUCCESS = "SUCCESS"
+    STATUS_FAILED = "FAILED"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_SUCCESS, "Success"),
+        (STATUS_FAILED, "Failed"),
+    ]
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="subscription_transactions")
+    subscription = models.ForeignKey(
+        UserSubscription,
+        on_delete=models.SET_NULL,
+        related_name="transactions",
+        blank=True,
+        null=True,
+    )
+    plan = models.ForeignKey(
+        SubscriptionPlan,
+        on_delete=models.SET_NULL,
+        related_name="transactions",
+        blank=True,
+        null=True,
+    )
+    booking = models.ForeignKey(
+        "Booking",
+        on_delete=models.SET_NULL,
+        related_name="subscription_transactions",
+        blank=True,
+        null=True,
+    )
+    transaction_type = models.CharField(max_length=30, choices=TYPE_CHOICES)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_SUCCESS)
+    amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    free_tickets_used = models.PositiveIntegerField(default=0)
+    currency = models.CharField(max_length=10, default="NPR")
+    reference_id = models.CharField(max_length=120, blank=True, null=True, db_index=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "subscription_transactions"
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["user", "created_at"]),
+            models.Index(fields=["subscription", "created_at"]),
+            models.Index(fields=["booking", "transaction_type"]),
+            models.Index(fields=["transaction_type", "status"]),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.currency:
+            self.currency = str(self.currency).strip().upper()[:10]
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"SubscriptionTransaction {self.id} ({self.transaction_type})"
+
+
 class Booking(models.Model):
+    FRAUD_LEVEL_LOW = "LOW"
+    FRAUD_LEVEL_MEDIUM = "MEDIUM"
+    FRAUD_LEVEL_HIGH = "HIGH"
+    FRAUD_LEVEL_CRITICAL = "CRITICAL"
+    FRAUD_LEVEL_CHOICES = [
+        (FRAUD_LEVEL_LOW, "Low"),
+        (FRAUD_LEVEL_MEDIUM, "Medium"),
+        (FRAUD_LEVEL_HIGH, "High"),
+        (FRAUD_LEVEL_CRITICAL, "Critical"),
+    ]
+
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="bookings")
     showtime = models.ForeignKey(Showtime, on_delete=models.CASCADE, related_name="bookings")
     booking_date = models.DateTimeField(auto_now_add=True)
@@ -892,12 +1344,323 @@ class Booking(models.Model):
         null=True,
     )
     discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    loyalty_points_redeemed = models.PositiveIntegerField(default=0)
+    loyalty_discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    subscription_plan = models.ForeignKey(
+        SubscriptionPlan,
+        on_delete=models.SET_NULL,
+        related_name="bookings",
+        blank=True,
+        null=True,
+    )
+    user_subscription = models.ForeignKey(
+        UserSubscription,
+        on_delete=models.SET_NULL,
+        related_name="bookings",
+        blank=True,
+        null=True,
+    )
+    subscription_discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    subscription_free_tickets_used = models.PositiveIntegerField(default=0)
+    referral_wallet_used_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    referral_wallet_refunded_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    fraud_score = models.PositiveIntegerField(default=0)
+    fraud_level = models.CharField(max_length=12, choices=FRAUD_LEVEL_CHOICES, default=FRAUD_LEVEL_LOW)
+    fraud_signals = models.JSONField(default=list, blank=True)
+    source_ip = models.CharField(max_length=45, blank=True, null=True)
+    user_agent = models.CharField(max_length=255, blank=True, null=True)
+    reward_redemption = models.ForeignKey(
+        "RewardRedemption",
+        on_delete=models.SET_NULL,
+        related_name="booking_reward_redemptions",
+        blank=True,
+        null=True,
+    )
 
     class Meta:
         db_table = "bookings"
 
     def __str__(self):
         return f"Booking {self.pk} ({self.booking_status})"
+
+
+class GroupBookingSession(models.Model):
+    STATUS_ACTIVE = "ACTIVE"
+    STATUS_PARTIALLY_PAID = "PARTIALLY_PAID"
+    STATUS_COMPLETED = "COMPLETED"
+    STATUS_CANCELLED = "CANCELLED"
+    STATUS_EXPIRED = "EXPIRED"
+    STATUS_CHOICES = [
+        (STATUS_ACTIVE, "Active"),
+        (STATUS_PARTIALLY_PAID, "Partially Paid"),
+        (STATUS_COMPLETED, "Completed"),
+        (STATUS_CANCELLED, "Cancelled"),
+        (STATUS_EXPIRED, "Expired"),
+    ]
+
+    SPLIT_EQUAL = "EQUAL"
+    SPLIT_MANUAL = "MANUAL"
+    SPLIT_SEAT_BASED = "SEAT_BASED"
+    SPLIT_MODE_CHOICES = [
+        (SPLIT_EQUAL, "Equal Split"),
+        (SPLIT_MANUAL, "Manual Split"),
+        (SPLIT_SEAT_BASED, "Seat Based"),
+    ]
+
+    host = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="group_booking_sessions_hosted",
+    )
+    show = models.ForeignKey(
+        Show,
+        on_delete=models.CASCADE,
+        related_name="group_booking_sessions",
+    )
+    showtime = models.ForeignKey(
+        Showtime,
+        on_delete=models.CASCADE,
+        related_name="group_booking_sessions",
+    )
+    invite_code = models.CharField(max_length=24, unique=True, db_index=True)
+    split_mode = models.CharField(
+        max_length=20,
+        choices=SPLIT_MODE_CHOICES,
+        default=SPLIT_EQUAL,
+    )
+    selected_seats = models.JSONField(default=list, blank=True)
+    seat_price_map = models.JSONField(default=dict, blank=True)
+    total_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    amount_paid = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_ACTIVE)
+    expires_at = models.DateTimeField(db_index=True)
+    completed_at = models.DateTimeField(blank=True, null=True)
+    cancelled_at = models.DateTimeField(blank=True, null=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "group_booking_sessions"
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["status", "expires_at"]),
+            models.Index(fields=["host", "status"]),
+            models.Index(fields=["showtime", "status"]),
+        ]
+
+    def __str__(self):
+        return f"GroupBookingSession {self.id} ({self.status})"
+
+
+class GroupParticipant(models.Model):
+    PAYMENT_PENDING = "PENDING"
+    PAYMENT_PAID = "PAID"
+    PAYMENT_FAILED = "FAILED"
+    PAYMENT_LEFT = "LEFT"
+    PAYMENT_STATUS_CHOICES = [
+        (PAYMENT_PENDING, "Pending"),
+        (PAYMENT_PAID, "Paid"),
+        (PAYMENT_FAILED, "Failed"),
+        (PAYMENT_LEFT, "Left"),
+    ]
+
+    session = models.ForeignKey(
+        GroupBookingSession,
+        on_delete=models.CASCADE,
+        related_name="participants",
+    )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="group_booking_participations",
+    )
+    is_host = models.BooleanField(default=False)
+    selected_seats = models.JSONField(default=list, blank=True)
+    amount_to_pay = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    amount_paid = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    payment_status = models.CharField(
+        max_length=20,
+        choices=PAYMENT_STATUS_CHOICES,
+        default=PAYMENT_PENDING,
+    )
+    joined_at = models.DateTimeField(auto_now_add=True)
+    paid_at = models.DateTimeField(blank=True, null=True)
+    left_at = models.DateTimeField(blank=True, null=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        db_table = "group_booking_participants"
+        ordering = ["joined_at", "id"]
+        unique_together = ("session", "user")
+        indexes = [
+            models.Index(fields=["session", "payment_status"]),
+            models.Index(fields=["user", "payment_status"]),
+        ]
+
+    def __str__(self):
+        return f"GroupParticipant {self.session_id}:{self.user_id}"
+
+
+class GroupPayment(models.Model):
+    STATUS_INITIATED = "INITIATED"
+    STATUS_SUCCESS = "SUCCESS"
+    STATUS_FAILED = "FAILED"
+    STATUS_CHOICES = [
+        (STATUS_INITIATED, "Initiated"),
+        (STATUS_SUCCESS, "Success"),
+        (STATUS_FAILED, "Failed"),
+    ]
+
+    session = models.ForeignKey(
+        GroupBookingSession,
+        on_delete=models.CASCADE,
+        related_name="payments",
+    )
+    participant = models.ForeignKey(
+        GroupParticipant,
+        on_delete=models.CASCADE,
+        related_name="payments",
+    )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="group_payments",
+    )
+    booking = models.ForeignKey(
+        Booking,
+        on_delete=models.SET_NULL,
+        related_name="group_payments",
+        blank=True,
+        null=True,
+    )
+    payment_method = models.CharField(max_length=30, default="ESEWA")
+    amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_INITIATED)
+    transaction_id = models.CharField(max_length=120, unique=True, blank=True, null=True)
+    provider_reference = models.CharField(max_length=120, blank=True, null=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        db_table = "group_payments"
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["session", "status"]),
+            models.Index(fields=["participant", "status"]),
+            models.Index(fields=["user", "status"]),
+        ]
+
+    def __str__(self):
+        return f"GroupPayment {self.id} ({self.status})"
+
+
+class Referral(models.Model):
+    STATUS_PENDING = "PENDING"
+    STATUS_REWARDED = "REWARDED"
+    STATUS_REJECTED = "REJECTED"
+    STATUS_REVERSED = "REVERSED"
+    STATUS_EXPIRED = "EXPIRED"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_REWARDED, "Rewarded"),
+        (STATUS_REJECTED, "Rejected"),
+        (STATUS_REVERSED, "Reversed"),
+        (STATUS_EXPIRED, "Expired"),
+    ]
+
+    referrer = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="referrals_sent",
+    )
+    referred_user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name="referral",
+    )
+    referral_code = models.CharField(max_length=20)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    rejection_reason = models.CharField(max_length=255, blank=True, null=True)
+    reversal_reason = models.CharField(max_length=255, blank=True, null=True)
+    signup_ip_address = models.CharField(max_length=45, blank=True, null=True)
+    signup_user_agent = models.CharField(max_length=255, blank=True, null=True)
+    signup_device_fingerprint = models.CharField(max_length=128, blank=True, null=True)
+    reward_trigger_booking = models.ForeignKey(
+        Booking,
+        on_delete=models.SET_NULL,
+        related_name="triggered_referrals",
+        blank=True,
+        null=True,
+    )
+    rewarded_at = models.DateTimeField(blank=True, null=True)
+    reversed_at = models.DateTimeField(blank=True, null=True)
+    expires_at = models.DateTimeField(blank=True, null=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "referrals"
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["referral_code"]),
+            models.Index(fields=["status", "created_at"]),
+            models.Index(fields=["referrer", "status"]),
+            models.Index(fields=["referred_user", "status"]),
+            models.Index(fields=["expires_at", "status"]),
+        ]
+
+    def __str__(self):
+        return f"Referral {self.id} ({self.status})"
+
+
+class RewardRedemption(models.Model):
+    STATUS_USED = "USED"
+    STATUS_UNUSED = "UNUSED"
+    STATUS_EXPIRED = "EXPIRED"
+    STATUS_CANCELLED = "CANCELLED"
+    STATUS_CHOICES = [
+        (STATUS_USED, "Used"),
+        (STATUS_UNUSED, "Unused"),
+        (STATUS_EXPIRED, "Expired"),
+        (STATUS_CANCELLED, "Cancelled"),
+    ]
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="reward_redemptions")
+    reward = models.ForeignKey(Reward, on_delete=models.CASCADE, related_name="redemptions")
+    points_used = models.PositiveIntegerField(default=0)
+    booking = models.ForeignKey(
+        Booking,
+        on_delete=models.SET_NULL,
+        related_name="reward_redemptions",
+        blank=True,
+        null=True,
+    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_UNUSED)
+    redemption_code = models.CharField(max_length=40, unique=True, blank=True, null=True)
+    expires_at = models.DateTimeField(blank=True, null=True)
+    used_at = models.DateTimeField(blank=True, null=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "reward_redemptions"
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["user", "status"]),
+            models.Index(fields=["reward", "status"]),
+            models.Index(fields=["expires_at"]),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self.redemption_code:
+            self.redemption_code = uuid.uuid4().hex[:16].upper()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"RewardRedemption {self.id} ({self.status})"
 
 
 class BookingSeat(models.Model):
@@ -1248,6 +2011,87 @@ class VendorPromoCode(models.Model):
         return f"{self.code} ({self.vendor_id})"
 
 
+class VendorOffer(models.Model):
+    OFFER_TYPE_PROMO = "PROMO"
+    OFFER_TYPE_BUNDLE = "BUNDLE"
+    OFFER_TYPE_PERK = "PERK"
+    OFFER_TYPE_LOYALTY = "LOYALTY"
+    OFFER_TYPE_CHOICES = [
+        (OFFER_TYPE_PROMO, "Promo"),
+        (OFFER_TYPE_BUNDLE, "Bundle"),
+        (OFFER_TYPE_PERK, "Perk"),
+        (OFFER_TYPE_LOYALTY, "Loyalty"),
+    ]
+
+    DISCOUNT_TYPE_NONE = "NONE"
+    DISCOUNT_TYPE_PERCENTAGE = "PERCENTAGE"
+    DISCOUNT_TYPE_FIXED = "FIXED"
+    DISCOUNT_TYPE_CHOICES = [
+        (DISCOUNT_TYPE_NONE, "None"),
+        (DISCOUNT_TYPE_PERCENTAGE, "Percentage"),
+        (DISCOUNT_TYPE_FIXED, "Fixed"),
+    ]
+
+    vendor = models.ForeignKey(Vendor, on_delete=models.CASCADE, related_name="offers")
+    title = models.CharField(max_length=140)
+    code = models.CharField(max_length=50, blank=True, null=True)
+    description = models.TextField(blank=True, null=True)
+    offer_type = models.CharField(max_length=20, choices=OFFER_TYPE_CHOICES, default=OFFER_TYPE_PROMO)
+    discount_type = models.CharField(max_length=20, choices=DISCOUNT_TYPE_CHOICES, default=DISCOUNT_TYPE_NONE)
+    discount_value = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    min_booking_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    allow_loyalty_redemption = models.BooleanField(default=True)
+    subscriber_perk_text = models.CharField(max_length=200, blank=True, null=True)
+    starts_at = models.DateTimeField(blank=True, null=True)
+    ends_at = models.DateTimeField(blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "vendor_offers"
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["vendor", "is_active"]),
+            models.Index(fields=["offer_type", "is_active"]),
+            models.Index(fields=["starts_at", "ends_at"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["vendor", "code"],
+                condition=models.Q(code__isnull=False),
+                name="unique_vendor_offer_code_when_present",
+            )
+        ]
+
+    def clean(self):
+        errors = {}
+        if self.discount_value is None or self.discount_value < 0:
+            errors["discount_value"] = "Discount value must be non-negative."
+        if self.min_booking_amount is not None and self.min_booking_amount < 0:
+            errors["min_booking_amount"] = "Minimum booking amount must be non-negative."
+        if (
+            self.discount_type == self.DISCOUNT_TYPE_PERCENTAGE
+            and self.discount_value is not None
+            and self.discount_value > 100
+        ):
+            errors["discount_value"] = "Percentage discount cannot exceed 100."
+        if self.starts_at and self.ends_at and self.starts_at > self.ends_at:
+            errors["ends_at"] = "ends_at must be after starts_at."
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        if self.code:
+            self.code = str(self.code).strip().upper()
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.title} ({self.vendor_id})"
+
+
 class VendorCampaign(models.Model):
     STATUS_DRAFT = "DRAFT"
     STATUS_SCHEDULED = "SCHEDULED"
@@ -1362,6 +2206,8 @@ class Notification(models.Model):
     EVENT_BOOKING_RESUME_PENDING = "BOOKING_RESUME_PENDING"
     EVENT_BOOKING_CANCELLED = "BOOKING_CANCELLED"
     EVENT_REFUND_PROCESSED = "REFUND_PROCESSED"
+    EVENT_SUBSCRIPTION_EXPIRING = "SUBSCRIPTION_EXPIRING"
+    EVENT_SUBSCRIPTION_EXPIRED = "SUBSCRIPTION_EXPIRED"
     EVENT_CHOICES = [
         (EVENT_NEW_BOOKING, "New Booking"),
         (EVENT_PAYMENT_SUCCESS, "Payment Success"),
@@ -1371,6 +2217,8 @@ class Notification(models.Model):
         (EVENT_BOOKING_RESUME_PENDING, "Booking Resume Pending"),
         (EVENT_BOOKING_CANCELLED, "Booking Cancelled"),
         (EVENT_REFUND_PROCESSED, "Refund Processed"),
+        (EVENT_SUBSCRIPTION_EXPIRING, "Subscription Expiring"),
+        (EVENT_SUBSCRIPTION_EXPIRED, "Subscription Expired"),
     ]
 
     ROLE_ADMIN = "admin"
@@ -1400,6 +2248,122 @@ class Notification(models.Model):
 
     def __str__(self):
         return f"{self.recipient_role}:{self.recipient_id} - {self.event_type}"
+
+
+class BackgroundJob(models.Model):
+    TYPE_NOTIFICATION_EMAIL = "NOTIFICATION_EMAIL"
+    TYPE_ANALYTICS_MONITOR_EXPORT = "ANALYTICS_MONITOR_EXPORT"
+    TYPE_CHOICES = [
+        (TYPE_NOTIFICATION_EMAIL, "Notification Email"),
+        (TYPE_ANALYTICS_MONITOR_EXPORT, "Analytics Monitor Export"),
+    ]
+
+    STATUS_PENDING = "PENDING"
+    STATUS_PROCESSING = "PROCESSING"
+    STATUS_COMPLETED = "COMPLETED"
+    STATUS_FAILED = "FAILED"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_PROCESSING, "Processing"),
+        (STATUS_COMPLETED, "Completed"),
+        (STATUS_FAILED, "Failed"),
+    ]
+
+    job_type = models.CharField(max_length=50, choices=TYPE_CHOICES)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    payload = models.JSONField(default=dict, blank=True)
+    result = models.JSONField(default=dict, blank=True)
+    error_message = models.CharField(max_length=255, blank=True, null=True)
+    attempts = models.PositiveIntegerField(default=0)
+    max_attempts = models.PositiveIntegerField(default=3)
+    available_at = models.DateTimeField(default=timezone.now)
+    started_at = models.DateTimeField(blank=True, null=True)
+    finished_at = models.DateTimeField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "background_jobs"
+        ordering = ["available_at", "id"]
+        indexes = [
+            models.Index(fields=["status", "available_at"]),
+            models.Index(fields=["job_type", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.job_type}:{self.status}#{self.id}"
+
+
+class BookingDropoffEvent(models.Model):
+    STAGE_BOOKING = "BOOKING"
+    STAGE_PAYMENT = "PAYMENT"
+    STAGE_CHOICES = [
+        (STAGE_BOOKING, "Booking Process"),
+        (STAGE_PAYMENT, "Payment Process"),
+    ]
+
+    REASON_LEFT_BOOKING_PROCESS = "LEFT_BOOKING_PROCESS"
+    REASON_PAYMENT_NOT_COMPLETED = "PAYMENT_NOT_COMPLETED"
+    REASON_PAYMENT_EXPIRED = "PAYMENT_EXPIRED"
+    REASON_CHOICES = [
+        (REASON_LEFT_BOOKING_PROCESS, "Left Booking Process"),
+        (REASON_PAYMENT_NOT_COMPLETED, "Payment Not Completed"),
+        (REASON_PAYMENT_EXPIRED, "Payment Session Expired"),
+    ]
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        related_name="booking_dropoff_events",
+        blank=True,
+        null=True,
+    )
+    vendor = models.ForeignKey(
+        Vendor,
+        on_delete=models.SET_NULL,
+        related_name="booking_dropoff_events",
+        blank=True,
+        null=True,
+    )
+    show = models.ForeignKey(
+        Show,
+        on_delete=models.SET_NULL,
+        related_name="dropoff_events",
+        blank=True,
+        null=True,
+    )
+    booking = models.ForeignKey(
+        Booking,
+        on_delete=models.SET_NULL,
+        related_name="dropoff_events",
+        blank=True,
+        null=True,
+    )
+    payment = models.ForeignKey(
+        "Payment",
+        on_delete=models.SET_NULL,
+        related_name="dropoff_events",
+        blank=True,
+        null=True,
+    )
+    stage = models.CharField(max_length=20, choices=STAGE_CHOICES)
+    reason = models.CharField(max_length=40, choices=REASON_CHOICES)
+    seat_count = models.PositiveIntegerField(default=0)
+    transaction_uuid = models.CharField(max_length=80, blank=True, null=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "booking_dropoff_events"
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["stage", "created_at"]),
+            models.Index(fields=["vendor", "created_at"]),
+            models.Index(fields=["transaction_uuid"]),
+        ]
+
+    def __str__(self):
+        return f"{self.stage}:{self.reason} ({self.transaction_uuid or self.id})"
 
 
 class Payment(models.Model):
@@ -1444,6 +2408,133 @@ class Wallet(models.Model):
 
     def __str__(self):
         return f"Wallet {self.vendor_id}"
+
+
+class ReferralWallet(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="referral_wallet")
+    balance = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    total_credited = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    total_debited = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    total_expired = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "referral_wallets"
+
+    def __str__(self):
+        return f"ReferralWallet {self.user_id}"
+
+
+class ReferralTransaction(models.Model):
+    TYPE_CREDIT = "CREDIT"
+    TYPE_DEBIT = "DEBIT"
+    TYPE_EXPIRE = "EXPIRE"
+    TYPE_REVERSAL = "REVERSAL"
+    TYPE_CHOICES = [
+        (TYPE_CREDIT, "Credit"),
+        (TYPE_DEBIT, "Debit"),
+        (TYPE_EXPIRE, "Expire"),
+        (TYPE_REVERSAL, "Reversal"),
+    ]
+
+    STATUS_COMPLETED = "COMPLETED"
+    STATUS_REVERSED = "REVERSED"
+    STATUS_EXPIRED = "EXPIRED"
+    STATUS_REJECTED = "REJECTED"
+    STATUS_CHOICES = [
+        (STATUS_COMPLETED, "Completed"),
+        (STATUS_REVERSED, "Reversed"),
+        (STATUS_EXPIRED, "Expired"),
+        (STATUS_REJECTED, "Rejected"),
+    ]
+
+    REASON_REFERRER_REWARD = "REFERRER_REWARD"
+    REASON_REFERRED_REWARD = "REFERRED_REWARD"
+    REASON_BOOKING_WALLET_USE = "BOOKING_WALLET_USE"
+    REASON_BOOKING_WALLET_REFUND = "BOOKING_WALLET_REFUND"
+    REASON_REFERRAL_CANCELLATION_REVERSAL = "REFERRAL_CANCELLATION_REVERSAL"
+    REASON_EXPIRY = "EXPIRY"
+    REASON_ADMIN_ADJUSTMENT = "ADMIN_ADJUSTMENT"
+    REASON_CHOICES = [
+        (REASON_REFERRER_REWARD, "Referrer Reward"),
+        (REASON_REFERRED_REWARD, "Referred User Reward"),
+        (REASON_BOOKING_WALLET_USE, "Booking Wallet Use"),
+        (REASON_BOOKING_WALLET_REFUND, "Booking Wallet Refund"),
+        (REASON_REFERRAL_CANCELLATION_REVERSAL, "Referral Cancellation Reversal"),
+        (REASON_EXPIRY, "Expiry"),
+        (REASON_ADMIN_ADJUSTMENT, "Admin Adjustment"),
+    ]
+
+    wallet = models.ForeignKey(ReferralWallet, on_delete=models.CASCADE, related_name="transactions")
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="referral_transactions")
+    referral = models.ForeignKey(
+        Referral,
+        on_delete=models.SET_NULL,
+        related_name="transactions",
+        blank=True,
+        null=True,
+    )
+    booking = models.ForeignKey(
+        Booking,
+        on_delete=models.SET_NULL,
+        related_name="referral_wallet_transactions",
+        blank=True,
+        null=True,
+    )
+    transaction_type = models.CharField(max_length=20, choices=TYPE_CHOICES)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_COMPLETED)
+    reason = models.CharField(max_length=40, choices=REASON_CHOICES)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    remaining_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    expires_at = models.DateTimeField(blank=True, null=True)
+    processed_at = models.DateTimeField(blank=True, null=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "referral_transactions"
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["user", "status", "created_at"]),
+            models.Index(fields=["booking", "status"]),
+            models.Index(fields=["referral", "status"]),
+            models.Index(fields=["expires_at", "status"]),
+            models.Index(fields=["reason", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"ReferralTx {self.id} {self.transaction_type} {self.amount}"
+
+
+class ReferralPolicy(models.Model):
+    key = models.CharField(max_length=20, unique=True, default="default")
+    referrer_reward_amount = models.DecimalField(max_digits=12, decimal_places=2, default=100)
+    referred_reward_amount = models.DecimalField(max_digits=12, decimal_places=2, default=50)
+    reward_expiry_days = models.PositiveIntegerField(default=90)
+    wallet_cap_percent = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=20,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+    )
+    max_signups_per_ip_per_day = models.PositiveIntegerField(default=3)
+    max_signups_per_device_per_day = models.PositiveIntegerField(default=2)
+    auto_approve_rewards = models.BooleanField(default=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "referral_policies"
+
+    def save(self, *args, **kwargs):
+        self.key = "default"
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return "Referral Policy"
 
 
 class Transaction(models.Model):
@@ -1496,3 +2587,171 @@ class Transaction(models.Model):
 
     def __str__(self):
         return f"{self.transaction_type} {self.amount} ({self.status})"
+
+
+class LoyaltyProgramConfig(models.Model):
+    key = models.CharField(max_length=20, unique=True, default="default")
+    points_per_currency_unit = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=10,
+        help_text="Currency amount required to earn one point.",
+    )
+    redemption_value_per_point = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=1,
+        help_text="Monetary value of one redeemed point.",
+    )
+    first_booking_bonus = models.PositiveIntegerField(default=50)
+    points_expiry_months = models.PositiveIntegerField(default=12)
+    tier_silver_threshold = models.PositiveIntegerField(default=0)
+    tier_gold_threshold = models.PositiveIntegerField(default=1500)
+    tier_platinum_threshold = models.PositiveIntegerField(default=5000)
+    referral_bonus_points = models.PositiveIntegerField(default=100)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "loyalty_program_configs"
+
+    def save(self, *args, **kwargs):
+        self.key = "default"
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return "Loyalty Program Config"
+
+
+class LoyaltyRule(LoyaltyProgramConfig):
+    class Meta:
+        proxy = True
+        verbose_name = "Loyalty Rule"
+        verbose_name_plural = "Loyalty Rules"
+
+
+class UserLoyaltyWallet(models.Model):
+    TIER_SILVER = "SILVER"
+    TIER_GOLD = "GOLD"
+    TIER_PLATINUM = "PLATINUM"
+    TIER_CHOICES = [
+        (TIER_SILVER, "Silver"),
+        (TIER_GOLD, "Gold"),
+        (TIER_PLATINUM, "Platinum"),
+    ]
+
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="loyalty_wallet")
+    total_points = models.PositiveIntegerField(default=0)
+    available_points = models.PositiveIntegerField(default=0)
+    lifetime_points = models.PositiveIntegerField(default=0)
+    tier = models.CharField(max_length=20, choices=TIER_CHOICES, default=TIER_SILVER)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "user_loyalty_wallets"
+        ordering = ["-updated_at", "-id"]
+        indexes = [models.Index(fields=["tier"])]
+
+    def __str__(self):
+        return f"LoyaltyWallet {self.user_id} ({self.available_points})"
+
+
+class LoyaltyPromotion(models.Model):
+    PROMO_TYPE_FESTIVAL = "FESTIVAL"
+    PROMO_TYPE_DAILY = "DAILY"
+    PROMO_TYPE_WEEKLY = "WEEKLY"
+    PROMO_TYPE_REFERRAL = "REFERRAL"
+    PROMO_TYPE_CHOICES = [
+        (PROMO_TYPE_FESTIVAL, "Festival"),
+        (PROMO_TYPE_DAILY, "Daily"),
+        (PROMO_TYPE_WEEKLY, "Weekly"),
+        (PROMO_TYPE_REFERRAL, "Referral"),
+    ]
+
+    title = models.CharField(max_length=140)
+    description = models.TextField(blank=True, null=True)
+    promo_type = models.CharField(max_length=20, choices=PROMO_TYPE_CHOICES, default=PROMO_TYPE_FESTIVAL)
+    trigger_code = models.CharField(max_length=50, blank=True, null=True)
+    vendor = models.ForeignKey(
+        Vendor,
+        on_delete=models.SET_NULL,
+        related_name="loyalty_promotions",
+        blank=True,
+        null=True,
+    )
+    bonus_multiplier = models.DecimalField(max_digits=6, decimal_places=2, default=1)
+    bonus_flat_points = models.PositiveIntegerField(default=0)
+    stackable = models.BooleanField(default=False)
+    starts_at = models.DateTimeField(blank=True, null=True)
+    ends_at = models.DateTimeField(blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "loyalty_promotions"
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["is_active", "starts_at", "ends_at"]),
+            models.Index(fields=["vendor", "is_active"]),
+            models.Index(fields=["trigger_code"]),
+        ]
+
+    def __str__(self):
+        return self.title
+
+
+class LoyaltyTransaction(models.Model):
+    TYPE_EARN = "EARN"
+    TYPE_REDEEM = "REDEEM"
+    TYPE_EXPIRE = "EXPIRE"
+    TYPE_REVERSE_EARN = "REVERSE_EARN"
+    TYPE_RESTORE = "RESTORE"
+    TYPE_ADJUST = "ADJUST"
+    TYPE_CHOICES = [
+        (TYPE_EARN, "Earn"),
+        (TYPE_REDEEM, "Redeem"),
+        (TYPE_EXPIRE, "Expire"),
+        (TYPE_REVERSE_EARN, "Reverse Earn"),
+        (TYPE_RESTORE, "Restore"),
+        (TYPE_ADJUST, "Adjust"),
+    ]
+
+    REFERENCE_BOOKING = "BOOKING"
+    REFERENCE_REWARD = "REWARD"
+    REFERENCE_PROMOTION = "PROMOTION"
+    REFERENCE_REFERRAL = "REFERRAL"
+    REFERENCE_SYSTEM = "SYSTEM"
+    REFERENCE_CHOICES = [
+        (REFERENCE_BOOKING, "Booking"),
+        (REFERENCE_REWARD, "Reward"),
+        (REFERENCE_PROMOTION, "Promotion"),
+        (REFERENCE_REFERRAL, "Referral"),
+        (REFERENCE_SYSTEM, "System"),
+    ]
+
+    wallet = models.ForeignKey(UserLoyaltyWallet, on_delete=models.CASCADE, related_name="transactions")
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="loyalty_transactions")
+    transaction_type = models.CharField(max_length=20, choices=TYPE_CHOICES)
+    points = models.PositiveIntegerField(default=0)
+    reference_type = models.CharField(max_length=20, choices=REFERENCE_CHOICES, default=REFERENCE_SYSTEM)
+    reference_id = models.CharField(max_length=80, blank=True, null=True)
+    idempotency_key = models.CharField(max_length=120, unique=True, blank=True, null=True)
+    expires_at = models.DateTimeField(blank=True, null=True)
+    is_expired = models.BooleanField(default=False)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "loyalty_transactions"
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["user", "transaction_type", "created_at"]),
+            models.Index(fields=["reference_type", "reference_id"]),
+            models.Index(fields=["expires_at", "is_expired"]),
+        ]
+
+    def __str__(self):
+        return f"{self.transaction_type} {self.points} ({self.user_id})"

@@ -77,9 +77,19 @@ def movie_reviews(request: Any, movie_id: int):
     if not movie:
         return Response({"message": "Movie not found"}, status=status.HTTP_404_NOT_FOUND)
 
+    customer = permissions.resolve_customer(request)
+    admin_actor = permissions.resolve_admin(request)
+    if not customer and not admin_actor:
+        return Response(
+            {"message": "Authentication required"},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+
     payload = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
     payload["movie"] = movie.id
-    if "user" not in payload:
+    if customer:
+        payload["user"] = customer.id
+    elif "user" not in payload:
         payload["user"] = payload.get("user_id") or payload.get("userId")
     serializer = ReviewWriteSerializer(data=payload, context={"request": request})
     if not serializer.is_valid():
@@ -87,6 +97,11 @@ def movie_reviews(request: Any, movie_id: int):
 
     try:
         user = serializer.validated_data.get("user")
+        if customer and user and user.id != customer.id:
+            return Response(
+                {"message": "You can only submit reviews from your own account."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         if Review.objects.filter(movie=movie, user=user).exists():
             return Response(
                 {"message": "You have already reviewed this movie."},

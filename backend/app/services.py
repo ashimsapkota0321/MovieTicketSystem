@@ -4,21 +4,27 @@ from __future__ import annotations
 
 import base64
 import csv
+import hashlib
 import io
 import json
 import logging
 import random
 import re
 import uuid
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 from datetime import date as date_cls, datetime, time as time_cls, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable, Optional
 
 from django.conf import settings
+from django.core.cache import cache
+from django.core import signing
 from django.core.mail import send_mail
 from django.db import transaction
 from django.db import IntegrityError
 from django.db.models import Q, Count, Sum, F, DecimalField, Avg, Max, Min
+from django.db.models.functions import ExtractWeekDay
 from django.utils import timezone
 from django.utils.html import escape
 from PIL import Image, ImageDraw, ImageFont
@@ -33,11 +39,13 @@ from .models import (
     Person,
     MovieCredit,
     Show,
+    ShowBasePrice,
     Banner,
     HomeSlide,
     Collaborator,
     OTPVerification,
     Ticket,
+    TicketValidationScan,
     Screen,
     Seat,
     Showtime,
@@ -51,11 +59,24 @@ from .models import (
     Payment,
     PrivateScreeningRequest,
     Refund,
+    Referral,
+    ReferralPolicy,
+    ReferralWallet,
+    ReferralTransaction,
     Wallet,
     Transaction,
+    LoyaltyProgramConfig,
+    UserLoyaltyWallet,
+    LoyaltyTransaction,
+    LoyaltyPromotion,
+    VendorLoyaltyRule,
+    Reward,
+    RewardRedemption,
     FoodItem,
     BookingFoodItem,
+    BookingDropoffEvent,
     Notification,
+    BackgroundJob,
     VendorPromoCode,
     VendorCampaign,
     VendorCampaignDispatch,
@@ -81,15 +102,18 @@ from .permissions import (
     resolve_customer,
     resolve_vendor,
 )
-from . import selectors
+from . import loyalty, selectors, subscription
 from .selectors import build_movie_payload, build_show_payload, get_ticket
 from .utils import (
+    combine_date_time_utc,
     coalesce,
+    ensure_utc_datetime,
     get_payload,
     get_profile_image_url,
     is_phone_like,
     normalize_phone_number,
     parse_date,
+    parse_datetime_utc,
     parse_time,
     parse_bool,
     request_data_to_dict,
@@ -138,6 +162,24 @@ SEAT_CATEGORY_RULE_VALUES = {
     SEAT_CATEGORY_PREMIUM: PricingRule.SEAT_CATEGORY_PREMIUM,
     SEAT_CATEGORY_VIP: PricingRule.SEAT_CATEGORY_VIP,
 }
+SEAT_CATEGORY_RULE_ALIASES = {
+    SEAT_CATEGORY_NORMAL: {
+        PricingRule.SEAT_CATEGORY_NORMAL,
+        PricingRule.SEAT_CATEGORY_SILVER,
+    },
+    SEAT_CATEGORY_EXECUTIVE: {
+        PricingRule.SEAT_CATEGORY_EXECUTIVE,
+        PricingRule.SEAT_CATEGORY_GOLD,
+    },
+    SEAT_CATEGORY_PREMIUM: {
+        PricingRule.SEAT_CATEGORY_PREMIUM,
+        PricingRule.SEAT_CATEGORY_PLATINUM,
+    },
+    SEAT_CATEGORY_VIP: {
+        PricingRule.SEAT_CATEGORY_VIP,
+        PricingRule.SEAT_CATEGORY_PLATINUM,
+    },
+}
 SEAT_CATEGORY_SCREEN_FIELDS = {
     "normal": "normal_price",
     "executive": "executive_price",
@@ -152,13 +194,2009 @@ WEEKDAY_CODES = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
 DEFAULT_REFUND_PERCENT_2H_PLUS = Decimal("100.00")
 DEFAULT_REFUND_PERCENT_1_TO_2H = Decimal("70.00")
 DEFAULT_REFUND_PERCENT_LESS_THAN_1H = Decimal("0.00")
+SHOW_BUFFER_MINUTES_DEFAULT = 20
+SHOW_MIN_LEAD_HOURS_DEFAULT = 2
+SHOW_OPERATING_OPEN_TIME_DEFAULT = time_cls(hour=9, minute=0)
+SHOW_OPERATING_CLOSE_TIME_DEFAULT = time_cls(hour=0, minute=0)
+SHOW_BUFFER_MINUTES_MAX = 180
+TICKET_QR_SIGNING_SALT = "app.ticket.qr.v1"
+TICKET_VALIDATION_OPEN_WINDOW_HOURS = 1
+TICKET_VALIDATION_GRACE_MINUTES = 15
+TICKET_QR_FALLBACK_VALIDITY_HOURS = 4
+LOYALTY_CACHE_KEY_PREFIX = "mt:loyalty:wallet:"
+LOYALTY_CACHE_TTL_SECONDS = 60 * 5
+LOYALTY_REWARD_REDEMPTION_HOLD_DAYS = 30
+REFERRAL_CODE_LENGTH = 8
+REFERRAL_REWARD_REFERRER_DEFAULT = Decimal("100.00")
+REFERRAL_REWARD_REFERRED_DEFAULT = Decimal("50.00")
+REFERRAL_REWARD_EXPIRY_DAYS_DEFAULT = 90
+REFERRAL_WALLET_CAP_PERCENT_DEFAULT = Decimal("20.00")
+REFERRAL_MAX_IP_SIGNUPS_PER_DAY_DEFAULT = 3
+REFERRAL_MAX_DEVICE_SIGNUPS_PER_DAY_DEFAULT = 2
+REFERRAL_CACHE_KEY_PREFIX = "mt:referral:wallet:"
+REFERRAL_CACHE_TTL_SECONDS = 60 * 5
+PRICING_PREVIEW_CACHE_PREFIX = "mt:pricing:preview:"
+PRICING_LOCK_CACHE_PREFIX = "mt:pricing:lock:"
+PRICING_OCCUPANCY_CACHE_PREFIX = "mt:pricing:occupancy:"
+PRICING_CATEGORY_CACHE_PREFIX = "mt:pricing:category:"
+PRICING_PREVIEW_CACHE_TTL_SECONDS = 30
+PRICING_OCCUPANCY_CACHE_TTL_SECONDS = 20
+PRICING_CATEGORY_CACHE_TTL_SECONDS = 45
+PRICING_LOCK_TTL_SECONDS = 60 * 10
+PRICING_OCCUPANCY_LOW_MAX = Decimal("30.00")
+PRICING_OCCUPANCY_HIGH_MIN = Decimal("70.00")
+PRICING_OCCUPANCY_LOW_MULTIPLIER = Decimal("0.90")
+PRICING_OCCUPANCY_NORMAL_MULTIPLIER = Decimal("1.00")
+PRICING_OCCUPANCY_HIGH_MULTIPLIER = Decimal("1.20")
+PRICING_MIN_PRICE_FACTOR = Decimal("0.50")
+PRICING_MAX_PRICE_FACTOR = Decimal("3.00")
+BACKGROUND_JOB_DEFAULT_MAX_ATTEMPTS = 3
+BACKGROUND_JOB_RETRY_BACKOFF_SECONDS = 30
+WEEKDAY_TO_DAY_CODE = {
+    0: PricingRule.DAY_OF_WEEK_MON,
+    1: PricingRule.DAY_OF_WEEK_TUE,
+    2: PricingRule.DAY_OF_WEEK_WED,
+    3: PricingRule.DAY_OF_WEEK_THU,
+    4: PricingRule.DAY_OF_WEEK_FRI,
+    5: PricingRule.DAY_OF_WEEK_SAT,
+    6: PricingRule.DAY_OF_WEEK_SUN,
+}
+
+BOOKING_FRAUD_REVIEW_SCORE_THRESHOLD_DEFAULT = 70
+BOOKING_FRAUD_VELOCITY_WINDOW_MINUTES_DEFAULT = 20
+BOOKING_FRAUD_VELOCITY_THRESHOLD_DEFAULT = 3
+BOOKING_FRAUD_IP_VELOCITY_THRESHOLD_DEFAULT = 5
+BOOKING_FRAUD_SAME_SHOW_WINDOW_HOURS_DEFAULT = 6
+BOOKING_FRAUD_SAME_SHOW_THRESHOLD_DEFAULT = 2
+BOOKING_FRAUD_HIGH_SEAT_COUNT_DEFAULT = 6
+BOOKING_FRAUD_HIGH_AMOUNT_THRESHOLD_DEFAULT = Decimal("5000.00")
+BOOKING_FRAUD_LARGE_DISCOUNT_PERCENT_DEFAULT = Decimal("50.00")
+BOOKING_FRAUD_NEW_ACCOUNT_DAYS_DEFAULT = 3
+
+SCAN_FRAUD_REVIEW_SCORE_THRESHOLD_DEFAULT = 70
+SCAN_FRAUD_EVENT_VALID = "valid"
+SCAN_FRAUD_EVENT_TICKET_NOT_FOUND = "ticket_not_found"
+SCAN_FRAUD_EVENT_WRONG_VENDOR = "wrong_vendor"
+SCAN_FRAUD_EVENT_MISSING_QR_TOKEN = "missing_qr_token"
+SCAN_FRAUD_EVENT_INVALID_QR_TOKEN = "invalid_qr_token"
+SCAN_FRAUD_EVENT_EXPIRED_QR_TOKEN = "expired_qr_token"
+SCAN_FRAUD_EVENT_PAYMENT_INCOMPLETE = "payment_incomplete"
+SCAN_FRAUD_EVENT_OUTSIDE_VALID_TIME_WINDOW = "outside_valid_time_window"
+SCAN_FRAUD_EVENT_INVALID_REQUEST = "invalid_request"
+SCAN_FRAUD_EVENT_RATE_LIMITED = "rate_limited"
+SCAN_FRAUD_EVENT_DUPLICATE_TICKET = "duplicate_ticket"
+
+
+def _clamp_fraud_score(value: Any) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = 0
+    return max(0, min(parsed, 100))
+
+
+def _booking_fraud_review_threshold() -> int:
+    value = _settings_int(
+        "BOOKING_FRAUD_REVIEW_SCORE_THRESHOLD",
+        BOOKING_FRAUD_REVIEW_SCORE_THRESHOLD_DEFAULT,
+    )
+    return max(1, min(value, 100))
+
+
+def booking_fraud_review_threshold() -> int:
+    """Return booking fraud score threshold used for manual-review flags."""
+    return _booking_fraud_review_threshold()
+
+
+def _scan_fraud_review_threshold() -> int:
+    value = _settings_int(
+        "TICKET_VALIDATION_FRAUD_REVIEW_SCORE_THRESHOLD",
+        SCAN_FRAUD_REVIEW_SCORE_THRESHOLD_DEFAULT,
+    )
+    return max(1, min(value, 100))
+
+
+def scan_fraud_review_threshold() -> int:
+    """Return scan fraud score threshold used for manual-review flags."""
+    return _scan_fraud_review_threshold()
+
+
+def _fraud_level_from_score(score: Any) -> str:
+    safe_score = _clamp_fraud_score(score)
+    if safe_score >= 90:
+        return Booking.FRAUD_LEVEL_CRITICAL
+    if safe_score >= 70:
+        return Booking.FRAUD_LEVEL_HIGH
+    if safe_score >= 40:
+        return Booking.FRAUD_LEVEL_MEDIUM
+    return Booking.FRAUD_LEVEL_LOW
+
+
+def build_fraud_risk_payload(
+    *,
+    score: Any,
+    signals: Any = None,
+    review_threshold: Optional[int] = None,
+) -> dict[str, Any]:
+    """Build a normalized fraud payload with score, level, and review hint."""
+    safe_score = _clamp_fraud_score(score)
+    safe_signals = signals if isinstance(signals, list) else []
+    threshold = int(review_threshold or 0)
+    if threshold <= 0:
+        threshold = _booking_fraud_review_threshold()
+
+    return {
+        "score": safe_score,
+        "level": _fraud_level_from_score(safe_score),
+        "signals": safe_signals,
+        "requires_manual_review": safe_score >= threshold,
+    }
+
+
+def _build_fraud_signal(
+    *,
+    code: str,
+    title: str,
+    weight: int,
+    details: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    signal = {
+        "code": str(code or "").strip()[:64],
+        "title": str(title or "").strip()[:120],
+        "weight": max(int(weight or 0), 0),
+    }
+    if isinstance(details, dict) and details:
+        signal["details"] = details
+    return signal
+
+
+def _normalize_booking_source_ip(value: Any) -> Optional[str]:
+    ip = str(value or "").strip()
+    if not ip:
+        return None
+    return ip[:45]
+
+
+def _normalize_booking_user_agent(value: Any) -> Optional[str]:
+    user_agent = str(value or "").strip()
+    if not user_agent:
+        return None
+    return user_agent[:255]
+
+
+def assess_scan_fraud_risk(
+    event: str,
+    *,
+    duplicate_attempts: int = 0,
+    rate_limit_scope: str = "",
+) -> dict[str, Any]:
+    """Compute a scan fraud score and normalized risk payload for one scan outcome."""
+    normalized_event = str(event or "").strip().lower()
+    safe_duplicate_attempts = max(int(duplicate_attempts or 0), 0)
+
+    event_scores = {
+        SCAN_FRAUD_EVENT_VALID: 0,
+        SCAN_FRAUD_EVENT_TICKET_NOT_FOUND: 90,
+        SCAN_FRAUD_EVENT_WRONG_VENDOR: 100,
+        SCAN_FRAUD_EVENT_MISSING_QR_TOKEN: 85,
+        SCAN_FRAUD_EVENT_INVALID_QR_TOKEN: 80,
+        SCAN_FRAUD_EVENT_EXPIRED_QR_TOKEN: 80,
+        SCAN_FRAUD_EVENT_PAYMENT_INCOMPLETE: 70,
+        SCAN_FRAUD_EVENT_OUTSIDE_VALID_TIME_WINDOW: 65,
+        SCAN_FRAUD_EVENT_INVALID_REQUEST: 75,
+        SCAN_FRAUD_EVENT_RATE_LIMITED: 40,
+    }
+
+    if normalized_event == SCAN_FRAUD_EVENT_DUPLICATE_TICKET:
+        base_score = 50
+        score = min(100, base_score + (safe_duplicate_attempts * 10))
+        signals = [
+            _build_fraud_signal(
+                code="duplicate_attempt",
+                title="Duplicate ticket scan detected",
+                weight=score,
+                details={"duplicate_attempts": safe_duplicate_attempts},
+            )
+        ]
+    else:
+        score = event_scores.get(normalized_event, 50)
+        details: dict[str, Any] = {}
+        if normalized_event == SCAN_FRAUD_EVENT_RATE_LIMITED and rate_limit_scope:
+            details["scope"] = str(rate_limit_scope)
+        if normalized_event == SCAN_FRAUD_EVENT_VALID:
+            details["outcome"] = "successful_scan"
+        signal_code = normalized_event or "scan_outcome"
+        signals = [
+            _build_fraud_signal(
+                code=signal_code,
+                title="Ticket scan risk outcome",
+                weight=score,
+                details=details or None,
+            )
+        ]
+
+    return build_fraud_risk_payload(
+        score=score,
+        signals=signals,
+        review_threshold=_scan_fraud_review_threshold(),
+    )
+
+
+def assess_booking_fraud_risk(
+    *,
+    user: User,
+    show: Show,
+    seat_count: int,
+    subtotal_amount: Decimal,
+    total_amount: Decimal,
+    discount_amount: Decimal,
+    loyalty_discount_amount: Decimal,
+    subscription_discount_amount: Decimal,
+    referral_wallet_used_amount: Decimal,
+    source_ip: Optional[str],
+    user_agent: Optional[str],
+) -> dict[str, Any]:
+    """Compute booking fraud score based on velocity, discount stacking, and ticket profile."""
+    now = timezone.now()
+    safe_seat_count = max(int(seat_count or 0), 0)
+    safe_subtotal = _quantize_money(subtotal_amount or Decimal("0"))
+    safe_total = _quantize_money(total_amount or Decimal("0"))
+    safe_discount = _quantize_money(discount_amount or Decimal("0"))
+    safe_loyalty_discount = _quantize_money(loyalty_discount_amount or Decimal("0"))
+    safe_subscription_discount = _quantize_money(subscription_discount_amount or Decimal("0"))
+    safe_referral_wallet = _quantize_money(referral_wallet_used_amount or Decimal("0"))
+    safe_ip = _normalize_booking_source_ip(source_ip)
+    safe_user_agent = _normalize_booking_user_agent(user_agent)
+
+    high_seat_threshold = max(
+        2,
+        _settings_int("BOOKING_FRAUD_HIGH_SEAT_COUNT", BOOKING_FRAUD_HIGH_SEAT_COUNT_DEFAULT),
+    )
+    high_amount_threshold = _quantize_money(
+        _settings_decimal(
+            "BOOKING_FRAUD_HIGH_AMOUNT_THRESHOLD",
+            BOOKING_FRAUD_HIGH_AMOUNT_THRESHOLD_DEFAULT,
+        )
+    )
+    large_discount_threshold = _settings_decimal(
+        "BOOKING_FRAUD_LARGE_DISCOUNT_PERCENT",
+        BOOKING_FRAUD_LARGE_DISCOUNT_PERCENT_DEFAULT,
+    )
+    if large_discount_threshold < Decimal("1"):
+        large_discount_threshold = Decimal("1")
+    if large_discount_threshold > Decimal("100"):
+        large_discount_threshold = Decimal("100")
+
+    velocity_window_minutes = max(
+        5,
+        _settings_int(
+            "BOOKING_FRAUD_VELOCITY_WINDOW_MINUTES",
+            BOOKING_FRAUD_VELOCITY_WINDOW_MINUTES_DEFAULT,
+        ),
+    )
+    velocity_threshold = max(
+        2,
+        _settings_int("BOOKING_FRAUD_VELOCITY_THRESHOLD", BOOKING_FRAUD_VELOCITY_THRESHOLD_DEFAULT),
+    )
+    ip_velocity_threshold = max(
+        3,
+        _settings_int(
+            "BOOKING_FRAUD_IP_VELOCITY_THRESHOLD",
+            BOOKING_FRAUD_IP_VELOCITY_THRESHOLD_DEFAULT,
+        ),
+    )
+    same_show_window_hours = max(
+        1,
+        _settings_int(
+            "BOOKING_FRAUD_SAME_SHOW_WINDOW_HOURS",
+            BOOKING_FRAUD_SAME_SHOW_WINDOW_HOURS_DEFAULT,
+        ),
+    )
+    same_show_threshold = max(
+        2,
+        _settings_int(
+            "BOOKING_FRAUD_SAME_SHOW_THRESHOLD",
+            BOOKING_FRAUD_SAME_SHOW_THRESHOLD_DEFAULT,
+        ),
+    )
+    new_account_days = max(
+        1,
+        _settings_int("BOOKING_FRAUD_NEW_ACCOUNT_DAYS", BOOKING_FRAUD_NEW_ACCOUNT_DAYS_DEFAULT),
+    )
+
+    velocity_since = now - timedelta(minutes=velocity_window_minutes)
+    recent_user_bookings = Booking.objects.filter(
+        user_id=user.id,
+        booking_date__gte=velocity_since,
+    ).exclude(
+        booking_status__iexact=BOOKING_STATUS_CANCELLED,
+    )
+    recent_user_count = recent_user_bookings.count()
+
+    recent_ip_count = 0
+    if safe_ip:
+        recent_ip_count = Booking.objects.filter(
+            source_ip=safe_ip,
+            booking_date__gte=velocity_since,
+        ).exclude(
+            booking_status__iexact=BOOKING_STATUS_CANCELLED,
+        ).count()
+
+    same_show_since = now - timedelta(hours=same_show_window_hours)
+    same_show_count = Booking.objects.filter(
+        user_id=user.id,
+        showtime__movie_id=show.movie_id,
+        showtime__screen__vendor_id=show.vendor_id,
+        booking_date__gte=same_show_since,
+    ).exclude(
+        booking_status__iexact=BOOKING_STATUS_CANCELLED,
+    ).count()
+
+    aggregate_discount = _quantize_money(
+        safe_discount + safe_loyalty_discount + safe_subscription_discount + safe_referral_wallet
+    )
+    discount_percent = Decimal("0")
+    if safe_subtotal > Decimal("0"):
+        discount_percent = (aggregate_discount / safe_subtotal) * Decimal("100")
+
+    score = 0
+    signals: list[dict[str, Any]] = []
+
+    if safe_seat_count >= high_seat_threshold:
+        seat_delta = safe_seat_count - high_seat_threshold
+        weight = min(25, 12 + (seat_delta * 2))
+        score += weight
+        signals.append(
+            _build_fraud_signal(
+                code="high_seat_count",
+                title="Large seat count in one booking",
+                weight=weight,
+                details={"seat_count": safe_seat_count, "threshold": high_seat_threshold},
+            )
+        )
+
+    if high_amount_threshold > Decimal("0") and safe_total >= high_amount_threshold:
+        weight = 10
+        score += weight
+        signals.append(
+            _build_fraud_signal(
+                code="high_booking_value",
+                title="High-value booking",
+                weight=weight,
+                details={
+                    "booking_total": float(safe_total),
+                    "threshold": float(high_amount_threshold),
+                },
+            )
+        )
+
+    if discount_percent >= large_discount_threshold:
+        weight = 20
+        score += weight
+        signals.append(
+            _build_fraud_signal(
+                code="large_discount_stack",
+                title="Large stacked discount detected",
+                weight=weight,
+                details={
+                    "discount_percent": round(float(discount_percent), 2),
+                    "threshold": float(large_discount_threshold),
+                },
+            )
+        )
+    elif discount_percent >= (large_discount_threshold * Decimal("0.70")):
+        weight = 12
+        score += weight
+        signals.append(
+            _build_fraud_signal(
+                code="moderate_discount_stack",
+                title="Moderate stacked discount detected",
+                weight=weight,
+                details={
+                    "discount_percent": round(float(discount_percent), 2),
+                    "threshold": round(float(large_discount_threshold * Decimal("0.70")), 2),
+                },
+            )
+        )
+
+    if recent_user_count >= velocity_threshold:
+        repeat_count = (recent_user_count - velocity_threshold) + 1
+        weight = min(35, 18 + (repeat_count * 5))
+        score += weight
+        signals.append(
+            _build_fraud_signal(
+                code="user_velocity_spike",
+                title="Rapid repeat bookings by account",
+                weight=weight,
+                details={
+                    "recent_booking_count": recent_user_count,
+                    "threshold": velocity_threshold,
+                    "window_minutes": velocity_window_minutes,
+                },
+            )
+        )
+
+    if safe_ip and recent_ip_count >= ip_velocity_threshold:
+        repeat_ip_count = (recent_ip_count - ip_velocity_threshold) + 1
+        weight = min(30, 15 + (repeat_ip_count * 4))
+        score += weight
+        signals.append(
+            _build_fraud_signal(
+                code="ip_velocity_spike",
+                title="Rapid repeat bookings from same IP",
+                weight=weight,
+                details={
+                    "source_ip": safe_ip,
+                    "recent_booking_count": recent_ip_count,
+                    "threshold": ip_velocity_threshold,
+                    "window_minutes": velocity_window_minutes,
+                },
+            )
+        )
+
+    if same_show_count >= same_show_threshold:
+        repeat_show_count = (same_show_count - same_show_threshold) + 1
+        weight = min(20, 10 + (repeat_show_count * 3))
+        score += weight
+        signals.append(
+            _build_fraud_signal(
+                code="same_show_repeat",
+                title="Repeated bookings for same vendor show",
+                weight=weight,
+                details={
+                    "recent_booking_count": same_show_count,
+                    "threshold": same_show_threshold,
+                    "window_hours": same_show_window_hours,
+                },
+            )
+        )
+
+    user_created_at = getattr(user, "created_at", None)
+    if user_created_at:
+        account_age = now - ensure_utc_datetime(user_created_at)
+        if account_age <= timedelta(days=new_account_days):
+            weight = 8
+            score += weight
+            signals.append(
+                _build_fraud_signal(
+                    code="new_account_booking",
+                    title="Booking made from a newly created account",
+                    weight=weight,
+                    details={"account_age_days": round(account_age.total_seconds() / 86400, 2)},
+                )
+            )
+
+    if not safe_ip or not safe_user_agent:
+        weight = 5
+        score += weight
+        signals.append(
+            _build_fraud_signal(
+                code="missing_client_fingerprint",
+                title="Missing client fingerprint data",
+                weight=weight,
+                details={
+                    "has_ip": bool(safe_ip),
+                    "has_user_agent": bool(safe_user_agent),
+                },
+            )
+        )
+
+    return build_fraud_risk_payload(
+        score=score,
+        signals=signals,
+        review_threshold=_booking_fraud_review_threshold(),
+    )
+
+
+def _transaction_uuid_from_payment_method(payment_method: Any) -> Optional[str]:
+    """Extract eSewa transaction UUID from payment_method text."""
+    raw = str(payment_method or "").strip()
+    if not raw:
+        return None
+    upper_prefix = ESEWA_PAYMENT_METHOD_PREFIX.upper()
+    if raw.upper().startswith(upper_prefix):
+        extracted = raw[len(ESEWA_PAYMENT_METHOD_PREFIX):].strip()
+        return extracted or None
+    return None
+
+
+def _referral_wallet_cache_key(user_id: int) -> str:
+    return f"{REFERRAL_CACHE_KEY_PREFIX}{int(user_id)}"
+
+
+def _clear_referral_wallet_cache(user_id: int) -> None:
+    cache.delete(_referral_wallet_cache_key(user_id))
+
+
+def _settings_decimal(name: str, default: Decimal) -> Decimal:
+    try:
+        return Decimal(str(getattr(settings, name, default)))
+    except (TypeError, ValueError, InvalidOperation):
+        return Decimal(default)
+
+
+def _settings_int(name: str, default: int) -> int:
+    try:
+        return int(getattr(settings, name, default))
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _get_referral_policy() -> ReferralPolicy:
+    defaults = {
+        "referrer_reward_amount": REFERRAL_REWARD_REFERRER_DEFAULT,
+        "referred_reward_amount": REFERRAL_REWARD_REFERRED_DEFAULT,
+        "reward_expiry_days": REFERRAL_REWARD_EXPIRY_DAYS_DEFAULT,
+        "wallet_cap_percent": REFERRAL_WALLET_CAP_PERCENT_DEFAULT,
+        "max_signups_per_ip_per_day": REFERRAL_MAX_IP_SIGNUPS_PER_DAY_DEFAULT,
+        "max_signups_per_device_per_day": REFERRAL_MAX_DEVICE_SIGNUPS_PER_DAY_DEFAULT,
+        "auto_approve_rewards": True,
+        "is_active": True,
+    }
+    policy, _ = ReferralPolicy.objects.get_or_create(key="default", defaults=defaults)
+    return policy
+
+
+def _referral_reward_amounts() -> tuple[Decimal, Decimal]:
+    policy = _get_referral_policy()
+    if policy and bool(policy.is_active):
+        referrer_amount = _quantize_money(policy.referrer_reward_amount)
+        referred_amount = _quantize_money(policy.referred_reward_amount)
+    else:
+        referrer_amount = _quantize_money(
+            _settings_decimal("REFERRAL_REWARD_REFERRER_AMOUNT", REFERRAL_REWARD_REFERRER_DEFAULT)
+        )
+        referred_amount = _quantize_money(
+            _settings_decimal("REFERRAL_REWARD_REFERRED_AMOUNT", REFERRAL_REWARD_REFERRED_DEFAULT)
+        )
+    if referrer_amount < Decimal("0"):
+        referrer_amount = Decimal("0.00")
+    if referred_amount < Decimal("0"):
+        referred_amount = Decimal("0.00")
+    return referrer_amount, referred_amount
+
+
+def _referral_reward_expiry_days() -> int:
+    policy = _get_referral_policy()
+    if policy and bool(policy.is_active):
+        value = int(policy.reward_expiry_days or REFERRAL_REWARD_EXPIRY_DAYS_DEFAULT)
+    else:
+        value = _settings_int("REFERRAL_REWARD_EXPIRY_DAYS", REFERRAL_REWARD_EXPIRY_DAYS_DEFAULT)
+    return max(1, value)
+
+
+def _referral_wallet_cap_percent() -> Decimal:
+    policy = _get_referral_policy()
+    if policy and bool(policy.is_active):
+        value = _quantize_money(policy.wallet_cap_percent)
+    else:
+        value = _quantize_money(
+            _settings_decimal("REFERRAL_WALLET_MAX_BOOKING_PERCENT", REFERRAL_WALLET_CAP_PERCENT_DEFAULT)
+        )
+    if value < Decimal("0"):
+        return Decimal("0.00")
+    if value > Decimal("100"):
+        return Decimal("100.00")
+    return value
+
+
+def _extract_client_ip(request: Any) -> Optional[str]:
+    if not request:
+        return None
+    forwarded_for = str(request.META.get("HTTP_X_FORWARDED_FOR") or "").strip()
+    if forwarded_for:
+        first_ip = forwarded_for.split(",")[0].strip()
+        return first_ip or None
+    remote_addr = str(request.META.get("REMOTE_ADDR") or "").strip()
+    return remote_addr or None
+
+
+def _extract_client_user_agent(request: Any) -> Optional[str]:
+    if not request:
+        return None
+    value = str(request.META.get("HTTP_USER_AGENT") or "").strip()
+    return value[:255] or None
+
+
+def _extract_device_fingerprint(request: Any, payload: Optional[dict[str, Any]] = None) -> Optional[str]:
+    source = payload or {}
+    value = str(
+        coalesce(
+            source,
+            "device_fingerprint",
+            "deviceFingerprint",
+            default=request.META.get("HTTP_X_DEVICE_FINGERPRINT") if request else None,
+        )
+        or ""
+    ).strip()
+    return value[:128] or None
+
+
+def ensure_user_referral_code(user: User) -> str:
+    """Ensure every user has a unique referral code."""
+    existing = str(getattr(user, "referral_code", "") or "").strip().upper()
+    if existing:
+        return existing
+
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    for _ in range(200):
+        candidate = "".join(random.choice(alphabet) for _ in range(REFERRAL_CODE_LENGTH))
+        if not candidate:
+            continue
+        if User.objects.filter(referral_code__iexact=candidate).exists():
+            continue
+        user.referral_code = candidate
+        user.save(update_fields=["referral_code"])
+        return candidate
+
+    # Fallback with UUID suffix when random generation repeatedly collides.
+    fallback = uuid.uuid4().hex[:REFERRAL_CODE_LENGTH].upper()
+    user.referral_code = fallback
+    user.save(update_fields=["referral_code"])
+    return fallback
+
+
+def _update_signup_metadata(
+    user: User,
+    *,
+    signup_ip: Optional[str],
+    signup_user_agent: Optional[str],
+    signup_device_fingerprint: Optional[str],
+) -> None:
+    changed_fields: list[str] = []
+    if signup_ip and user.signup_ip_address != signup_ip:
+        user.signup_ip_address = signup_ip
+        changed_fields.append("signup_ip_address")
+    if signup_user_agent and user.signup_user_agent != signup_user_agent:
+        user.signup_user_agent = signup_user_agent
+        changed_fields.append("signup_user_agent")
+    if signup_device_fingerprint and user.signup_device_fingerprint != signup_device_fingerprint:
+        user.signup_device_fingerprint = signup_device_fingerprint
+        changed_fields.append("signup_device_fingerprint")
+    if changed_fields:
+        user.save(update_fields=changed_fields)
+
+
+def _referral_anti_fraud_reason(
+    *,
+    referrer: User,
+    signup_email: str,
+    signup_phone: str,
+    signup_ip: Optional[str],
+    signup_device_fingerprint: Optional[str],
+) -> Optional[str]:
+    """Return a reason string when referral should be blocked by policy."""
+    if not referrer:
+        return "Referrer account was not found."
+
+    if str(referrer.email or "").strip().lower() == str(signup_email or "").strip().lower():
+        return "Self-referral is not allowed."
+
+    normalized_referrer_phone = str(referrer.phone_number or "").strip()
+    normalized_signup_phone = str(signup_phone or "").strip()
+    if normalized_referrer_phone and normalized_referrer_phone == normalized_signup_phone:
+        return "Self-referral is not allowed."
+
+    referrer_signup_ip = str(referrer.signup_ip_address or "").strip()
+    if signup_ip and referrer_signup_ip and signup_ip == referrer_signup_ip:
+        return "Referral from the same IP is blocked by anti-fraud policy."
+
+    referrer_device = str(referrer.signup_device_fingerprint or "").strip()
+    if signup_device_fingerprint and referrer_device and signup_device_fingerprint == referrer_device:
+        return "Referral from the same device is blocked by anti-fraud policy."
+
+    lookback_since = timezone.now() - timedelta(days=1)
+    policy = _get_referral_policy()
+    if policy and bool(policy.is_active):
+        ip_limit = max(1, int(policy.max_signups_per_ip_per_day or REFERRAL_MAX_IP_SIGNUPS_PER_DAY_DEFAULT))
+        device_limit = max(
+            1,
+            int(policy.max_signups_per_device_per_day or REFERRAL_MAX_DEVICE_SIGNUPS_PER_DAY_DEFAULT),
+        )
+    else:
+        ip_limit = max(
+            1,
+            _settings_int(
+                "REFERRAL_MAX_SIGNUPS_PER_IP_PER_DAY",
+                REFERRAL_MAX_IP_SIGNUPS_PER_DAY_DEFAULT,
+            ),
+        )
+        device_limit = max(
+            1,
+            _settings_int(
+                "REFERRAL_MAX_SIGNUPS_PER_DEVICE_PER_DAY",
+                REFERRAL_MAX_DEVICE_SIGNUPS_PER_DAY_DEFAULT,
+            ),
+        )
+
+    if signup_ip:
+        ip_count = (
+            Referral.objects.filter(
+                signup_ip_address=signup_ip,
+                created_at__gte=lookback_since,
+            )
+            .exclude(status=Referral.STATUS_REJECTED)
+            .count()
+        )
+        if ip_count >= ip_limit:
+            return "Too many referral signups detected from this IP."
+
+    if signup_device_fingerprint:
+        device_count = (
+            Referral.objects.filter(
+                signup_device_fingerprint=signup_device_fingerprint,
+                created_at__gte=lookback_since,
+            )
+            .exclude(status=Referral.STATUS_REJECTED)
+            .count()
+        )
+        if device_count >= device_limit:
+            return "Too many referral signups detected from this device."
+
+    return None
+
+
+def _referral_wallet_for_user(user: User, *, lock_for_update: bool = False) -> ReferralWallet:
+    wallet, _ = ReferralWallet.objects.get_or_create(user=user)
+    if lock_for_update:
+        wallet = ReferralWallet.objects.select_for_update().get(pk=wallet.pk)
+    return wallet
+
+
+def get_referral_wallet_snapshot(user: User, *, use_cache: bool = True) -> dict[str, Any]:
+    if not user or not user.id:
+        return {
+            "user_id": None,
+            "balance": 0.0,
+            "spendable_balance": 0.0,
+            "total_credited": 0.0,
+            "total_debited": 0.0,
+            "total_expired": 0.0,
+            "updated_at": None,
+        }
+
+    cache_key = _referral_wallet_cache_key(user.id)
+    if use_cache:
+        cached = cache.get(cache_key)
+        if isinstance(cached, dict):
+            return cached
+
+    wallet = _referral_wallet_for_user(user)
+    balance = _quantize_money(wallet.balance)
+    spendable = balance if balance > Decimal("0") else Decimal("0.00")
+    payload = {
+        "user_id": user.id,
+        "balance": float(balance),
+        "spendable_balance": float(spendable),
+        "total_credited": float(_quantize_money(wallet.total_credited)),
+        "total_debited": float(_quantize_money(wallet.total_debited)),
+        "total_expired": float(_quantize_money(wallet.total_expired)),
+        "updated_at": wallet.updated_at.isoformat() if wallet.updated_at else None,
+    }
+    cache.set(cache_key, payload, timeout=REFERRAL_CACHE_TTL_SECONDS)
+    return payload
+
+
+def _create_referral_transaction(
+    *,
+    wallet: ReferralWallet,
+    user: User,
+    amount: Decimal,
+    transaction_type: str,
+    reason: str,
+    status_value: str = ReferralTransaction.STATUS_COMPLETED,
+    referral: Optional[Referral] = None,
+    booking: Optional[Booking] = None,
+    expires_at: Optional[datetime] = None,
+    remaining_amount: Optional[Decimal] = None,
+    metadata: Optional[dict[str, Any]] = None,
+) -> ReferralTransaction:
+    return ReferralTransaction.objects.create(
+        wallet=wallet,
+        user=user,
+        referral=referral,
+        booking=booking,
+        transaction_type=transaction_type,
+        status=status_value,
+        reason=reason,
+        amount=_quantize_money(amount),
+        remaining_amount=_quantize_money(remaining_amount if remaining_amount is not None else Decimal("0")),
+        expires_at=expires_at,
+        processed_at=timezone.now(),
+        metadata=metadata or {},
+    )
+
+
+def _consume_referral_credit_buckets(user_id: int, amount: Decimal) -> None:
+    """Reduce remaining credit buckets in FIFO order to support accurate expiry."""
+    pending = _quantize_money(amount)
+    if pending <= Decimal("0"):
+        return
+
+    credit_rows = (
+        ReferralTransaction.objects.select_for_update()
+        .filter(
+            user_id=user_id,
+            transaction_type=ReferralTransaction.TYPE_CREDIT,
+            status=ReferralTransaction.STATUS_COMPLETED,
+            remaining_amount__gt=Decimal("0"),
+        )
+        .order_by("expires_at", "created_at", "id")
+    )
+    for row in credit_rows:
+        if pending <= Decimal("0"):
+            break
+        available = _quantize_money(row.remaining_amount)
+        if available <= Decimal("0"):
+            continue
+        consumed = available if available <= pending else pending
+        row.remaining_amount = _quantize_money(available - consumed)
+        row.save(update_fields=["remaining_amount", "updated_at"])
+        pending = _quantize_money(pending - consumed)
+
+
+def _credit_referral_wallet(
+    *,
+    user: User,
+    amount: Decimal,
+    reason: str,
+    referral: Optional[Referral] = None,
+    booking: Optional[Booking] = None,
+    expires_at: Optional[datetime] = None,
+    metadata: Optional[dict[str, Any]] = None,
+) -> Optional[ReferralTransaction]:
+    credit_amount = _quantize_money(amount)
+    if credit_amount <= Decimal("0"):
+        return None
+
+    with transaction.atomic():
+        wallet = _referral_wallet_for_user(user, lock_for_update=True)
+        wallet.balance = _quantize_money(wallet.balance + credit_amount)
+        wallet.total_credited = _quantize_money(wallet.total_credited + credit_amount)
+        wallet.save(update_fields=["balance", "total_credited", "updated_at"])
+        tx = _create_referral_transaction(
+            wallet=wallet,
+            user=user,
+            amount=credit_amount,
+            transaction_type=ReferralTransaction.TYPE_CREDIT,
+            reason=reason,
+            status_value=ReferralTransaction.STATUS_COMPLETED,
+            referral=referral,
+            booking=booking,
+            expires_at=expires_at,
+            remaining_amount=credit_amount,
+            metadata=metadata,
+        )
+
+    _clear_referral_wallet_cache(user.id)
+    return tx
+
+
+def _debit_referral_wallet(
+    *,
+    user: User,
+    amount: Decimal,
+    reason: str,
+    referral: Optional[Referral] = None,
+    booking: Optional[Booking] = None,
+    metadata: Optional[dict[str, Any]] = None,
+    require_available_balance: bool = True,
+    allow_negative_balance: bool = False,
+    transaction_type: str = ReferralTransaction.TYPE_DEBIT,
+) -> tuple[Optional[ReferralTransaction], Optional[dict[str, Any]], int]:
+    debit_amount = _quantize_money(amount)
+    if debit_amount <= Decimal("0"):
+        return None, None, status.HTTP_200_OK
+
+    with transaction.atomic():
+        wallet = _referral_wallet_for_user(user, lock_for_update=True)
+        current_balance = _quantize_money(wallet.balance)
+        if require_available_balance and current_balance < debit_amount:
+            return (
+                None,
+                {
+                    "message": "Insufficient referral wallet balance.",
+                    "available_balance": float(current_balance),
+                    "requested_amount": float(debit_amount),
+                },
+                status.HTTP_400_BAD_REQUEST,
+            )
+
+        next_balance = _quantize_money(current_balance - debit_amount)
+        if not allow_negative_balance and next_balance < Decimal("0"):
+            next_balance = Decimal("0.00")
+        wallet.balance = next_balance
+        wallet.total_debited = _quantize_money(wallet.total_debited + debit_amount)
+        wallet.save(update_fields=["balance", "total_debited", "updated_at"])
+
+        _consume_referral_credit_buckets(user.id, debit_amount)
+
+        tx = _create_referral_transaction(
+            wallet=wallet,
+            user=user,
+            amount=debit_amount,
+            transaction_type=transaction_type,
+            reason=reason,
+            status_value=ReferralTransaction.STATUS_COMPLETED,
+            referral=referral,
+            booking=booking,
+            remaining_amount=Decimal("0"),
+            metadata=metadata,
+        )
+
+    _clear_referral_wallet_cache(user.id)
+    return tx, None, status.HTTP_200_OK
+
+
+def preview_referral_wallet_usage_for_user(
+    user: User,
+    *,
+    subtotal: Decimal,
+    requested_amount: Optional[Decimal] = None,
+) -> dict[str, Any]:
+    subtotal_amount = _quantize_money(subtotal)
+    if subtotal_amount < Decimal("0"):
+        subtotal_amount = Decimal("0.00")
+
+    wallet_snapshot = get_referral_wallet_snapshot(user)
+    wallet_balance = _quantize_money(wallet_snapshot.get("balance") or Decimal("0"))
+    spendable_balance = wallet_balance if wallet_balance > Decimal("0") else Decimal("0.00")
+
+    cap_percent = _referral_wallet_cap_percent()
+    cap_amount = _quantize_money((subtotal_amount * cap_percent) / Decimal("100"))
+    max_usable_amount = min(subtotal_amount, cap_amount, spendable_balance)
+
+    normalized_requested = (
+        _quantize_money(requested_amount)
+        if requested_amount is not None
+        else max_usable_amount
+    )
+    if normalized_requested < Decimal("0"):
+        normalized_requested = Decimal("0.00")
+
+    applied_amount = min(max_usable_amount, normalized_requested)
+    remaining_after_wallet = _quantize_money(subtotal_amount - applied_amount)
+    if remaining_after_wallet < Decimal("0"):
+        remaining_after_wallet = Decimal("0.00")
+
+    return {
+        "subtotal": float(subtotal_amount),
+        "wallet_balance": float(wallet_balance),
+        "spendable_balance": float(spendable_balance),
+        "cap_percent": float(cap_percent),
+        "cap_amount": float(cap_amount),
+        "max_usable_amount": float(max_usable_amount),
+        "requested_amount": float(normalized_requested),
+        "applied_amount": float(applied_amount),
+        "remaining_total": float(remaining_after_wallet),
+    }
+
+
+def _mark_referral_expired(referral: Referral) -> None:
+    if not referral:
+        return
+    if referral.status in {Referral.STATUS_REJECTED, Referral.STATUS_REVERSED, Referral.STATUS_EXPIRED}:
+        return
+    referral.status = Referral.STATUS_EXPIRED
+    referral.rejection_reason = referral.rejection_reason or "Referral expired before reward trigger."
+    referral.save(update_fields=["status", "rejection_reason", "updated_at"])
+
+
+def expire_referral_wallet_credits(
+    *,
+    now: Optional[datetime] = None,
+    user_id: Optional[int] = None,
+) -> dict[str, Any]:
+    """Expire unused referral credits and mark pending referrals past expiry."""
+    current_time = now or timezone.now()
+    expired_transactions = 0
+    expired_amount = Decimal("0.00")
+    expired_referrals = 0
+
+    credits = ReferralTransaction.objects.filter(
+        transaction_type=ReferralTransaction.TYPE_CREDIT,
+        status=ReferralTransaction.STATUS_COMPLETED,
+        expires_at__isnull=False,
+        expires_at__lte=current_time,
+        remaining_amount__gt=Decimal("0"),
+    )
+    if user_id:
+        credits = credits.filter(user_id=user_id)
+
+    for tx in credits.order_by("expires_at", "id"):
+        with transaction.atomic():
+            locked_tx = ReferralTransaction.objects.select_for_update().filter(pk=tx.id).first()
+            if not locked_tx:
+                continue
+            if locked_tx.status != ReferralTransaction.STATUS_COMPLETED:
+                continue
+            if not locked_tx.expires_at or locked_tx.expires_at > current_time:
+                continue
+
+            remaining = _quantize_money(locked_tx.remaining_amount)
+            if remaining <= Decimal("0"):
+                continue
+
+            wallet = ReferralWallet.objects.select_for_update().filter(pk=locked_tx.wallet_id).first()
+            if not wallet:
+                locked_tx.remaining_amount = Decimal("0.00")
+                locked_tx.status = ReferralTransaction.STATUS_EXPIRED
+                locked_tx.processed_at = current_time
+                locked_tx.save(update_fields=["remaining_amount", "status", "processed_at", "updated_at"])
+                expired_transactions += 1
+                expired_amount = _quantize_money(expired_amount + remaining)
+                continue
+
+            wallet.balance = _quantize_money(wallet.balance - remaining)
+            wallet.total_expired = _quantize_money(wallet.total_expired + remaining)
+            wallet.save(update_fields=["balance", "total_expired", "updated_at"])
+
+            _create_referral_transaction(
+                wallet=wallet,
+                user=wallet.user,
+                amount=remaining,
+                transaction_type=ReferralTransaction.TYPE_EXPIRE,
+                reason=ReferralTransaction.REASON_EXPIRY,
+                status_value=ReferralTransaction.STATUS_EXPIRED,
+                referral=locked_tx.referral,
+                booking=locked_tx.booking,
+                remaining_amount=Decimal("0.00"),
+                metadata={"source_transaction_id": locked_tx.id},
+            )
+
+            locked_tx.remaining_amount = Decimal("0.00")
+            locked_tx.status = ReferralTransaction.STATUS_EXPIRED
+            locked_tx.processed_at = current_time
+            locked_tx.save(update_fields=["remaining_amount", "status", "processed_at", "updated_at"])
+
+            _clear_referral_wallet_cache(wallet.user_id)
+            expired_transactions += 1
+            expired_amount = _quantize_money(expired_amount + remaining)
+
+    pending_referrals = Referral.objects.filter(
+        status=Referral.STATUS_PENDING,
+        expires_at__isnull=False,
+        expires_at__lte=current_time,
+    )
+    if user_id:
+        pending_referrals = pending_referrals.filter(Q(referrer_id=user_id) | Q(referred_user_id=user_id))
+
+    for referral in pending_referrals:
+        _mark_referral_expired(referral)
+        expired_referrals += 1
+
+    return {
+        "expired_transactions": expired_transactions,
+        "expired_amount": float(expired_amount),
+        "expired_referrals": expired_referrals,
+    }
+
+
+def _link_referral_on_signup(
+    *,
+    user: User,
+    referral_code: str,
+    signup_ip: Optional[str],
+    signup_user_agent: Optional[str],
+    signup_device_fingerprint: Optional[str],
+) -> dict[str, Any]:
+    normalized_code = str(referral_code or "").strip().upper()
+    if not normalized_code:
+        return {"applied": False, "message": "Referral code was not provided."}
+
+    referrer = User.objects.filter(referral_code__iexact=normalized_code).first()
+    if not referrer:
+        return {"applied": False, "message": "Referral code is invalid."}
+
+    anti_fraud_reason = _referral_anti_fraud_reason(
+        referrer=referrer,
+        signup_email=user.email,
+        signup_phone=user.phone_number,
+        signup_ip=signup_ip,
+        signup_device_fingerprint=signup_device_fingerprint,
+    )
+    expires_at = timezone.now() + timedelta(days=_referral_reward_expiry_days())
+
+    referral = Referral.objects.create(
+        referrer=referrer,
+        referred_user=user,
+        referral_code=normalized_code,
+        status=Referral.STATUS_PENDING if not anti_fraud_reason else Referral.STATUS_REJECTED,
+        rejection_reason=anti_fraud_reason,
+        signup_ip_address=signup_ip,
+        signup_user_agent=signup_user_agent,
+        signup_device_fingerprint=signup_device_fingerprint,
+        expires_at=expires_at,
+        metadata={
+            "signup_email": user.email,
+            "signup_phone": user.phone_number,
+        },
+    )
+
+    if anti_fraud_reason:
+        return {
+            "applied": False,
+            "status": referral.status,
+            "message": anti_fraud_reason,
+            "referral_id": referral.id,
+        }
+
+    return {
+        "applied": True,
+        "status": referral.status,
+        "message": "Referral linked. Rewards unlock after first successful booking.",
+        "referral_id": referral.id,
+        "referrer_id": referrer.id,
+    }
+
+
+def process_referral_reward_for_booking(booking: Optional[Booking]) -> dict[str, Any]:
+    """Credit referrer + referred wallets when referred user completes first booking."""
+    if not booking or not booking.id or not booking.user_id:
+        return {"awarded": False, "message": "Booking context unavailable."}
+
+    booking_status = str(booking.booking_status or "").strip().lower()
+    if booking_status != BOOKING_STATUS_CONFIRMED.lower():
+        return {"awarded": False, "message": "Booking is not confirmed."}
+
+    with transaction.atomic():
+        referral = (
+            Referral.objects.select_for_update()
+            .select_related("referrer", "referred_user")
+            .filter(referred_user_id=booking.user_id)
+            .order_by("-created_at", "-id")
+            .first()
+        )
+        if not referral:
+            return {"awarded": False, "message": "Referral not found for user."}
+        if referral.status != Referral.STATUS_PENDING:
+            return {"awarded": False, "message": f"Referral status is {referral.status}."}
+
+        policy = _get_referral_policy()
+        if policy and bool(policy.is_active) and not bool(policy.auto_approve_rewards):
+            metadata = referral.metadata if isinstance(referral.metadata, dict) else {}
+            approved = bool(metadata.get("admin_approved")) or bool(metadata.get("admin_approved_at"))
+            if not approved:
+                return {"awarded": False, "message": "Referral is pending admin approval."}
+
+        now_value = timezone.now()
+        if referral.expires_at and referral.expires_at <= now_value:
+            _mark_referral_expired(referral)
+            return {"awarded": False, "message": "Referral reward eligibility has expired."}
+
+        successful_bookings = Booking.objects.filter(
+            user_id=booking.user_id,
+            booking_status__iexact=BOOKING_STATUS_CONFIRMED,
+        ).count()
+        if successful_bookings != 1:
+            return {"awarded": False, "message": "Not the first successful booking."}
+
+        referrer_amount, referred_amount = _referral_reward_amounts()
+        credit_expiry = now_value + timedelta(days=_referral_reward_expiry_days())
+
+        referrer_tx = _credit_referral_wallet(
+            user=referral.referrer,
+            amount=referrer_amount,
+            reason=ReferralTransaction.REASON_REFERRER_REWARD,
+            referral=referral,
+            booking=booking,
+            expires_at=credit_expiry,
+            metadata={
+                "booking_id": booking.id,
+                "recipient_role": "referrer",
+                "referred_user_id": booking.user_id,
+            },
+        )
+        referred_tx = _credit_referral_wallet(
+            user=referral.referred_user,
+            amount=referred_amount,
+            reason=ReferralTransaction.REASON_REFERRED_REWARD,
+            referral=referral,
+            booking=booking,
+            expires_at=credit_expiry,
+            metadata={
+                "booking_id": booking.id,
+                "recipient_role": "referred",
+                "referrer_id": referral.referrer_id,
+            },
+        )
+
+        referral.status = Referral.STATUS_REWARDED
+        referral.reward_trigger_booking = booking
+        referral.rewarded_at = now_value
+        referral.metadata = {
+            **(referral.metadata or {}),
+            "referrer_reward_amount": float(referrer_amount),
+            "referred_reward_amount": float(referred_amount),
+            "reward_credit_expiry": credit_expiry.isoformat(),
+            "referrer_transaction_id": referrer_tx.id if referrer_tx else None,
+            "referred_transaction_id": referred_tx.id if referred_tx else None,
+        }
+        referral.save(
+            update_fields=[
+                "status",
+                "reward_trigger_booking",
+                "rewarded_at",
+                "metadata",
+                "updated_at",
+            ]
+        )
+
+    return {
+        "awarded": True,
+        "referral_id": referral.id,
+        "referrer_reward": float(referrer_amount),
+        "referred_reward": float(referred_amount),
+    }
+
+
+def reverse_referral_effects_for_booking(
+    booking: Optional[Booking],
+    *,
+    reason: str,
+) -> dict[str, Any]:
+    """Reverse booking wallet usage and awarded referral rewards on cancellation/refund."""
+    if not booking or not booking.id:
+        return {"wallet_refund_amount": 0.0, "reversed_reward_amount": 0.0}
+
+    wallet_refund_amount = Decimal("0.00")
+    reversed_reward_amount = Decimal("0.00")
+
+    with transaction.atomic():
+        locked_booking = Booking.objects.select_for_update().filter(pk=booking.id).first()
+        if not locked_booking:
+            return {"wallet_refund_amount": 0.0, "reversed_reward_amount": 0.0}
+
+        wallet_used = _quantize_money(locked_booking.referral_wallet_used_amount or Decimal("0"))
+        already_refunded = _quantize_money(locked_booking.referral_wallet_refunded_amount or Decimal("0"))
+        pending_refund = _quantize_money(wallet_used - already_refunded)
+        if pending_refund < Decimal("0"):
+            pending_refund = Decimal("0.00")
+
+        if pending_refund > Decimal("0") and locked_booking.user_id:
+            existing_refund_tx = ReferralTransaction.objects.filter(
+                booking_id=locked_booking.id,
+                user_id=locked_booking.user_id,
+                reason=ReferralTransaction.REASON_BOOKING_WALLET_REFUND,
+                transaction_type=ReferralTransaction.TYPE_CREDIT,
+                status=ReferralTransaction.STATUS_COMPLETED,
+            ).first()
+            if not existing_refund_tx:
+                _credit_referral_wallet(
+                    user=locked_booking.user,
+                    amount=pending_refund,
+                    reason=ReferralTransaction.REASON_BOOKING_WALLET_REFUND,
+                    booking=locked_booking,
+                    metadata={"reason": reason or "Booking cancellation refund"},
+                )
+            wallet_refund_amount = pending_refund
+            locked_booking.referral_wallet_refunded_amount = _quantize_money(already_refunded + pending_refund)
+            locked_booking.save(update_fields=["referral_wallet_refunded_amount"])
+
+        referral = (
+            Referral.objects.select_for_update()
+            .filter(reward_trigger_booking_id=locked_booking.id)
+            .order_by("-id")
+            .first()
+        )
+        if not referral or referral.status != Referral.STATUS_REWARDED:
+            return {
+                "wallet_refund_amount": float(wallet_refund_amount),
+                "reversed_reward_amount": float(reversed_reward_amount),
+            }
+
+        reward_credit_rows = list(
+            ReferralTransaction.objects.select_for_update().filter(
+                referral_id=referral.id,
+                booking_id=locked_booking.id,
+                transaction_type=ReferralTransaction.TYPE_CREDIT,
+                reason__in=[
+                    ReferralTransaction.REASON_REFERRER_REWARD,
+                    ReferralTransaction.REASON_REFERRED_REWARD,
+                ],
+                status=ReferralTransaction.STATUS_COMPLETED,
+            )
+        )
+
+        for credit_tx in reward_credit_rows:
+            debit_tx, _, _ = _debit_referral_wallet(
+                user=credit_tx.user,
+                amount=_quantize_money(credit_tx.amount),
+                reason=ReferralTransaction.REASON_REFERRAL_CANCELLATION_REVERSAL,
+                referral=referral,
+                booking=locked_booking,
+                metadata={
+                    "source_transaction_id": credit_tx.id,
+                    "reason": reason,
+                },
+                require_available_balance=False,
+                allow_negative_balance=True,
+                transaction_type=ReferralTransaction.TYPE_REVERSAL,
+            )
+            if debit_tx:
+                reversed_reward_amount = _quantize_money(
+                    reversed_reward_amount + _quantize_money(credit_tx.amount)
+                )
+            credit_tx.status = ReferralTransaction.STATUS_REVERSED
+            credit_tx.remaining_amount = Decimal("0.00")
+            credit_tx.processed_at = timezone.now()
+            credit_tx.save(update_fields=["status", "remaining_amount", "processed_at", "updated_at"])
+
+        referral.status = Referral.STATUS_REVERSED
+        referral.reversed_at = timezone.now()
+        referral.reversal_reason = str(reason or "Booking cancelled")[:255]
+        referral.save(update_fields=["status", "reversed_at", "reversal_reason", "updated_at"])
+
+    return {
+        "wallet_refund_amount": float(wallet_refund_amount),
+        "reversed_reward_amount": float(reversed_reward_amount),
+    }
+
+
+def _dropoff_vendor_from_booking(booking: Optional[Booking]) -> Optional[Vendor]:
+    """Resolve vendor from booking showtime screen context."""
+    if not booking or not booking.showtime_id:
+        return None
+    showtime = booking.showtime
+    screen = getattr(showtime, "screen", None) if showtime else None
+    return getattr(screen, "vendor", None) if screen else None
+
+
+def _dropoff_show_from_booking(booking: Optional[Booking]) -> Optional[Show]:
+    """Resolve Show row that matches a booking showtime context."""
+    if not booking or not booking.showtime_id:
+        return None
+    showtime = booking.showtime
+    screen = getattr(showtime, "screen", None) if showtime else None
+    if not showtime or not screen or not showtime.start_time:
+        return None
+    return (
+        Show.objects.filter(
+            vendor_id=screen.vendor_id,
+            movie_id=showtime.movie_id,
+            show_date=showtime.start_time.date(),
+            start_time=showtime.start_time.time(),
+            hall=screen.screen_number,
+        )
+        .order_by("-id")
+        .first()
+    )
+
+
+def _record_booking_dropoff_event(
+    *,
+    stage: str,
+    reason: str,
+    seat_count: int = 0,
+    booking: Optional[Booking] = None,
+    payment: Optional[Payment] = None,
+    user: Optional[User] = None,
+    vendor: Optional[Vendor] = None,
+    show: Optional[Show] = None,
+    transaction_uuid: Optional[str] = None,
+    metadata: Optional[dict[str, Any]] = None,
+    dedupe_by_transaction: bool = False,
+) -> Optional[BookingDropoffEvent]:
+    """Persist one drop-off event for booking/payment funnel analytics."""
+    normalized_stage = str(stage or "").strip().upper()
+    normalized_reason = str(reason or "").strip().upper()
+    if normalized_stage not in {
+        BookingDropoffEvent.STAGE_BOOKING,
+        BookingDropoffEvent.STAGE_PAYMENT,
+    }:
+        return None
+    if normalized_reason not in {
+        BookingDropoffEvent.REASON_LEFT_BOOKING_PROCESS,
+        BookingDropoffEvent.REASON_PAYMENT_NOT_COMPLETED,
+        BookingDropoffEvent.REASON_PAYMENT_EXPIRED,
+    }:
+        return None
+
+    resolved_tx_uuid = str(transaction_uuid or "").strip() or None
+    if not resolved_tx_uuid and payment:
+        resolved_tx_uuid = _transaction_uuid_from_payment_method(payment.payment_method)
+
+    if dedupe_by_transaction and resolved_tx_uuid:
+        already_logged = BookingDropoffEvent.objects.filter(
+            stage=normalized_stage,
+            transaction_uuid=resolved_tx_uuid,
+        ).exists()
+        if already_logged:
+            return None
+
+    resolved_booking = booking
+    resolved_payment = payment
+    if resolved_booking is None and resolved_payment is not None:
+        resolved_booking = resolved_payment.booking
+
+    resolved_user = user or (resolved_booking.user if resolved_booking else None)
+    resolved_vendor = vendor or _dropoff_vendor_from_booking(resolved_booking)
+    resolved_show = show or _dropoff_show_from_booking(resolved_booking)
+
+    try:
+        safe_seat_count = max(int(seat_count or 0), 0)
+    except (TypeError, ValueError):
+        safe_seat_count = 0
+
+    return BookingDropoffEvent.objects.create(
+        user=resolved_user,
+        vendor=resolved_vendor,
+        show=resolved_show,
+        booking=resolved_booking,
+        payment=resolved_payment,
+        stage=normalized_stage,
+        reason=normalized_reason,
+        seat_count=safe_seat_count,
+        transaction_uuid=resolved_tx_uuid,
+        metadata=metadata or {},
+    )
+
+
+def _build_dropoff_analytics_payload(
+    events_qs,
+    *,
+    days: int = 7,
+) -> dict[str, Any]:
+    """Build summary + daily trend payload for drop-off analytics graphs."""
+    horizon_days = max(int(days or 7), 1)
+    today = timezone.localdate()
+    start_date = today - timedelta(days=horizon_days - 1)
+
+    booking_dropoffs = events_qs.filter(
+        stage=BookingDropoffEvent.STAGE_BOOKING,
+    ).count()
+    payment_dropoffs = events_qs.filter(
+        stage=BookingDropoffEvent.STAGE_PAYMENT,
+    ).count()
+
+    daily_rows = (
+        events_qs.filter(created_at__date__gte=start_date)
+        .values("created_at", "stage")
+        .order_by("created_at")
+    )
+
+    trend_map: dict[date_cls, dict[str, int]] = {}
+    for offset in range(horizon_days):
+        day = start_date + timedelta(days=offset)
+        trend_map[day] = {
+            "booking_process_left": 0,
+            "payment_process_left": 0,
+            "total_left": 0,
+        }
+
+    for row in daily_rows:
+        created_at = row.get("created_at")
+        stage = str(row.get("stage") or "").strip().upper()
+        if not created_at:
+            continue
+        local_day = ensure_utc_datetime(created_at).date()
+        if local_day not in trend_map:
+            continue
+        if stage == BookingDropoffEvent.STAGE_BOOKING:
+            trend_map[local_day]["booking_process_left"] += 1
+        elif stage == BookingDropoffEvent.STAGE_PAYMENT:
+            trend_map[local_day]["payment_process_left"] += 1
+        trend_map[local_day]["total_left"] += 1
+
+    trend = [
+        {
+            "date": day.isoformat(),
+            **trend_map[day],
+        }
+        for day in sorted(trend_map.keys())
+    ]
+
+    return {
+        "summary": {
+            "booking_process_left": booking_dropoffs,
+            "payment_process_left": payment_dropoffs,
+            "total_left": booking_dropoffs + payment_dropoffs,
+        },
+        "trend": trend,
+    }
+
+
+def get_admin_dropoff_analytics(days: int = 7) -> dict[str, Any]:
+    """Return platform-wide booking/payment drop-off analytics for admin graphs."""
+    base_qs = BookingDropoffEvent.objects.all()
+    payload = _build_dropoff_analytics_payload(base_qs, days=days)
+    return {
+        "scope": "admin",
+        "dropoff_summary": payload["summary"],
+        "dropoff_trend": payload["trend"],
+        "message": "Drop-off analytics retrieved successfully",
+    }
+
+
+def _normalize_ticket_monitor_export_filters(raw_filters: Optional[dict[str, Any]]) -> dict[str, Any]:
+    filters = raw_filters if isinstance(raw_filters, dict) else {}
+
+    valid_statuses = {
+        TicketValidationScan.STATUS_VALID,
+        TicketValidationScan.STATUS_DUPLICATE,
+        TicketValidationScan.STATUS_INVALID,
+        TicketValidationScan.STATUS_FRAUD,
+    }
+    status_value = str(filters.get("status") or "").strip().upper()
+    if status_value not in valid_statuses:
+        status_value = ""
+
+    reference = str(filters.get("reference") or "").strip().upper()
+    parsed_date = parse_date(filters.get("date"))
+
+    staff_mode = str(filters.get("staffMode") or filters.get("staff_mode") or "").strip().lower()
+    staff_id = _coerce_int(filters.get("staffId") or filters.get("staff_id"))
+    if staff_mode not in {"owner", "staff"}:
+        raw_staff = str(filters.get("staff") or "").strip().lower()
+        if raw_staff in {"owner", "vendor", "vendor_account"}:
+            staff_mode = "owner"
+            staff_id = None
+        else:
+            parsed_staff_id = _coerce_int(raw_staff)
+            if parsed_staff_id:
+                staff_mode = "staff"
+                staff_id = parsed_staff_id
+            else:
+                staff_mode = ""
+                staff_id = None
+    elif staff_mode != "staff":
+        staff_id = None
+
+    movie_id = _coerce_int(filters.get("movieId") or filters.get("movie_id") or filters.get("movie"))
+    show_id = _coerce_int(filters.get("showId") or filters.get("show_id") or filters.get("show"))
+
+    return {
+        "status": status_value,
+        "reference": reference,
+        "date": parsed_date.isoformat() if parsed_date else "",
+        "staffMode": staff_mode,
+        "staffId": staff_id,
+        "movieId": movie_id,
+        "showId": show_id,
+    }
+
+
+def _query_ticket_monitor_scans_for_export(vendor_id: int, filters: Optional[dict[str, Any]] = None):
+    normalized_filters = _normalize_ticket_monitor_export_filters(filters)
+    queryset = TicketValidationScan.objects.filter(vendor_id=vendor_id).select_related(
+        "ticket__show__movie",
+        "vendor_staff",
+        "vendor",
+        "scanned_by",
+    )
+
+    if normalized_filters.get("status"):
+        queryset = queryset.filter(status=normalized_filters["status"])
+    if normalized_filters.get("reference"):
+        queryset = queryset.filter(reference__icontains=normalized_filters["reference"])
+
+    parsed_date = parse_date(normalized_filters.get("date"))
+    if parsed_date:
+        queryset = queryset.filter(scanned_at__date=parsed_date)
+
+    if normalized_filters.get("staffMode") == "owner":
+        queryset = queryset.filter(vendor_staff__isnull=True)
+    elif normalized_filters.get("staffMode") == "staff" and normalized_filters.get("staffId"):
+        queryset = queryset.filter(vendor_staff_id=normalized_filters["staffId"])
+
+    if normalized_filters.get("movieId"):
+        queryset = queryset.filter(ticket__show__movie_id=normalized_filters["movieId"])
+    if normalized_filters.get("showId"):
+        queryset = queryset.filter(ticket__show_id=normalized_filters["showId"])
+
+    return queryset.order_by("-scanned_at", "-id")
+
+
+def _resolve_ticket_monitor_scan_actor(scan: TicketValidationScan) -> tuple[str, Optional[int], str]:
+    staff = scan.vendor_staff if isinstance(scan.vendor_staff, VendorStaff) else None
+    if staff:
+        label = str(staff.full_name or staff.username or staff.email or f"Staff #{staff.id}").strip()
+        return "staff", staff.id, label
+
+    actor = scan.scanned_by or scan.vendor
+    actor_label = str(
+        getattr(actor, "name", "")
+        or getattr(actor, "username", "")
+        or getattr(actor, "email", "")
+    ).strip()
+    return "vendor", None, actor_label or "Vendor Account"
+
+
+def _extract_ticket_monitor_show_context(scan: TicketValidationScan) -> dict[str, Any]:
+    show = scan.ticket.show if scan.ticket and scan.ticket.show else None
+    payload = scan.ticket.payload if scan.ticket and isinstance(scan.ticket.payload, dict) else {}
+    movie_payload = payload.get("movie") if isinstance(payload.get("movie"), dict) else {}
+
+    movie_id = show.movie_id if show else None
+    movie_title = str(show.movie.title if show and show.movie else "").strip()
+    if not movie_title:
+        movie_title = str(movie_payload.get("title") or "").strip()
+
+    show_id = show.id if show else None
+    hall = str(show.hall if show else "").strip()
+    if not hall:
+        hall = str(movie_payload.get("theater") or "").strip()
+
+    show_date = show.show_date.isoformat() if show and show.show_date else None
+    if not show_date:
+        show_date = str(movie_payload.get("show_date") or "").strip() or None
+
+    show_time = show.start_time.strftime("%H:%M") if show and show.start_time else None
+    if not show_time:
+        show_time = str(movie_payload.get("show_time") or "").strip() or None
+
+    return {
+        "movie_id": movie_id,
+        "movie_title": movie_title or None,
+        "show_id": show_id,
+        "show_date": show_date,
+        "show_time": show_time,
+        "hall": hall or None,
+    }
+
+
+def _build_ticket_monitor_csv_content(
+    *,
+    vendor_id: int,
+    filters: Optional[dict[str, Any]] = None,
+) -> tuple[str, str, int]:
+    scans = _query_ticket_monitor_scans_for_export(vendor_id, filters=filters)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(
+        [
+            "scan_id",
+            "reference",
+            "ticket_id",
+            "status",
+            "fraud_score",
+            "reason",
+            "scanned_at",
+            "source_ip",
+            "scanned_by_type",
+            "scanned_by_staff_id",
+            "scanned_by_name",
+            "movie_id",
+            "movie_title",
+            "show_id",
+            "show_date",
+            "show_time",
+            "hall",
+        ]
+    )
+
+    row_count = 0
+    for scan in scans:
+        actor_type, actor_staff_id, actor_name = _resolve_ticket_monitor_scan_actor(scan)
+        show_context = _extract_ticket_monitor_show_context(scan)
+        writer.writerow(
+            [
+                scan.id,
+                scan.reference,
+                str(scan.ticket.ticket_id) if scan.ticket and scan.ticket.ticket_id else "",
+                scan.status,
+                int(scan.fraud_score or 0),
+                scan.reason or "",
+                scan.scanned_at.isoformat() if scan.scanned_at else "",
+                scan.source_ip or "",
+                actor_type,
+                actor_staff_id or "",
+                actor_name,
+                show_context.get("movie_id") or "",
+                show_context.get("movie_title") or "",
+                show_context.get("show_id") or "",
+                show_context.get("show_date") or "",
+                show_context.get("show_time") or "",
+                show_context.get("hall") or "",
+            ]
+        )
+        row_count += 1
+
+    timestamp = timezone.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"ticket_validation_monitor_{timestamp}.csv"
+    return filename, output.getvalue(), row_count
+
+
+def _enqueue_background_job(
+    *,
+    job_type: str,
+    payload: Optional[dict[str, Any]] = None,
+    max_attempts: int = BACKGROUND_JOB_DEFAULT_MAX_ATTEMPTS,
+) -> Optional[BackgroundJob]:
+    safe_attempts = max(int(max_attempts or BACKGROUND_JOB_DEFAULT_MAX_ATTEMPTS), 1)
+    try:
+        return BackgroundJob.objects.create(
+            job_type=job_type,
+            status=BackgroundJob.STATUS_PENDING,
+            payload=payload or {},
+            max_attempts=safe_attempts,
+        )
+    except Exception:
+        logger.exception("Failed to enqueue background job %s", job_type)
+        return None
+
+
+def enqueue_vendor_monitor_export_job(
+    *,
+    vendor_id: int,
+    filters: Optional[dict[str, Any]] = None,
+    requested_by_staff_id: Optional[int] = None,
+) -> Optional[BackgroundJob]:
+    safe_vendor_id = _coerce_int(vendor_id)
+    if not safe_vendor_id:
+        return None
+
+    payload: dict[str, Any] = {
+        "vendor_id": safe_vendor_id,
+        "filters": _normalize_ticket_monitor_export_filters(filters),
+    }
+
+    safe_staff_id = _coerce_int(requested_by_staff_id)
+    if safe_staff_id:
+        payload["requested_by_staff_id"] = safe_staff_id
+
+    return _enqueue_background_job(
+        job_type=BackgroundJob.TYPE_ANALYTICS_MONITOR_EXPORT,
+        payload=payload,
+        max_attempts=2,
+    )
+
+
+def get_vendor_monitor_export_job(vendor_id: int, job_id: int) -> Optional[BackgroundJob]:
+    safe_job_id = _coerce_int(job_id)
+    safe_vendor_id = _coerce_int(vendor_id)
+    if not safe_job_id or not safe_vendor_id:
+        return None
+
+    job = BackgroundJob.objects.filter(
+        id=safe_job_id,
+        job_type=BackgroundJob.TYPE_ANALYTICS_MONITOR_EXPORT,
+    ).first()
+    if not job:
+        return None
+
+    payload = job.payload if isinstance(job.payload, dict) else {}
+    job_vendor_id = _coerce_int(payload.get("vendor_id"))
+    if job_vendor_id != safe_vendor_id:
+        return None
+
+    return job
+
+
+def get_vendor_monitor_export_job_file(job: BackgroundJob) -> tuple[Optional[bytes], Optional[str], Optional[str]]:
+    result = job.result if isinstance(job.result, dict) else {}
+    encoded_csv = str(result.get("csv_base64") or "").strip()
+    if not encoded_csv:
+        return None, None, "CSV export is empty."
+
+    try:
+        csv_content = base64.b64decode(encoded_csv)
+    except Exception:
+        return None, None, "Failed to decode export file."
+
+    filename = str(result.get("filename") or f"ticket_validation_monitor_{job.id}.csv").strip()
+    return csv_content, filename or f"ticket_validation_monitor_{job.id}.csv", None
+
+
+def _queue_notification_email(
+    *,
+    subject: str,
+    message: str,
+    recipient_email: Optional[str],
+    html_message: Optional[str] = None,
+) -> bool:
+    email = str(recipient_email or "").strip()
+    if not email:
+        return False
+
+    queued_job = _enqueue_background_job(
+        job_type=BackgroundJob.TYPE_NOTIFICATION_EMAIL,
+        payload={
+            "subject": str(subject or "").strip(),
+            "message": str(message or "").strip(),
+            "recipient_email": email,
+            "html_message": html_message,
+        },
+        max_attempts=BACKGROUND_JOB_DEFAULT_MAX_ATTEMPTS,
+    )
+    if queued_job:
+        return True
+
+    return _send_notification_email(
+        subject=subject,
+        message=message,
+        recipient_email=email,
+        html_message=html_message,
+    )
+
+
+def _process_notification_email_background_job(job: BackgroundJob) -> dict[str, Any]:
+    payload = job.payload if isinstance(job.payload, dict) else {}
+    subject = str(payload.get("subject") or "").strip()
+    message = str(payload.get("message") or "").strip()
+    recipient_email = str(payload.get("recipient_email") or "").strip()
+    html_message = payload.get("html_message")
+    html_message = str(html_message).strip() if html_message is not None else None
+
+    sent = _send_notification_email(
+        subject=subject,
+        message=message,
+        recipient_email=recipient_email,
+        html_message=html_message,
+    )
+    if not sent:
+        raise ValueError("Notification email delivery failed.")
+
+    return {
+        "sent": True,
+        "recipient_email": recipient_email,
+    }
+
+
+def _process_monitor_export_background_job(job: BackgroundJob) -> dict[str, Any]:
+    payload = job.payload if isinstance(job.payload, dict) else {}
+    vendor_id = _coerce_int(payload.get("vendor_id"))
+    if not vendor_id:
+        raise ValueError("Missing vendor_id for analytics export job.")
+
+    filters = payload.get("filters") if isinstance(payload.get("filters"), dict) else {}
+    filename, csv_content, row_count = _build_ticket_monitor_csv_content(
+        vendor_id=vendor_id,
+        filters=filters,
+    )
+
+    encoded_csv = base64.b64encode(csv_content.encode("utf-8")).decode("ascii")
+    return {
+        "filename": filename,
+        "content_type": "text/csv",
+        "csv_base64": encoded_csv,
+        "row_count": row_count,
+        "generated_at": timezone.now().isoformat(),
+    }
+
+
+def _process_background_job(job: BackgroundJob) -> dict[str, Any]:
+    if job.job_type == BackgroundJob.TYPE_NOTIFICATION_EMAIL:
+        return _process_notification_email_background_job(job)
+    if job.job_type == BackgroundJob.TYPE_ANALYTICS_MONITOR_EXPORT:
+        return _process_monitor_export_background_job(job)
+    raise ValueError(f"Unsupported background job type: {job.job_type}")
+
+
+def _claim_background_jobs(
+    *,
+    batch_size: int = 20,
+    job_types: Optional[Iterable[str]] = None,
+) -> list[BackgroundJob]:
+    safe_batch_size = max(min(int(batch_size or 20), 200), 1)
+    normalized_types = [
+        str(item or "").strip().upper()
+        for item in (job_types or [])
+        if str(item or "").strip()
+    ]
+
+    now = timezone.now()
+    with transaction.atomic():
+        queryset = BackgroundJob.objects.filter(
+            status=BackgroundJob.STATUS_PENDING,
+            available_at__lte=now,
+        ).order_by("available_at", "id")
+        if normalized_types:
+            queryset = queryset.filter(job_type__in=normalized_types)
+
+        try:
+            jobs = list(queryset.select_for_update(skip_locked=True)[:safe_batch_size])
+        except Exception:
+            jobs = list(queryset.select_for_update()[:safe_batch_size])
+
+        if not jobs:
+            return []
+
+        for job in jobs:
+            job.status = BackgroundJob.STATUS_PROCESSING
+            job.started_at = now
+            job.error_message = None
+            job.attempts = int(job.attempts or 0) + 1
+            job.updated_at = now
+            job.save(
+                update_fields=[
+                    "status",
+                    "started_at",
+                    "error_message",
+                    "attempts",
+                    "updated_at",
+                ]
+            )
+
+        return jobs
+
+
+def _mark_background_job_completed(job: BackgroundJob, *, result: Optional[dict[str, Any]] = None) -> None:
+    now = timezone.now()
+    job.status = BackgroundJob.STATUS_COMPLETED
+    job.result = result or {}
+    job.error_message = None
+    job.finished_at = now
+    job.updated_at = now
+    job.save(
+        update_fields=[
+            "status",
+            "result",
+            "error_message",
+            "finished_at",
+            "updated_at",
+        ]
+    )
+
+
+def _mark_background_job_failed_or_requeued(job: BackgroundJob, *, error_message: str) -> str:
+    now = timezone.now()
+    max_attempts = max(int(job.max_attempts or BACKGROUND_JOB_DEFAULT_MAX_ATTEMPTS), 1)
+    attempts = int(job.attempts or 0)
+
+    job.error_message = str(error_message or "Job failed")[:255]
+    job.updated_at = now
+    if attempts >= max_attempts:
+        job.status = BackgroundJob.STATUS_FAILED
+        job.finished_at = now
+        job.save(update_fields=["status", "error_message", "finished_at", "updated_at"])
+        return "failed"
+
+    retry_seconds = BACKGROUND_JOB_RETRY_BACKOFF_SECONDS * attempts
+    job.status = BackgroundJob.STATUS_PENDING
+    job.available_at = now + timedelta(seconds=retry_seconds)
+    job.started_at = None
+    job.save(
+        update_fields=[
+            "status",
+            "available_at",
+            "started_at",
+            "error_message",
+            "updated_at",
+        ]
+    )
+    return "requeued"
+
+
+def process_background_jobs(
+    *,
+    batch_size: int = 20,
+    job_types: Optional[Iterable[str]] = None,
+) -> dict[str, Any]:
+    jobs = _claim_background_jobs(batch_size=batch_size, job_types=job_types)
+    summary = {
+        "claimed": len(jobs),
+        "processed": 0,
+        "completed": 0,
+        "failed": 0,
+        "requeued": 0,
+    }
+    if not jobs:
+        return summary
+
+    for job in jobs:
+        summary["processed"] += 1
+        try:
+            result = _process_background_job(job)
+            _mark_background_job_completed(job, result=result)
+            summary["completed"] += 1
+        except Exception as exc:
+            logger.exception("Background job %s failed", job.id)
+            outcome = _mark_background_job_failed_or_requeued(job, error_message=str(exc))
+            if outcome == "failed":
+                summary["failed"] += 1
+            else:
+                summary["requeued"] += 1
+
+    return summary
 
 
 def _normalize_show_status(value: Any) -> str:
     raw = str(value or "").strip().lower()
     if raw in {"", "open", "booking_open", "upcoming"}:
         return Show.STATUS_UPCOMING
-    if raw in {"running", "live"}:
+    if raw in {"running", "live", "ongoing"}:
         return Show.STATUS_RUNNING
     if raw in {"completed", "closed", "ended"}:
         return Show.STATUS_COMPLETED
@@ -176,7 +2214,10 @@ def _ensure_show_is_bookable(show: Show) -> tuple[Optional[dict[str, Any]], Opti
         return {"message": "This show is already running. Booking is closed."}, status.HTTP_400_BAD_REQUEST
     if not lifecycle.get("booking_open"):
         return {
-            "message": "Booking closes 30 minutes before show start time.",
+            "message": (
+                f"Booking closes {selectors.BOOKING_CLOSE_BEFORE_START_MINUTES} minutes "
+                "before show start time."
+            ),
             "booking_close_at": lifecycle["booking_close_at"].isoformat()
             if lifecycle.get("booking_close_at")
             else None,
@@ -184,25 +2225,191 @@ def _ensure_show_is_bookable(show: Show) -> tuple[Optional[dict[str, Any]], Opti
     return None, None
 
 
-def _send_notification_email(subject: str, message: str, recipient_email: Optional[str]) -> bool:
+def _send_email_via_resend(
+    *,
+    subject: str,
+    message: str,
+    recipient_email: str,
+    html_message: Optional[str] = None,
+) -> bool:
+    """Send email through Resend API when an API key is configured."""
+    api_key = str(getattr(settings, "RESEND_API_KEY", "") or "").strip()
+    if not api_key:
+        return False
+
+    endpoint_base = str(
+        getattr(settings, "RESEND_API_BASE_URL", "https://api.resend.com")
+        or "https://api.resend.com"
+    ).rstrip("/")
+    endpoint = f"{endpoint_base}/emails"
+
+    from_email = str(
+        getattr(settings, "RESEND_FROM_EMAIL", "")
+        or getattr(settings, "DEFAULT_FROM_EMAIL", "")
+        or "Mero Ticket <onboarding@resend.dev>"
+    ).strip()
+
+    payload: dict[str, Any] = {
+        "from": from_email,
+        "to": [recipient_email],
+        "subject": subject,
+        "text": message,
+    }
+    if html_message:
+        payload["html"] = html_message
+
+    request_body = json.dumps(payload).encode("utf-8")
+    request_obj = urllib_request.Request(
+        endpoint,
+        data=request_body,
+        method="POST",
+    )
+    request_obj.add_header("Authorization", f"Bearer {api_key}")
+    request_obj.add_header("Content-Type", "application/json")
+
+    try:
+        with urllib_request.urlopen(request_obj, timeout=20) as response:
+            status_code = int(getattr(response, "status", response.getcode()))
+            if status_code in (200, 201, 202):
+                return True
+            body = response.read().decode("utf-8", errors="ignore")
+            logger.error(
+                "Resend email failed with status %s: %s",
+                status_code,
+                body,
+            )
+            return False
+    except urllib_error.HTTPError as exc:
+        body = ""
+        try:
+            body = exc.read().decode("utf-8", errors="ignore")
+        except Exception:
+            body = str(exc)
+        logger.error(
+            "Resend email failed with status %s: %s",
+            getattr(exc, "code", "unknown"),
+            body,
+        )
+        return False
+    except Exception:
+        logger.exception("Failed to send email via Resend to %s", recipient_email)
+        return False
+
+
+def _send_notification_email(
+    subject: str,
+    message: str,
+    recipient_email: Optional[str],
+    html_message: Optional[str] = None,
+) -> bool:
     """Send a notification email and return whether delivery was attempted successfully."""
     email = str(recipient_email or "").strip()
     if not email:
         return False
 
+    resend_key = str(getattr(settings, "RESEND_API_KEY", "") or "").strip()
+    if resend_key:
+        return _send_email_via_resend(
+            subject=subject,
+            message=message,
+            recipient_email=email,
+            html_message=html_message,
+        )
+
     from_email = getattr(settings, "DEFAULT_FROM_EMAIL", None) or "noreply@meroticket.local"
     try:
-        send_mail(
+        sent_count = send_mail(
             subject=subject,
             message=message,
             from_email=from_email,
             recipient_list=[email],
-            fail_silently=True,
+            html_message=html_message,
+            fail_silently=False,
         )
-        return True
+        return bool(sent_count)
     except Exception:
         logger.exception("Failed to send notification email to %s", email)
         return False
+
+
+def _build_password_reset_otp_html(otp: str) -> str:
+    """Render the HTML template for password reset OTP emails."""
+    safe_otp = escape(str(otp or "").strip())
+    return (
+        "<div style=\"font-family:Arial,sans-serif;max-width:560px;margin:0 auto;"
+        "border:1px solid #e5e7eb;border-radius:12px;overflow:hidden\">"
+        "<div style=\"background:#111827;color:#ffffff;padding:18px 20px;font-size:18px;"
+        "font-weight:700\">Mero Ticket - Password Reset</div>"
+        "<div style=\"padding:20px;color:#111827\">"
+        "<p style=\"margin:0 0 12px 0;font-size:14px\">Use the OTP below to reset your password:</p>"
+        f"<div style=\"font-size:32px;letter-spacing:8px;font-weight:800;color:#0f172a;"
+        f"margin:8px 0 16px 0\">{safe_otp}</div>"
+        "<p style=\"margin:0 0 8px 0;font-size:13px;color:#4b5563\">This OTP is valid for 10 minutes.</p>"
+        "<p style=\"margin:0;font-size:13px;color:#4b5563\">If you did not request this, please ignore this email.</p>"
+        "</div>"
+        "</div>"
+    )
+
+
+def _send_password_reset_otp_email(email: str, otp: str) -> bool:
+    """Send password-reset OTP to a user email address."""
+    subject = "Mero Ticket password reset OTP"
+    message = (
+        "Your Mero Ticket password reset OTP is: "
+        f"{otp}\n\n"
+        "This OTP is valid for 10 minutes.\n"
+        "If you did not request this, please ignore this email."
+    )
+    return _send_notification_email(
+        subject,
+        message,
+        email,
+        html_message=_build_password_reset_otp_html(otp),
+    )
+
+
+def _build_password_changed_html(context_label: str) -> str:
+    """Render the HTML template for password changed confirmation emails."""
+    safe_context = escape(str(context_label or "").strip() or "security update")
+    return (
+        "<div style=\"font-family:Arial,sans-serif;max-width:560px;margin:0 auto;"
+        "border:1px solid #e5e7eb;border-radius:12px;overflow:hidden\">"
+        "<div style=\"background:#0f172a;color:#ffffff;padding:18px 20px;font-size:18px;"
+        "font-weight:700\">Mero Ticket - Password Updated</div>"
+        "<div style=\"padding:20px;color:#111827\">"
+        "<p style=\"margin:0 0 12px 0;font-size:14px\">Your account password was changed successfully.</p>"
+        f"<p style=\"margin:0 0 12px 0;font-size:13px;color:#334155\">Context: {safe_context}</p>"
+        "<p style=\"margin:0 0 8px 0;font-size:13px;color:#4b5563\">"
+        "If this was not you, please reset your password immediately and contact support."
+        "</p>"
+        "</div>"
+        "</div>"
+    )
+
+
+def _send_password_changed_email(
+    recipient_email: Optional[str],
+    *,
+    context_label: str,
+) -> bool:
+    """Send a password changed confirmation email via configured provider (Resend/SMTP)."""
+    email = str(recipient_email or "").strip()
+    if not email:
+        return False
+
+    context_text = str(context_label or "").strip() or "security update"
+    subject = "Mero Ticket password changed"
+    message = (
+        "Your Mero Ticket account password was changed successfully.\n"
+        f"Context: {context_text}\n\n"
+        "If this was not you, please reset your password immediately and contact support."
+    )
+    return _send_notification_email(
+        subject,
+        message,
+        email,
+        html_message=_build_password_changed_html(context_text),
+    )
 
 
 def _create_notification(
@@ -230,7 +2437,11 @@ def _create_notification(
     )
 
     if send_email_too:
-        _send_notification_email(title, message, recipient_email)
+        _queue_notification_email(
+            subject=title,
+            message=message,
+            recipient_email=recipient_email,
+        )
 
     return notification
 
@@ -1172,31 +3383,18 @@ def _parse_coupon_expiry(value: Any) -> Optional[datetime]:
     text = str(value).strip()
     if not text:
         return None
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        parsed_date = parse_date(text)
-        if not parsed_date:
-            return None
-        parsed = datetime.combine(parsed_date, time_cls.max)
-    if getattr(settings, "USE_TZ", False) and timezone.is_naive(parsed):
-        parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
-    return parsed
+    parsed_datetime = parse_datetime_utc(text)
+    if parsed_datetime:
+        return parsed_datetime
+
+    parsed_date = parse_date(text)
+    if not parsed_date:
+        return None
+    return ensure_utc_datetime(datetime.combine(parsed_date, time_cls.max))
 
 
 def _parse_datetime_value(value: Any) -> Optional[datetime]:
-    if value in (None, ""):
-        return None
-    text = str(value).strip()
-    if not text:
-        return None
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if getattr(settings, "USE_TZ", False) and timezone.is_naive(parsed):
-        parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
-    return parsed
+    return parse_datetime_utc(value)
 
 
 def _resolve_vendor_id_from_discount_context(context: Optional[dict[str, Any]]) -> Optional[int]:
@@ -1223,7 +3421,7 @@ def _resolve_vendor_id_from_discount_context(context: Optional[dict[str, Any]]) 
 
 
 def _resolve_discount_context_weekday(context: Optional[dict[str, Any]]) -> str:
-    base_time = timezone.localtime(timezone.now())
+    base_time = ensure_utc_datetime(timezone.now())
     if isinstance(context, dict):
         show_date = parse_date(coalesce(context, "show_date", "showDate", "date"))
         if show_date:
@@ -2214,6 +4412,7 @@ def build_user_payload(user: User, request: Any) -> dict[str, Any]:
         "id": user.id,
         "email": user.email,
         "username": user.username,
+        "referral_code": user.referral_code,
         "first_name": user.first_name,
         "middle_name": user.middle_name,
         "last_name": user.last_name,
@@ -2391,12 +4590,44 @@ def register_user(request: Any) -> tuple[dict[str, Any], int]:
     """Register a new user account."""
     serializer = UserRegistrationSerializer(data=request.data)
     if serializer.is_valid():
+        payload = get_payload(request)
+        requested_referral_code = str(
+            coalesce(payload, "referral_code", "referralCode", default=serializer.validated_data.get("referral_code"))
+            or ""
+        ).strip().upper()
+        signup_ip = _extract_client_ip(request)
+        signup_user_agent = _extract_client_user_agent(request)
+        signup_device_fingerprint = _extract_device_fingerprint(request, payload)
+
         try:
-            user = serializer.save()
-            return {
+            with transaction.atomic():
+                user = serializer.save()
+                ensure_user_referral_code(user)
+                _update_signup_metadata(
+                    user,
+                    signup_ip=signup_ip,
+                    signup_user_agent=signup_user_agent,
+                    signup_device_fingerprint=signup_device_fingerprint,
+                )
+
+                referral_result = None
+                if requested_referral_code:
+                    referral_result = _link_referral_on_signup(
+                        user=user,
+                        referral_code=requested_referral_code,
+                        signup_ip=signup_ip,
+                        signup_user_agent=signup_user_agent,
+                        signup_device_fingerprint=signup_device_fingerprint,
+                    )
+
+            response_payload: dict[str, Any] = {
                 "message": "Registration successful",
                 "user": build_user_payload(user, request),
-            }, status.HTTP_201_CREATED
+            }
+            if referral_result:
+                response_payload["referral"] = referral_result
+
+            return response_payload, status.HTTP_201_CREATED
         except Exception as exc:
             logger.exception("Error saving user")
             return {
@@ -2473,6 +4704,7 @@ def login_user(request: Any) -> tuple[dict[str, Any], int]:
         if not user.check_password(password):
             return {"message": "Incorrect password"}, status.HTTP_401_UNAUTHORIZED
 
+        ensure_user_referral_code(user)
         access_token = issue_access_token("customer", user.id)
         try:
             _ensure_customer_login_offer_notification(user)
@@ -2814,6 +5046,12 @@ def build_booking_payload(booking: Booking) -> dict[str, Any]:
     )
     cancellation_quote["request_status"] = cancel_request_status
 
+    fraud_payload = build_fraud_risk_payload(
+        score=getattr(booking, "fraud_score", 0),
+        signals=getattr(booking, "fraud_signals", []),
+        review_threshold=_booking_fraud_review_threshold(),
+    )
+
     return {
         "id": booking.id,
         "userId": user.id,
@@ -2829,6 +5067,29 @@ def build_booking_payload(booking: Booking) -> dict[str, Any]:
         "paymentMethod": getattr(latest_payment, "payment_method", None),
         "paymentAmount": float(getattr(latest_payment, "amount", 0) or 0),
         "refundStatus": refund_label or "N/A",
+        "loyaltyPointsRedeemed": int(booking.loyalty_points_redeemed or 0),
+        "loyaltyDiscountAmount": float(_quantize_money(booking.loyalty_discount_amount or Decimal("0"))),
+        "subscriptionPlanId": booking.subscription_plan_id,
+        "subscriptionPlanName": getattr(booking.subscription_plan, "name", None),
+        "userSubscriptionId": booking.user_subscription_id,
+        "subscriptionDiscountAmount": float(
+            _quantize_money(booking.subscription_discount_amount or Decimal("0"))
+        ),
+        "subscriptionFreeTicketsUsed": int(booking.subscription_free_tickets_used or 0),
+        "referralWalletUsedAmount": float(_quantize_money(booking.referral_wallet_used_amount or Decimal("0"))),
+        "referralWalletRefundedAmount": float(_quantize_money(booking.referral_wallet_refunded_amount or Decimal("0"))),
+        "rewardRedemptionId": booking.reward_redemption_id,
+        "fraudScore": int(fraud_payload["score"]),
+        "fraudLevel": fraud_payload["level"],
+        "fraudSignals": fraud_payload["signals"],
+        "requiresManualReview": bool(fraud_payload["requires_manual_review"]),
+        "fraudRisk": {
+            "score": int(fraud_payload["score"]),
+            "level": fraud_payload["level"],
+            "signals": fraud_payload["signals"],
+            "requiresManualReview": bool(fraud_payload["requires_manual_review"]),
+        },
+        "sourceIp": getattr(booking, "source_ip", None),
         "cancellation": cancellation_quote,
         "createdAt": booking.booking_date.isoformat() if booking.booking_date else None,
     }
@@ -2849,6 +5110,412 @@ def list_bookings_payload(request: Any) -> list[dict[str, Any]]:
     if vendor:
         bookings = bookings.filter(showtime__screen__vendor_id=vendor.id)
     return [build_booking_payload(booking) for booking in bookings]
+
+
+def _serialize_referral_entry(referral: Referral) -> dict[str, Any]:
+    referred_user = referral.referred_user
+    referrer = referral.referrer
+
+    referred_name = " ".join(
+        [
+            part
+            for part in [
+                getattr(referred_user, "first_name", ""),
+                getattr(referred_user, "middle_name", ""),
+                getattr(referred_user, "last_name", ""),
+            ]
+            if part
+        ]
+    ).strip()
+    referrer_name = " ".join(
+        [
+            part
+            for part in [
+                getattr(referrer, "first_name", ""),
+                getattr(referrer, "middle_name", ""),
+                getattr(referrer, "last_name", ""),
+            ]
+            if part
+        ]
+    ).strip()
+
+    return {
+        "id": referral.id,
+        "status": referral.status,
+        "referral_code": referral.referral_code,
+        "referrer_id": referral.referrer_id,
+        "referrer_name": referrer_name or getattr(referrer, "email", None),
+        "referred_user_id": referral.referred_user_id,
+        "referred_user_name": referred_name or getattr(referred_user, "email", None),
+        "referred_user_email": getattr(referred_user, "email", None),
+        "reward_trigger_booking_id": referral.reward_trigger_booking_id,
+        "rejection_reason": referral.rejection_reason,
+        "reversal_reason": referral.reversal_reason,
+        "rewarded_at": referral.rewarded_at.isoformat() if referral.rewarded_at else None,
+        "reversed_at": referral.reversed_at.isoformat() if referral.reversed_at else None,
+        "expires_at": referral.expires_at.isoformat() if referral.expires_at else None,
+        "created_at": referral.created_at.isoformat() if referral.created_at else None,
+        "updated_at": referral.updated_at.isoformat() if referral.updated_at else None,
+        "metadata": referral.metadata or {},
+    }
+
+
+def _serialize_referral_wallet_transaction(tx: ReferralTransaction) -> dict[str, Any]:
+    return {
+        "id": tx.id,
+        "user_id": tx.user_id,
+        "transaction_type": tx.transaction_type,
+        "status": tx.status,
+        "reason": tx.reason,
+        "amount": float(_quantize_money(tx.amount or Decimal("0"))),
+        "remaining_amount": float(_quantize_money(tx.remaining_amount or Decimal("0"))),
+        "referral_id": tx.referral_id,
+        "booking_id": tx.booking_id,
+        "expires_at": tx.expires_at.isoformat() if tx.expires_at else None,
+        "processed_at": tx.processed_at.isoformat() if tx.processed_at else None,
+        "created_at": tx.created_at.isoformat() if tx.created_at else None,
+        "metadata": tx.metadata or {},
+    }
+
+
+def get_customer_referral_dashboard(request: Any) -> tuple[dict[str, Any], int]:
+    """Return referral code, wallet summary, referral stats, and recent activity."""
+    user = resolve_customer(request)
+    if not user:
+        return {"message": AUTH_REQUIRED_MESSAGE}, status.HTTP_401_UNAUTHORIZED
+
+    ensure_user_referral_code(user)
+    expire_referral_wallet_credits(user_id=user.id)
+
+    wallet = get_referral_wallet_snapshot(user, use_cache=False)
+    referrer_amount, referred_amount = _referral_reward_amounts()
+    cap_percent = _referral_wallet_cap_percent()
+
+    sent_queryset = Referral.objects.filter(referrer_id=user.id)
+    status_counts = {
+        Referral.STATUS_PENDING: 0,
+        Referral.STATUS_REWARDED: 0,
+        Referral.STATUS_REJECTED: 0,
+        Referral.STATUS_REVERSED: 0,
+        Referral.STATUS_EXPIRED: 0,
+    }
+    for row in sent_queryset.values("status").annotate(total=Count("id")):
+        key = str(row.get("status") or "").upper()
+        status_counts[key] = int(row.get("total") or 0)
+
+    recent_sent = list(
+        sent_queryset.select_related("referred_user", "referrer")
+        .order_by("-created_at", "-id")[:30]
+    )
+    received_referral = (
+        Referral.objects.select_related("referrer", "referred_user")
+        .filter(referred_user_id=user.id)
+        .order_by("-created_at", "-id")
+        .first()
+    )
+
+    recent_transactions = list(
+        ReferralTransaction.objects.filter(user_id=user.id)
+        .order_by("-created_at", "-id")[:40]
+    )
+
+    frontend_base = str(
+        getattr(settings, "FRONTEND_BASE_URL", "http://localhost:5173") or "http://localhost:5173"
+    ).rstrip("/")
+    referral_link = f"{frontend_base}/register?ref={user.referral_code}"
+
+    return {
+        "referral": {
+            "code": user.referral_code,
+            "link": referral_link,
+            "sent": [_serialize_referral_entry(item) for item in recent_sent],
+            "received": _serialize_referral_entry(received_referral) if received_referral else None,
+            "summary": {
+                "pending": status_counts.get(Referral.STATUS_PENDING, 0),
+                "rewarded": status_counts.get(Referral.STATUS_REWARDED, 0),
+                "rejected": status_counts.get(Referral.STATUS_REJECTED, 0),
+                "reversed": status_counts.get(Referral.STATUS_REVERSED, 0),
+                "expired": status_counts.get(Referral.STATUS_EXPIRED, 0),
+                "total": sent_queryset.count(),
+            },
+            "reward_policy": {
+                "referrer_reward_amount": float(referrer_amount),
+                "referred_reward_amount": float(referred_amount),
+                "expiry_days": _referral_reward_expiry_days(),
+            },
+        },
+        "wallet": {
+            **wallet,
+            "cap_percent": float(cap_percent),
+        },
+        "transactions": [_serialize_referral_wallet_transaction(item) for item in recent_transactions],
+    }, status.HTTP_200_OK
+
+
+def list_customer_referral_wallet_transactions(request: Any) -> tuple[dict[str, Any], int]:
+    """List referral wallet transactions for the authenticated customer."""
+    user = resolve_customer(request)
+    if not user:
+        return {"message": AUTH_REQUIRED_MESSAGE}, status.HTTP_401_UNAUTHORIZED
+
+    expire_referral_wallet_credits(user_id=user.id)
+
+    limit = _coerce_int(coalesce(request.query_params, "limit")) or 50
+    offset = _coerce_int(coalesce(request.query_params, "offset")) or 0
+    limit = max(1, min(200, int(limit)))
+    offset = max(0, int(offset))
+
+    queryset = ReferralTransaction.objects.filter(user_id=user.id).order_by("-created_at", "-id")
+    total = queryset.count()
+    rows = list(queryset[offset: offset + limit])
+
+    return {
+        "count": total,
+        "limit": limit,
+        "offset": offset,
+        "transactions": [_serialize_referral_wallet_transaction(item) for item in rows],
+    }, status.HTTP_200_OK
+
+
+def preview_customer_referral_wallet_checkout(request: Any) -> tuple[dict[str, Any], int]:
+    """Preview how much referral wallet credit can be applied to checkout."""
+    user = resolve_customer(request)
+    if not user:
+        return {"message": AUTH_REQUIRED_MESSAGE}, status.HTTP_401_UNAUTHORIZED
+
+    payload = get_payload(request)
+    subtotal = _parse_price_amount(
+        coalesce(payload, "subtotal", "ticket_total", "ticketTotal", "amount")
+    )
+    if subtotal is None or subtotal <= Decimal("0"):
+        return {"message": "A valid subtotal amount is required."}, status.HTTP_400_BAD_REQUEST
+
+    use_wallet = parse_bool(
+        coalesce(payload, "use_referral_wallet", "useReferralWallet", "enabled"),
+        default=True,
+    )
+    requested_amount = _parse_price_amount(
+        coalesce(
+            payload,
+            "requested_amount",
+            "requestedAmount",
+            "wallet_amount",
+            "walletAmount",
+            "amount_to_use",
+            "amountToUse",
+        )
+    )
+    if not use_wallet:
+        requested_amount = Decimal("0.00")
+
+    preview = preview_referral_wallet_usage_for_user(
+        user,
+        subtotal=subtotal,
+        requested_amount=requested_amount,
+    )
+    return {"preview": preview}, status.HTTP_200_OK
+
+
+def _serialize_referral_policy(policy: ReferralPolicy) -> dict[str, Any]:
+    return {
+        "referrer_reward_amount": float(_quantize_money(policy.referrer_reward_amount)),
+        "referred_reward_amount": float(_quantize_money(policy.referred_reward_amount)),
+        "reward_expiry_days": int(policy.reward_expiry_days or 0),
+        "wallet_cap_percent": float(_quantize_money(policy.wallet_cap_percent)),
+        "max_signups_per_ip_per_day": int(policy.max_signups_per_ip_per_day or 0),
+        "max_signups_per_device_per_day": int(policy.max_signups_per_device_per_day or 0),
+        "auto_approve_rewards": bool(policy.auto_approve_rewards),
+        "is_active": bool(policy.is_active),
+        "updated_at": policy.updated_at.isoformat() if policy.updated_at else None,
+    }
+
+
+def get_admin_referral_control_payload(request: Any) -> tuple[dict[str, Any], int]:
+    if not is_admin_request(request):
+        return {"message": ADMIN_REQUIRED_MESSAGE}, status.HTTP_403_FORBIDDEN
+
+    policy = _get_referral_policy()
+    status_filter = str(coalesce(request.query_params, "status") or "").strip().upper()
+    limit = _coerce_int(coalesce(request.query_params, "limit")) or 100
+    limit = max(1, min(300, int(limit)))
+
+    referrals_qs = Referral.objects.select_related("referrer", "referred_user", "reward_trigger_booking").order_by(
+        "-created_at", "-id"
+    )
+    if status_filter:
+        referrals_qs = referrals_qs.filter(status=status_filter)
+
+    referrals = list(referrals_qs[:limit])
+    status_counts = {
+        Referral.STATUS_PENDING: 0,
+        Referral.STATUS_REWARDED: 0,
+        Referral.STATUS_REJECTED: 0,
+        Referral.STATUS_REVERSED: 0,
+        Referral.STATUS_EXPIRED: 0,
+    }
+    for row in Referral.objects.values("status").annotate(total=Count("id")):
+        key = str(row.get("status") or "").upper()
+        status_counts[key] = int(row.get("total") or 0)
+
+    wallet_totals = ReferralWallet.objects.aggregate(
+        total_balance=Sum("balance"),
+        total_credited=Sum("total_credited"),
+        total_debited=Sum("total_debited"),
+        total_expired=Sum("total_expired"),
+    )
+
+    return {
+        "policy": _serialize_referral_policy(policy),
+        "summary": {
+            "pending": status_counts.get(Referral.STATUS_PENDING, 0),
+            "rewarded": status_counts.get(Referral.STATUS_REWARDED, 0),
+            "rejected": status_counts.get(Referral.STATUS_REJECTED, 0),
+            "reversed": status_counts.get(Referral.STATUS_REVERSED, 0),
+            "expired": status_counts.get(Referral.STATUS_EXPIRED, 0),
+            "total": int(sum(status_counts.values())),
+            "wallet_total_balance": float(_quantize_money(wallet_totals.get("total_balance") or Decimal("0"))),
+            "wallet_total_credited": float(_quantize_money(wallet_totals.get("total_credited") or Decimal("0"))),
+            "wallet_total_debited": float(_quantize_money(wallet_totals.get("total_debited") or Decimal("0"))),
+            "wallet_total_expired": float(_quantize_money(wallet_totals.get("total_expired") or Decimal("0"))),
+        },
+        "referrals": [_serialize_referral_entry(item) for item in referrals],
+    }, status.HTTP_200_OK
+
+
+def update_admin_referral_policy(request: Any) -> tuple[dict[str, Any], int]:
+    if not is_admin_request(request):
+        return {"message": ADMIN_REQUIRED_MESSAGE}, status.HTTP_403_FORBIDDEN
+
+    payload = get_payload(request)
+    policy = _get_referral_policy()
+
+    if "referrer_reward_amount" in payload:
+        value = _parse_price_amount(payload.get("referrer_reward_amount"))
+        if value is None or value < Decimal("0"):
+            return {"message": "referrer_reward_amount must be a non-negative number."}, status.HTTP_400_BAD_REQUEST
+        policy.referrer_reward_amount = value
+
+    if "referred_reward_amount" in payload:
+        value = _parse_price_amount(payload.get("referred_reward_amount"))
+        if value is None or value < Decimal("0"):
+            return {"message": "referred_reward_amount must be a non-negative number."}, status.HTTP_400_BAD_REQUEST
+        policy.referred_reward_amount = value
+
+    if "reward_expiry_days" in payload:
+        value = _coerce_int(payload.get("reward_expiry_days"))
+        if value is None or value < 1:
+            return {"message": "reward_expiry_days must be at least 1."}, status.HTTP_400_BAD_REQUEST
+        policy.reward_expiry_days = value
+
+    if "wallet_cap_percent" in payload:
+        value = _parse_price_amount(payload.get("wallet_cap_percent"))
+        if value is None or value < Decimal("0") or value > Decimal("100"):
+            return {"message": "wallet_cap_percent must be between 0 and 100."}, status.HTTP_400_BAD_REQUEST
+        policy.wallet_cap_percent = value
+
+    if "max_signups_per_ip_per_day" in payload:
+        value = _coerce_int(payload.get("max_signups_per_ip_per_day"))
+        if value is None or value < 1:
+            return {"message": "max_signups_per_ip_per_day must be at least 1."}, status.HTTP_400_BAD_REQUEST
+        policy.max_signups_per_ip_per_day = value
+
+    if "max_signups_per_device_per_day" in payload:
+        value = _coerce_int(payload.get("max_signups_per_device_per_day"))
+        if value is None or value < 1:
+            return {"message": "max_signups_per_device_per_day must be at least 1."}, status.HTTP_400_BAD_REQUEST
+        policy.max_signups_per_device_per_day = value
+
+    if "auto_approve_rewards" in payload:
+        policy.auto_approve_rewards = parse_bool(payload.get("auto_approve_rewards"), default=policy.auto_approve_rewards)
+
+    if "is_active" in payload:
+        policy.is_active = parse_bool(payload.get("is_active"), default=policy.is_active)
+
+    policy.save()
+    return {
+        "message": "Referral policy updated.",
+        "policy": _serialize_referral_policy(policy),
+    }, status.HTTP_200_OK
+
+
+def update_admin_referral_status(request: Any, referral: Referral) -> tuple[dict[str, Any], int]:
+    if not is_admin_request(request):
+        return {"message": ADMIN_REQUIRED_MESSAGE}, status.HTTP_403_FORBIDDEN
+
+    payload = get_payload(request)
+    action = str(coalesce(payload, "action", "status") or "").strip().upper()
+    if action not in {"APPROVE", "REJECT", "REVERSE", "PENDING"}:
+        return {
+            "message": "action must be one of APPROVE, REJECT, REVERSE, or PENDING.",
+        }, status.HTTP_400_BAD_REQUEST
+
+    reason = str(coalesce(payload, "reason", "rejection_reason", "reversal_reason") or "").strip()
+
+    with transaction.atomic():
+        locked_referral = Referral.objects.select_for_update().filter(id=referral.id).first()
+        if not locked_referral:
+            return {"message": "Referral not found."}, status.HTTP_404_NOT_FOUND
+
+        metadata = dict(locked_referral.metadata or {})
+        now_iso = timezone.now().isoformat()
+
+        if action == "APPROVE":
+            metadata["admin_approved"] = True
+            metadata["admin_approved_at"] = now_iso
+            metadata["admin_action"] = "APPROVE"
+            if reason:
+                metadata["admin_note"] = reason
+            locked_referral.metadata = metadata
+            locked_referral.save(update_fields=["metadata", "updated_at"])
+
+        elif action == "REJECT":
+            locked_referral.status = Referral.STATUS_REJECTED
+            locked_referral.rejection_reason = reason or "Rejected by admin."
+            metadata["admin_action"] = "REJECT"
+            metadata["admin_action_at"] = now_iso
+            locked_referral.metadata = metadata
+            locked_referral.save(
+                update_fields=["status", "rejection_reason", "metadata", "updated_at"]
+            )
+
+        elif action == "REVERSE":
+            if locked_referral.status == Referral.STATUS_REWARDED and locked_referral.reward_trigger_booking_id:
+                reverse_referral_effects_for_booking(
+                    locked_referral.reward_trigger_booking,
+                    reason=reason or "Referral reversed by admin.",
+                )
+                locked_referral.refresh_from_db()
+            locked_referral.status = Referral.STATUS_REVERSED
+            locked_referral.reversal_reason = reason or "Reversed by admin."
+            locked_referral.reversed_at = timezone.now()
+            metadata["admin_action"] = "REVERSE"
+            metadata["admin_action_at"] = now_iso
+            locked_referral.metadata = metadata
+            locked_referral.save(
+                update_fields=["status", "reversal_reason", "reversed_at", "metadata", "updated_at"]
+            )
+
+        else:
+            locked_referral.status = Referral.STATUS_PENDING
+            locked_referral.rejection_reason = None
+            locked_referral.reversal_reason = None
+            metadata["admin_action"] = "PENDING"
+            metadata["admin_action_at"] = now_iso
+            locked_referral.metadata = metadata
+            locked_referral.save(
+                update_fields=[
+                    "status",
+                    "rejection_reason",
+                    "reversal_reason",
+                    "metadata",
+                    "updated_at",
+                ]
+            )
+
+    return {
+        "message": "Referral updated.",
+        "referral": _serialize_referral_entry(locked_referral),
+    }, status.HTTP_200_OK
 
 
 def _get_booking_or_none(booking_id: int) -> Optional[Booking]:
@@ -3051,6 +5718,9 @@ def cleanup_expired_pending_bookings(
             if str(locked_booking.booking_status).strip().lower() != BOOKING_STATUS_PENDING.lower():
                 continue
 
+            seat_count = BookingSeat.objects.filter(booking=locked_booking).count()
+            transaction_uuid = _transaction_uuid_from_payment_method(payment.payment_method)
+
             _release_booking_seats(locked_booking)
             BookingSeat.objects.filter(booking=locked_booking).delete()
             locked_booking.booking_status = BOOKING_STATUS_CANCELLED
@@ -3059,6 +5729,20 @@ def cleanup_expired_pending_bookings(
                 booking=locked_booking,
                 payment_status__iexact="Pending",
             ).update(payment_status="Failed")
+
+            _record_booking_dropoff_event(
+                stage=BookingDropoffEvent.STAGE_PAYMENT,
+                reason=BookingDropoffEvent.REASON_PAYMENT_EXPIRED,
+                seat_count=seat_count,
+                booking=locked_booking,
+                payment=payment,
+                transaction_uuid=transaction_uuid,
+                metadata={
+                    "expired_by": "cleanup_expired_pending_bookings",
+                    "ttl_seconds": hold_seconds,
+                },
+                dedupe_by_transaction=True,
+            )
 
         processed_booking_ids.add(booking.id)
         expired += 1
@@ -3074,14 +5758,27 @@ def admin_cancel_booking(request: Any, booking: Booking) -> tuple[dict[str, Any]
             "booking": build_booking_payload(booking),
         }, status.HTTP_200_OK
 
+    payload = get_payload(request)
+    reason = str(coalesce(payload, "reason", "cancellation_reason") or "").strip() or "Cancelled by admin"
+
     with transaction.atomic():
         booking.booking_status = "Cancelled"
         booking.save(update_fields=["booking_status"])
         _release_booking_seats(booking)
+        loyalty.reverse_booking_points(booking, reason=reason)
+        subscription.reverse_booking_subscription_effects(booking, reason=reason)
+        reverse_referral_effects_for_booking(booking, reason=reason)
+
+    refreshed = _get_booking_or_none(booking.id) or booking
+    _notify_customer_booking_cancelled(
+        refreshed,
+        actor_label="admin",
+        reason=reason,
+    )
 
     return {
         "message": "Booking cancelled",
-        "booking": build_booking_payload(booking),
+        "booking": build_booking_payload(refreshed),
     }, status.HTTP_200_OK
 
 
@@ -3171,7 +5868,44 @@ def _notify_customer_cancel_request_submitted(
             "You will be notified once the vendor approves refund."
         ),
         metadata=metadata,
-        send_email_too=False,
+        send_email_too=True,
+    )
+
+
+def _notify_customer_booking_cancelled(
+    booking: Booking,
+    *,
+    actor_label: str,
+    reason: Optional[str],
+) -> None:
+    customer = booking.user
+    if not customer:
+        return
+
+    metadata = _build_booking_notification_metadata(booking, include_booking_detail=True)
+    metadata.update(
+        {
+            "processed_by": actor_label,
+            "processed_reason": reason,
+            "refund_processed": {
+                "refund_amount": 0.0,
+                "refund_percent": 0.0,
+                "cancellation_charge_amount": float(metadata.get("amount_basis") or 0),
+                "hours_until_show": None,
+                "is_refund_available": False,
+            },
+        }
+    )
+
+    _create_notification(
+        recipient_role=Notification.ROLE_CUSTOMER,
+        recipient_id=customer.id,
+        recipient_email=customer.email,
+        event_type=Notification.EVENT_BOOKING_CANCELLED,
+        title="Booking cancelled",
+        message=f"Your booking #{booking.id} has been cancelled.",
+        metadata=metadata,
+        send_email_too=True,
     )
 
 
@@ -3353,6 +6087,9 @@ def _apply_booking_cancellation_with_policy(
         locked_booking.booking_status = BOOKING_STATUS_CANCELLED
         locked_booking.save(update_fields=["booking_status"])
         _release_booking_seats(locked_booking)
+        loyalty.reverse_booking_points(locked_booking, reason=reason)
+        subscription.reverse_booking_subscription_effects(locked_booking, reason=reason)
+        reverse_referral_effects_for_booking(locked_booking, reason=reason)
 
         if close_pending_cancel_requests:
             _close_cancel_request_notifications(
@@ -3488,11 +6225,14 @@ def admin_refund_booking(request: Any, booking: Booking) -> tuple[dict[str, Any]
         amount = float(amount_value) if amount_value is not None else float(latest_payment.amount)
     except (TypeError, ValueError):
         amount = float(latest_payment.amount)
+    refund_amount = _quantize_money(Decimal(str(amount)))
+    basis_amount = _quantize_money(Decimal(str(latest_payment.amount or 0)))
+    actor_reason = reason or "Admin refund"
 
     with transaction.atomic():
         Refund.objects.create(
             payment=latest_payment,
-            refund_amount=amount,
+            refund_amount=refund_amount,
             refund_reason=reason,
             refund_status="Refunded",
         )
@@ -3501,12 +6241,29 @@ def admin_refund_booking(request: Any, booking: Booking) -> tuple[dict[str, Any]
         booking.booking_status = "Cancelled"
         booking.save(update_fields=["booking_status"])
         _release_booking_seats(booking)
-        if Decimal(str(amount)) > Decimal("0"):
-            _reverse_vendor_booking_earning(booking, reason=reason or "Admin refund")
+        loyalty.reverse_booking_points(booking, reason=actor_reason)
+        subscription.reverse_booking_subscription_effects(booking, reason=actor_reason)
+        reverse_referral_effects_for_booking(booking, reason=actor_reason)
+        if refund_amount > Decimal("0"):
+            _reverse_vendor_booking_earning(booking, reason=actor_reason)
+
+    refreshed = _get_booking_or_none(booking.id) or booking
+    _notify_customer_refund_result(
+        refreshed,
+        quote={
+            "amount_basis": float(basis_amount),
+            "refund_percent": 0,
+            "hours_until_show": None,
+            "policy": {"source": "admin_manual_refund"},
+        },
+        refund_amount=refund_amount,
+        actor_label="admin",
+        reason=actor_reason,
+    )
 
     return {
         "message": "Booking refunded",
-        "booking": build_booking_payload(booking),
+        "booking": build_booking_payload(refreshed),
     }, status.HTTP_200_OK
 
 
@@ -3569,6 +6326,7 @@ def create_admin_user(request: Any) -> tuple[dict[str, Any], int]:
     )
     user.set_password(password)
     user.save()
+    ensure_user_referral_code(user)
 
     return {
         "message": "User created",
@@ -3579,6 +6337,7 @@ def create_admin_user(request: Any) -> tuple[dict[str, Any], int]:
 def update_admin_user(user: User, request: Any) -> tuple[dict[str, Any], int]:
     """Update a user account from the admin panel."""
     payload = get_payload(request)
+    password_changed = False
 
     if "first_name" in payload:
         first_name = str(payload.get("first_name") or "").strip()
@@ -3639,8 +6398,19 @@ def update_admin_user(user: User, request: Any) -> tuple[dict[str, Any], int]:
         password = str(payload.get("password") or "")
         if password:
             user.set_password(password)
+            password_changed = True
 
     user.save()
+
+    if password_changed and not _send_password_changed_email(
+        user.email,
+        context_label="changed by an administrator",
+    ):
+        logger.warning(
+            "Password changed email could not be sent to %s after admin update",
+            user.email,
+        )
+
     return {
         "message": "User updated",
         "user": build_user_payload(user, request),
@@ -3754,15 +6524,12 @@ def create_vendor_staff_account(request: Any) -> tuple[dict[str, Any], int]:
     raw_phone = str(payload.get("phone_number") or "").strip()
     phone_number = normalize_phone_number(raw_phone)
     username = str(payload.get("username") or "").strip() or None
-    role = str(payload.get("role") or VendorStaff.ROLE_CASHIER).strip().upper()
+    role = VendorStaff.ROLE_CASHIER
 
     if not full_name or not email or not password:
         return {
             "message": "Full name, email, and password are required."
         }, status.HTTP_400_BAD_REQUEST
-
-    if role not in {VendorStaff.ROLE_CASHIER, VendorStaff.ROLE_MANAGER}:
-        return {"message": "Invalid staff role."}, status.HTTP_400_BAD_REQUEST
 
     if raw_phone and not phone_number:
         return {"message": INVALID_PHONE_MESSAGE}, status.HTTP_400_BAD_REQUEST
@@ -3835,12 +6602,6 @@ def update_vendor_staff_account(
         if username and _username_taken_across_accounts(username, current_staff_id=staff.id):
             return {"message": "Username already exists."}, status.HTTP_400_BAD_REQUEST
         staff.username = username
-
-    if "role" in payload:
-        role = str(payload.get("role") or "").strip().upper()
-        if role not in {VendorStaff.ROLE_CASHIER, VendorStaff.ROLE_MANAGER}:
-            return {"message": "Invalid staff role."}, status.HTTP_400_BAD_REQUEST
-        staff.role = role
 
     if "is_active" in payload:
         staff.is_active = parse_bool(payload.get("is_active"), default=staff.is_active)
@@ -3981,6 +6742,8 @@ def _coerce_list(value: Any) -> Optional[list[Any]]:
         return None
     if isinstance(value, list):
         return value
+    if isinstance(value, tuple):
+        return list(value)
     if isinstance(value, str):
         try:
             parsed = json.loads(value)
@@ -3991,18 +6754,32 @@ def _coerce_list(value: Any) -> Optional[list[Any]]:
     return None
 
 
+def _normalize_credit_role_type(
+    value: Any,
+    *,
+    default_role_type: Optional[str] = None,
+) -> Optional[str]:
+    """Normalize incoming role values into MovieCredit role constants."""
+    raw_value = str(value or default_role_type or "").strip().upper()
+    if raw_value in {MovieCredit.ROLE_CAST, "ACTOR", "ACTRESS"}:
+        return MovieCredit.ROLE_CAST
+    if raw_value in {MovieCredit.ROLE_CREW, "STAFF"}:
+        return MovieCredit.ROLE_CREW
+    return None
+
+
 def _normalize_credit_item(
     item: Any, default_role_type: Optional[str] = None
 ) -> Optional[dict[str, Any]]:
     """Normalize a credit payload into the canonical schema."""
     if not isinstance(item, dict):
         return None
-    role_type = (
+    role_type = _normalize_credit_role_type(
         item.get("role_type")
         or item.get("roleType")
         or item.get("credit_type")
         or item.get("creditType")
-        or default_role_type
+        or default_role_type,
     )
     if not role_type:
         return None
@@ -4032,6 +6809,19 @@ def _normalize_credit_item(
         name_value = item.get("full_name") or item.get("fullName") or item.get("name")
         if name_value:
             person_payload = {"full_name": name_value}
+    elif isinstance(person_payload, dict):
+        person_payload = {
+            **person_payload,
+            "full_name": person_payload.get("full_name")
+            or person_payload.get("fullName")
+            or person_payload.get("name"),
+            "photo_url": person_payload.get("photo_url")
+            or person_payload.get("photoUrl"),
+            "date_of_birth": person_payload.get("date_of_birth")
+            or person_payload.get("dateOfBirth"),
+            "photo_upload_key": person_payload.get("photo_upload_key")
+            or person_payload.get("photoUploadKey"),
+        }
     return {
         "id": item.get("id"),
         "role_type": role_type,
@@ -4046,7 +6836,23 @@ def _normalize_credit_item(
 def _extract_credits_payload(payload: dict[str, Any]) -> Optional[list[dict[str, Any]]]:
     """Extract normalized credits payload from request data."""
     if "credits" in payload:
-        return _coerce_list(payload.get("credits")) or []
+        normalized = [
+            item
+            for item in (
+                _normalize_credit_item(entry)
+                for entry in (_coerce_list(payload.get("credits")) or [])
+            )
+            if item
+        ]
+        if normalized:
+            return normalized
+
+        # Fallback to cast/crew keys when credits key exists but cannot be parsed.
+        cast_fallback = _coerce_list(payload.get("cast"))
+        crew_fallback = _coerce_list(payload.get("crew"))
+        if cast_fallback is None and crew_fallback is None:
+            return []
+
     cast = _coerce_list(payload.get("cast"))
     crew = _coerce_list(payload.get("crew"))
     if cast is None and crew is None:
@@ -4262,6 +7068,159 @@ def delete_movie(request: Any, movie: Movie) -> tuple[dict[str, Any], int]:
     return {"message": "Movie deleted"}, status.HTTP_200_OK
 
 
+def _parse_duration_text_to_minutes(value: Any) -> Optional[int]:
+    """Parse common movie duration text formats into minutes."""
+    text = str(value or "").strip().lower()
+    if not text:
+        return None
+
+    if text.isdigit():
+        parsed = int(text)
+        return parsed if parsed > 0 else None
+
+    hh_mm_match = re.fullmatch(r"(\d{1,2}):(\d{1,2})", text)
+    if hh_mm_match:
+        hours = int(hh_mm_match.group(1))
+        minutes = int(hh_mm_match.group(2))
+        total = (hours * 60) + minutes
+        return total if total > 0 else None
+
+    hour_match = re.search(r"(\d+)\s*h(?:ours?)?", text)
+    minute_match = re.search(r"(\d+)\s*m(?:in(?:ute)?s?)?", text)
+    if hour_match or minute_match:
+        hours = int(hour_match.group(1)) if hour_match else 0
+        minutes = int(minute_match.group(1)) if minute_match else 0
+        total = (hours * 60) + minutes
+        return total if total > 0 else None
+
+    number_match = re.search(r"(\d+)", text)
+    if number_match:
+        parsed = int(number_match.group(1))
+        return parsed if parsed > 0 else None
+    return None
+
+
+def _resolve_movie_duration_minutes(movie: Movie) -> Optional[int]:
+    """Return effective movie duration in minutes from canonical or text fields."""
+    raw_minutes = getattr(movie, "duration_minutes", None)
+    try:
+        parsed_minutes = int(raw_minutes) if raw_minutes is not None else None
+    except (TypeError, ValueError):
+        parsed_minutes = None
+    if parsed_minutes and parsed_minutes > 0:
+        return parsed_minutes
+    return _parse_duration_text_to_minutes(getattr(movie, "duration", None))
+
+
+def _resolve_show_buffer_minutes(payload: dict[str, Any]) -> int:
+    """Resolve show buffer time in minutes from payload or settings."""
+    configured = coalesce(
+        payload,
+        "buffer_minutes",
+        "bufferMinutes",
+        default=getattr(settings, "SHOW_BUFFER_MINUTES", SHOW_BUFFER_MINUTES_DEFAULT),
+    )
+    try:
+        parsed = int(configured)
+    except (TypeError, ValueError):
+        parsed = SHOW_BUFFER_MINUTES_DEFAULT
+    parsed = max(1, min(parsed, SHOW_BUFFER_MINUTES_MAX))
+    return parsed
+
+
+def _resolve_show_min_lead_hours() -> int:
+    """Resolve minimum lead hours required before creating a show."""
+    configured = getattr(settings, "SHOW_MIN_LEAD_HOURS", SHOW_MIN_LEAD_HOURS_DEFAULT)
+    try:
+        parsed = int(configured)
+    except (TypeError, ValueError):
+        parsed = SHOW_MIN_LEAD_HOURS_DEFAULT
+    return max(parsed, 0)
+
+
+def _resolve_show_operating_hours() -> tuple[time_cls, time_cls]:
+    """Resolve daily operating window for show scheduling."""
+    open_raw = getattr(
+        settings,
+        "SHOW_OPERATING_OPEN_TIME",
+        SHOW_OPERATING_OPEN_TIME_DEFAULT.strftime("%H:%M"),
+    )
+    close_raw = getattr(
+        settings,
+        "SHOW_OPERATING_CLOSE_TIME",
+        SHOW_OPERATING_CLOSE_TIME_DEFAULT.strftime("%H:%M"),
+    )
+    open_time = _parse_flexible_time(open_raw) or SHOW_OPERATING_OPEN_TIME_DEFAULT
+    close_time = _parse_flexible_time(close_raw) or SHOW_OPERATING_CLOSE_TIME_DEFAULT
+    return open_time, close_time
+
+
+def _show_operating_window_for_date(
+    show_date: date_cls,
+) -> tuple[datetime, datetime, time_cls, time_cls]:
+    """Build opening and closing datetimes for one show date."""
+    open_time, close_time = _resolve_show_operating_hours()
+    open_at = _combine_show_datetime(show_date, open_time)
+    close_at = _combine_show_datetime(show_date, close_time)
+    if close_at <= open_at:
+        close_at += timedelta(days=1)
+    return open_at, close_at, open_time, close_time
+
+
+def _existing_show_time_window(
+    show: Show,
+    *,
+    buffer_minutes: int,
+) -> tuple[datetime, datetime, datetime]:
+    """Return start/end/blocked-end datetimes for an existing show."""
+    start_at = _combine_show_datetime(show.show_date, show.start_time)
+    if show.end_time:
+        end_at = _combine_show_datetime(show.show_date, show.end_time)
+        if end_at <= start_at:
+            end_at += timedelta(days=1)
+    else:
+        duration_minutes = _resolve_movie_duration_minutes(show.movie)
+        if duration_minutes:
+            end_at = start_at + timedelta(minutes=duration_minutes)
+        else:
+            end_at = start_at
+    blocked_end = end_at + timedelta(minutes=buffer_minutes)
+    return start_at, end_at, blocked_end
+
+
+def _find_overlapping_show(
+    *,
+    vendor: Vendor,
+    hall: str,
+    show_date: date_cls,
+    proposed_start_at: datetime,
+    proposed_end_at: datetime,
+    buffer_minutes: int,
+) -> tuple[Optional[Show], Optional[datetime], Optional[datetime]]:
+    """Find an existing show that conflicts with proposed show + buffer window."""
+    proposed_blocked_end = proposed_end_at + timedelta(minutes=buffer_minutes)
+    existing_shows = (
+        Show.objects.filter(
+            vendor=vendor,
+            hall__iexact=hall,
+            show_date=show_date,
+        )
+        .select_related("movie")
+        .order_by("start_time", "id")
+    )
+    for existing_show in existing_shows:
+        existing_start_at, existing_end_at, existing_blocked_end = _existing_show_time_window(
+            existing_show,
+            buffer_minutes=buffer_minutes,
+        )
+        if (
+            proposed_start_at < existing_blocked_end
+            and existing_start_at < proposed_blocked_end
+        ):
+            return existing_show, existing_end_at, existing_blocked_end
+    return None, None, None
+
+
 def _parse_show_dates(payload: dict[str, Any], base_date: Optional[date_cls]) -> list[date_cls]:
     """Build the list of dates for show creation from explicit dates or repeat days."""
     raw_dates = coalesce(payload, "dates", "show_dates", "showDates")
@@ -4308,6 +7267,44 @@ def _parse_show_dates(payload: dict[str, Any], base_date: Optional[date_cls]) ->
     return [base_date + timedelta(days=offset) for offset in range(repeat_days)]
 
 
+def _initialize_showtime_seat_availability(show: Show, screen: Screen) -> None:
+    """Create per-show availability rows for all seats in a hall."""
+    if not show or not screen:
+        return
+
+    _, showtime = _get_or_create_showtime_for_context(
+        show,
+        hall_override=screen.screen_number,
+    )
+    seat_ids = list(
+        Seat.objects.filter(screen_id=screen.id).values_list("id", flat=True)
+    )
+    if not seat_ids:
+        return
+
+    existing_seat_ids = set(
+        SeatAvailability.objects.filter(
+            showtime=showtime,
+            seat_id__in=seat_ids,
+        ).values_list("seat_id", flat=True)
+    )
+    missing_ids = [seat_id for seat_id in seat_ids if seat_id not in existing_seat_ids]
+    if not missing_ids:
+        return
+
+    SeatAvailability.objects.bulk_create(
+        [
+            SeatAvailability(
+                seat_id=seat_id,
+                showtime=showtime,
+                seat_status=SEAT_STATUS_AVAILABLE,
+            )
+            for seat_id in missing_ids
+        ],
+        ignore_conflicts=True,
+    )
+
+
 def create_show(request: Any) -> tuple[dict[str, Any], int]:
     """Create a show entry (admin/vendor only)."""
     if not is_authenticated(request):
@@ -4348,12 +7345,26 @@ def create_show(request: Any) -> tuple[dict[str, Any], int]:
         movie.save(update_fields=["is_active"])
 
     base_show_date = parse_date(coalesce(payload, "date", "show_date", "showDate"))
-    start_time = parse_time(coalesce(payload, "start", "start_time", "startTime"))
-    end_time = parse_time(coalesce(payload, "end", "end_time", "endTime"))
+    start_time = _parse_flexible_time(coalesce(payload, "start", "start_time", "startTime"))
     hall = " ".join(str(coalesce(payload, "hall") or "").split())
 
     if not hall:
         return {"message": "hall is required"}, status.HTTP_400_BAD_REQUEST
+
+    hall_screen = Screen.objects.filter(vendor_id=vendor.id, screen_number__iexact=hall).first()
+    if not hall_screen:
+        return {
+            "message": "Selected hall does not exist. Please add a hall first.",
+        }, status.HTTP_400_BAD_REQUEST
+
+    hall = str(hall_screen.screen_number or "").strip()
+    if not hall:
+        return {"message": "hall is required"}, status.HTTP_400_BAD_REQUEST
+
+    if not Seat.objects.filter(screen_id=hall_screen.id).exists():
+        return {
+            "message": "Seat layout is not configured for the selected hall. Configure seats before adding shows.",
+        }, status.HTTP_400_BAD_REQUEST
 
     if not start_time:
         return {"message": "show date and start time are required"}, status.HTTP_400_BAD_REQUEST
@@ -4362,13 +7373,70 @@ def create_show(request: Any) -> tuple[dict[str, Any], int]:
     if not show_dates:
         return {"message": "show date and start time are required"}, status.HTTP_400_BAD_REQUEST
 
-    if end_time and end_time <= start_time:
-        return {"message": "end time must be after start time"}, status.HTTP_400_BAD_REQUEST
+    movie_duration_minutes = _resolve_movie_duration_minutes(movie)
+    if not movie_duration_minutes:
+        return {
+            "message": "Movie duration is required before scheduling shows.",
+        }, status.HTTP_400_BAD_REQUEST
+
+    buffer_minutes = _resolve_show_buffer_minutes(payload)
+    min_lead_hours = _resolve_show_min_lead_hours()
+    now = ensure_utc_datetime(timezone.now())
+    minimum_start_at = now + timedelta(hours=min_lead_hours)
 
     created_payloads: list[dict[str, Any]] = []
     conflicts: list[dict[str, Any]] = []
 
     for show_date in show_dates:
+        start_at = _combine_show_datetime(show_date, start_time)
+        end_at = start_at + timedelta(minutes=movie_duration_minutes)
+
+        if min_lead_hours and start_at < minimum_start_at:
+            conflicts.append(
+                {
+                    "date": show_date.isoformat(),
+                    "time": start_time.strftime("%H:%M"),
+                    "hall": hall,
+                    "reason": "too_soon",
+                    "message": (
+                        f"Shows must be added at least {min_lead_hours} hour(s) in advance. "
+                        f"Minimum allowed start is {minimum_start_at.strftime('%Y-%m-%d %H:%M')}."
+                    ),
+                }
+            )
+            continue
+
+        # Show.end_time stores only time, so we do not allow windows that spill into next date.
+        if end_at.date() != start_at.date():
+            conflicts.append(
+                {
+                    "date": show_date.isoformat(),
+                    "time": start_time.strftime("%H:%M"),
+                    "hall": hall,
+                    "reason": "outside_operating_hours",
+                    "message": "Show must finish within the same day before midnight.",
+                }
+            )
+            continue
+
+        operating_open_at, operating_close_at, open_time, close_time = _show_operating_window_for_date(
+            show_date
+        )
+        if start_at < operating_open_at or end_at > operating_close_at:
+            conflicts.append(
+                {
+                    "date": show_date.isoformat(),
+                    "time": start_time.strftime("%H:%M"),
+                    "hall": hall,
+                    "reason": "outside_operating_hours",
+                    "message": (
+                        "Show timing is outside operating hours "
+                        f"({open_time.strftime('%H:%M')} - {close_time.strftime('%H:%M')})."
+                    ),
+                }
+            )
+            continue
+
         conflict_qs = Show.objects.filter(
             vendor=vendor,
             hall__iexact=hall,
@@ -4382,6 +7450,40 @@ def create_show(request: Any) -> tuple[dict[str, Any], int]:
                     "time": start_time.strftime("%H:%M"),
                     "hall": hall,
                     "reason": "duplicate",
+                    "message": "A show already exists for this hall and start time.",
+                }
+            )
+            continue
+
+        overlapping_show, overlapping_end_at, overlapping_blocked_until = _find_overlapping_show(
+            vendor=vendor,
+            hall=hall,
+            show_date=show_date,
+            proposed_start_at=start_at,
+            proposed_end_at=end_at,
+            buffer_minutes=buffer_minutes,
+        )
+        if overlapping_show:
+            end_label = (
+                overlapping_end_at.strftime("%H:%M") if overlapping_end_at else "-"
+            )
+            blocked_until_label = (
+                overlapping_blocked_until.strftime("%H:%M")
+                if overlapping_blocked_until
+                else "-"
+            )
+            conflicts.append(
+                {
+                    "date": show_date.isoformat(),
+                    "time": start_time.strftime("%H:%M"),
+                    "hall": hall,
+                    "reason": "overlap",
+                    "conflict_show_id": overlapping_show.id,
+                    "message": (
+                        "Show overlaps with existing schedule "
+                        f"({overlapping_show.start_time.strftime('%H:%M')} - {end_label}). "
+                        f"Next slot starts from {blocked_until_label} after {buffer_minutes} min buffer."
+                    ),
                 }
             )
             continue
@@ -4391,7 +7493,12 @@ def create_show(request: Any) -> tuple[dict[str, Any], int]:
             movie=movie,
             hall=hall,
             slot=coalesce(payload, "slot"),
-            screen_type=coalesce(payload, "screenType", "screen_type"),
+            screen_type=coalesce(
+                payload,
+                "screenType",
+                "screen_type",
+                default=hall_screen.screen_type,
+            ),
             price=coalesce(payload, "price"),
             status=_normalize_show_status(coalesce(payload, "status")),
             listing_status=coalesce(
@@ -4399,10 +7506,12 @@ def create_show(request: Any) -> tuple[dict[str, Any], int]:
             ),
             show_date=show_date,
             start_time=start_time,
-            end_time=end_time,
+            end_time=end_at.time(),
         )
         try:
-            show.save()
+            with transaction.atomic():
+                show.save()
+                _initialize_showtime_seat_availability(show, hall_screen)
         except IntegrityError:
             conflicts.append(
                 {
@@ -4410,35 +7519,32 @@ def create_show(request: Any) -> tuple[dict[str, Any], int]:
                     "time": start_time.strftime("%H:%M"),
                     "hall": hall,
                     "reason": "duplicate",
+                    "message": "A show already exists for this hall and start time.",
                 }
             )
             continue
 
-        screen, _ = Screen.objects.get_or_create(
-            vendor_id=vendor.id,
-            screen_number=hall,
-            defaults={
-                "screen_type": show.screen_type,
-                "status": "Active",
-            },
-        )
-        show_screen_type = str(show.screen_type or "").strip()
-        existing_screen_type = str(screen.screen_type or "").strip()
-        if show_screen_type and show_screen_type != existing_screen_type:
-            screen.screen_type = show_screen_type
-            screen.save(update_fields=["screen_type"])
-
         created_payloads.append(build_show_payload(show))
 
     if not created_payloads:
-        date_label = show_dates[0].isoformat() if show_dates else "selected date"
+        first_message = (
+            str(conflicts[0].get("message")).strip()
+            if conflicts and conflicts[0].get("message")
+            else "Unable to schedule show for the selected time."
+        )
+        conflict_reasons = {str(item.get("reason") or "").strip() for item in conflicts}
+        response_status = (
+            status.HTTP_409_CONFLICT
+            if conflict_reasons and conflict_reasons.issubset({"duplicate", "overlap"})
+            else status.HTTP_400_BAD_REQUEST
+        )
         return {
-            "message": f"Hall {hall} already has a show at {start_time.strftime('%H:%M')} on {date_label}. Choose another hall or time.",
+            "message": first_message,
             "created_count": 0,
             "requested_count": len(show_dates),
             "conflicts": conflicts,
             "shows": [],
-        }, status.HTTP_409_CONFLICT
+        }, response_status
 
     response_payload: dict[str, Any] = {
         "shows": created_payloads,
@@ -4451,14 +7557,14 @@ def create_show(request: Any) -> tuple[dict[str, Any], int]:
     if conflicts:
         response_payload["message"] = (
             f"Created {len(created_payloads)} show(s). "
-            f"Skipped {len(conflicts)} duplicate timing(s) for the same hall."
+            f"Skipped {len(conflicts)} conflicting/invalid schedule(s)."
         )
     elif len(created_payloads) > 1:
         response_payload["message"] = f"Created {len(created_payloads)} shows successfully."
 
     first_created = created_payloads[0]
-    show_date_text = first_created.get("show_date") or "selected date"
-    show_time_text = first_created.get("start_time") or "selected time"
+    show_date_text = first_created.get("date") or "selected date"
+    show_time_text = first_created.get("start") or "selected time"
     notification_title = "Show schedule updated"
     notification_message = (
         f"{movie.title} was scheduled on {show_date_text} at {show_time_text} in hall {hall}."
@@ -4840,12 +7946,43 @@ def request_password_otp(email: Optional[str]) -> tuple[dict[str, Any], int]:
         if not user:
             return {"message": "User not found"}, status.HTTP_404_NOT_FOUND
 
+        email_backend = str(getattr(settings, "EMAIL_BACKEND", "") or "").strip().lower()
+        smtp_backend = "django.core.mail.backends.smtp.emailbackend"
+        if email_backend == smtp_backend:
+            smtp_user = str(getattr(settings, "EMAIL_HOST_USER", "") or "").strip()
+            smtp_password = str(getattr(settings, "EMAIL_HOST_PASSWORD", "") or "").strip()
+            if not smtp_user or not smtp_password:
+                return {
+                    "message": (
+                        "Email service is not configured. Set EMAIL_HOST_USER and "
+                        "EMAIL_HOST_PASSWORD in .env.local, then restart backend."
+                    )
+                }, status.HTTP_503_SERVICE_UNAVAILABLE
+
         otp = f"{random.randint(100000, 999999)}"
-        OTPVerification.objects.create(email=email, otp=otp)
+        otp_record = OTPVerification.objects.create(email=email, otp=otp)
+
+        email_backend = str(getattr(settings, "EMAIL_BACKEND", "") or "").strip()
+        is_console_backend = email_backend == "django.core.mail.backends.console.EmailBackend"
+
+        email_sent = _send_password_reset_otp_email(email, otp)
+        if not email_sent:
+            otp_record.delete()
+            return {
+                "message": "Failed to send OTP email. Please try again later."
+            }, status.HTTP_500_INTERNAL_SERVER_ERROR
 
         logger.info("Generated OTP for %s: %s", email, otp)
         if getattr(settings, "DEBUG", False):
             print(f"DEBUG OTP for {email}: {otp}")
+
+        if is_console_backend:
+            return {
+                "message": (
+                    "OTP generated in backend console. Configure SMTP or Resend "
+                    "to send OTP to user email."
+                )
+            }, status.HTTP_200_OK
 
         return {"message": "OTP sent to your email"}, status.HTTP_200_OK
     except Exception as exc:
@@ -4927,6 +8064,15 @@ def reset_password_with_otp(
 
         record.is_verified = False
         record.save()
+
+        if not _send_password_changed_email(
+            user.email,
+            context_label="password reset with OTP",
+        ):
+            logger.warning(
+                "Password reset confirmation email could not be sent to %s",
+                user.email,
+            )
 
         return {"message": "Password reset successful"}, status.HTTP_200_OK
     except Exception as exc:
@@ -5189,11 +8335,8 @@ def _seat_sort_key(label: str) -> tuple[str, int, str]:
 
 
 def _combine_show_datetime(show_date: date_cls, show_time: time_cls) -> datetime:
-    """Combine date and time into a timezone-aware datetime when needed."""
-    combined = datetime.combine(show_date, show_time)
-    if getattr(settings, "USE_TZ", False) and timezone.is_naive(combined):
-        return timezone.make_aware(combined, timezone.get_current_timezone())
-    return combined
+    """Combine date/time and normalize into UTC for backend processing."""
+    return combine_date_time_utc(show_date, show_time)
 
 
 def _resolve_booking_context(payload: dict[str, Any]) -> dict[str, Any]:
@@ -5332,7 +8475,8 @@ def _find_showtime_for_context(show: Show, hall_override: Optional[str] = None) 
     """Find an existing showtime row that maps to the selected show context."""
     screen_number = _resolve_screen_number(show, hall_override)
     screen = Screen.objects.filter(
-        vendor_id=show.vendor_id, screen_number=screen_number
+        vendor_id=show.vendor_id,
+        screen_number__iexact=screen_number,
     ).first()
     if not screen:
         return None
@@ -5349,14 +8493,17 @@ def _get_or_create_showtime_for_context(
 ) -> tuple[Screen, Showtime]:
     """Get or create the Screen/Showtime records for a selected show."""
     screen_number = _resolve_screen_number(show, hall_override)
-    screen, _ = Screen.objects.get_or_create(
+    screen = Screen.objects.filter(
         vendor_id=show.vendor_id,
-        screen_number=screen_number,
-        defaults={
-            "screen_type": show.screen_type,
-            "status": "Active",
-        },
-    )
+        screen_number__iexact=screen_number,
+    ).first()
+    if not screen:
+        screen = Screen.objects.create(
+            vendor_id=show.vendor_id,
+            screen_number=screen_number,
+            screen_type=show.screen_type,
+            status="Active",
+        )
     if show.screen_type and not screen.screen_type:
         screen.screen_type = show.screen_type
         screen.save(update_fields=["screen_type"])
@@ -5474,6 +8621,40 @@ def _collect_reserved_labels_for_showtime(
     return sorted(labels, key=_seat_sort_key)
 
 
+def _collect_reserved_lock_deadlines_for_showtime(
+    showtime: Showtime, lock: bool = False
+) -> dict[str, str]:
+    """Collect active seat lock deadlines keyed by seat label."""
+    now = timezone.now()
+    queryset = SeatAvailability.objects.filter(
+        showtime=showtime,
+        locked_until__gt=now,
+    ).select_related("seat")
+    if lock:
+        queryset = queryset.select_for_update()
+
+    lock_deadlines: dict[str, str] = {}
+    for availability in queryset:
+        status_value = str(availability.seat_status or "").strip().lower()
+        if status_value in BOOKED_STATUSES:
+            continue
+        if status_value == SEAT_STATUS_UNAVAILABLE.lower():
+            continue
+
+        seat_label = _join_seat_label(
+            availability.seat.row_label,
+            availability.seat.seat_number,
+        )
+        if not seat_label or not availability.locked_until:
+            continue
+        lock_deadlines[seat_label] = availability.locked_until.isoformat()
+
+    return {
+        key: lock_deadlines[key]
+        for key in sorted(lock_deadlines.keys(), key=_seat_sort_key)
+    }
+
+
 def _next_guest_phone_number() -> str:
     """Generate a unique phone number for fallback guest users."""
     for suffix in range(1000):
@@ -5511,11 +8692,53 @@ def _resolve_booking_user(context: dict[str, Any]) -> User:
     return guest_user
 
 
-def _create_booking_from_order(order: dict[str, Any]) -> tuple[Optional[dict[str, Any]], Optional[dict[str, Any]], int]:
+def _run_post_booking_rewards(booking_id: int, event_name: str = "") -> None:
+    """Run post-booking loyalty and referral rewards after DB commit."""
+    booking = (
+        Booking.objects.select_related("user", "showtime__screen__vendor")
+        .filter(id=booking_id)
+        .first()
+    )
+    if not booking:
+        return
+
+    try:
+        loyalty.award_booking_points(booking, event_name=event_name)
+    except Exception:
+        logger.exception("Failed to award loyalty points for booking %s", booking_id)
+
+    try:
+        process_referral_reward_for_booking(booking)
+    except Exception:
+        logger.exception("Failed to apply referral wallet rewards for booking %s", booking_id)
+
+
+def _create_booking_from_order(
+    order: dict[str, Any],
+    request: Any | None = None,
+) -> tuple[Optional[dict[str, Any]], Optional[dict[str, Any]], int]:
     """Create booking + sold seat records from order context."""
     cleanup_expired_pending_bookings()
 
     context = _resolve_booking_context(order)
+    source_ip = _normalize_booking_source_ip(
+        _extract_client_ip(request) if request else None
+    )
+    if not source_ip:
+        source_ip = _normalize_booking_source_ip(
+            coalesce(order, "source_ip", "sourceIp", "client_ip", "clientIp", "ip")
+            or coalesce(context, "source_ip", "sourceIp", "client_ip", "clientIp", "ip")
+        )
+
+    user_agent = _normalize_booking_user_agent(
+        _extract_client_user_agent(request) if request else None
+    )
+    if not user_agent:
+        user_agent = _normalize_booking_user_agent(
+            coalesce(order, "user_agent", "userAgent", "ua")
+            or coalesce(context, "user_agent", "userAgent", "ua")
+        )
+
     selected_seats = context.get("selected_seats") or []
     if not selected_seats:
         return None, None, status.HTTP_200_OK
@@ -5567,9 +8790,144 @@ def _create_booking_from_order(order: dict[str, Any]) -> tuple[Optional[dict[str
         or coalesce(context, "event", "event_name", "festival", "festival_name")
         or ""
     ).strip()
+    loyalty_payload = order.get("loyalty") if isinstance(order.get("loyalty"), dict) else {}
+    requested_reward_id = _coerce_int(
+        coalesce(
+            order,
+            "reward_id",
+            "rewardId",
+            default=coalesce(loyalty_payload, "reward_id", "rewardId"),
+        )
+    )
+    requested_points_to_redeem = _coerce_int(
+        coalesce(
+            order,
+            "loyalty_points_to_redeem",
+            "loyaltyPointsToRedeem",
+            "points_to_redeem",
+            "pointsToRedeem",
+            default=coalesce(
+                loyalty_payload,
+                "loyalty_points_to_redeem",
+                "loyaltyPointsToRedeem",
+                "points_to_redeem",
+                "pointsToRedeem",
+                "points",
+            ),
+        )
+    )
+    if requested_points_to_redeem is None:
+        requested_points_to_redeem = 0
+    subscription_payload = order.get("subscription") if isinstance(order.get("subscription"), dict) else {}
+    use_subscription = parse_bool(
+        coalesce(
+            order,
+            "use_subscription",
+            "useSubscription",
+            "apply_subscription",
+            "applySubscription",
+            default=coalesce(subscription_payload, "enabled", "use", "apply"),
+        ),
+        default=False,
+    )
+    requested_user_subscription_id = _coerce_int(
+        coalesce(
+            order,
+            "user_subscription_id",
+            "userSubscriptionId",
+            "subscription_id",
+            "subscriptionId",
+            default=coalesce(
+                subscription_payload,
+                "user_subscription_id",
+                "userSubscriptionId",
+                "subscription_id",
+                "subscriptionId",
+                "id",
+            ),
+        )
+    )
+    use_subscription_free_ticket = parse_bool(
+        coalesce(
+            order,
+            "use_subscription_free_ticket",
+            "useSubscriptionFreeTicket",
+            default=coalesce(subscription_payload, "use_free_ticket", "useFreeTicket"),
+        ),
+        default=False,
+    )
+    requested_subscription_free_tickets = _coerce_int(
+        coalesce(
+            order,
+            "subscription_free_tickets",
+            "subscriptionFreeTickets",
+            default=coalesce(
+                subscription_payload,
+                "requested_free_tickets",
+                "requestedFreeTickets",
+                "free_tickets",
+                "freeTickets",
+            ),
+        )
+    )
+    if requested_subscription_free_tickets is None:
+        requested_subscription_free_tickets = 1
+    if requested_subscription_free_tickets < 0:
+        requested_subscription_free_tickets = 0
+    referral_wallet_payload = order.get("referral_wallet") if isinstance(order.get("referral_wallet"), dict) else {}
+    use_referral_wallet = parse_bool(
+        coalesce(
+            order,
+            "use_referral_wallet",
+            "useReferralWallet",
+            "apply_referral_wallet",
+            "applyReferralWallet",
+            default=coalesce(referral_wallet_payload, "enabled", "use", "apply"),
+        ),
+        default=False,
+    )
+    requested_referral_wallet_amount = _parse_price_amount(
+        coalesce(
+            order,
+            "referral_wallet_amount",
+            "referralWalletAmount",
+            "wallet_credit_to_use",
+            "walletCreditToUse",
+            default=coalesce(
+                referral_wallet_payload,
+                "amount",
+                "amount_to_use",
+                "amountToUse",
+            ),
+        )
+    )
+    price_lock_token = _extract_price_lock_token(order if isinstance(order, dict) else {})
+    price_lock_snapshot = _load_price_lock(price_lock_token) if price_lock_token else None
+    strict_price_lock = parse_bool(
+        coalesce(order, "strict_price_lock", "strictPriceLock"),
+        default=bool(price_lock_token),
+    )
 
     with transaction.atomic():
         screen, showtime = _get_or_create_showtime_for_context(show, context.get("hall"))
+        if price_lock_token and not _is_price_lock_compatible(
+            price_lock_snapshot,
+            show=show,
+            showtime=showtime,
+            selected_seats=normalized_labels,
+        ):
+            if strict_price_lock:
+                return (
+                    None,
+                    {
+                        "message": "Locked ticket price expired or no longer matches selected seats. Please refresh price and retry.",
+                        "code": "PRICE_LOCK_EXPIRED",
+                    },
+                    status.HTTP_409_CONFLICT,
+                )
+            price_lock_snapshot = None
+
+        occupancy_snapshot = _showtime_occupancy_snapshot(showtime=showtime, screen=screen)
         existing_sold = set(_collect_sold_labels_for_showtime(showtime, lock=True))
         conflicts = [label for label, _, _ in parsed_labels if label in existing_sold]
         if conflicts:
@@ -5585,18 +8943,35 @@ def _create_booking_from_order(order: dict[str, Any]) -> tuple[Optional[dict[str
         seat_records: list[tuple[str, str, str, Seat, SeatAvailability, Optional[Decimal]]] = []
         persisted_seats: list[str] = []
         for label, row_label, seat_number in parsed_labels:
-            seat, _ = Seat.objects.get_or_create(
+            seat = Seat.objects.filter(
                 screen=screen,
                 row_label=row_label or None,
                 seat_number=seat_number,
+            ).first()
+            if not seat:
+                return (
+                    None,
+                    {
+                        "message": "Some selected seats do not exist in this hall layout.",
+                        "invalid_seats": [label],
+                    },
+                    status.HTTP_400_BAD_REQUEST,
+                )
+
+            availability = (
+                SeatAvailability.objects.select_for_update()
+                .filter(seat=seat, showtime=showtime)
+                .first()
             )
-            availability, created = SeatAvailability.objects.select_for_update().get_or_create(
-                seat=seat,
-                showtime=showtime,
-                defaults={"seat_status": SEAT_STATUS_AVAILABLE},
-            )
+            if not availability:
+                availability = SeatAvailability.objects.create(
+                    seat=seat,
+                    showtime=showtime,
+                    seat_status=SEAT_STATUS_AVAILABLE,
+                )
+
             current_status = str(availability.seat_status or "").strip().lower()
-            if not created and current_status in BOOKED_STATUSES:
+            if current_status in BOOKED_STATUSES:
                 return (
                     None,
                     {
@@ -5605,7 +8980,7 @@ def _create_booking_from_order(order: dict[str, Any]) -> tuple[Optional[dict[str
                     },
                     status.HTTP_409_CONFLICT,
                 )
-            if not created and current_status == SEAT_STATUS_UNAVAILABLE.lower():
+            if current_status == SEAT_STATUS_UNAVAILABLE.lower():
                 return (
                     None,
                     {
@@ -5614,13 +8989,16 @@ def _create_booking_from_order(order: dict[str, Any]) -> tuple[Optional[dict[str
                     },
                     status.HTTP_409_CONFLICT,
                 )
-            seat_price, _ = _resolve_dynamic_seat_price(
-                show=show,
-                showtime=showtime,
-                screen=screen,
-                seat_type=seat.seat_type,
-                event_name=event_name,
-            )
+            seat_price = _seat_price_from_lock(price_lock_snapshot, label)
+            if seat_price is None:
+                seat_price, _ = _resolve_dynamic_seat_price(
+                    show=show,
+                    showtime=showtime,
+                    screen=screen,
+                    seat_type=seat.seat_type,
+                    occupancy_snapshot=occupancy_snapshot,
+                    event_name=event_name,
+                )
             seat_records.append((label, row_label, seat_number, seat, availability, seat_price))
 
         computed_total = Decimal("0.00")
@@ -5639,6 +9017,14 @@ def _create_booking_from_order(order: dict[str, Any]) -> tuple[Optional[dict[str
         vendor_promo = None
         discount_amount = Decimal("0.00")
         total_amount = subtotal_amount
+        loyalty_preview: Optional[dict[str, Any]] = None
+        loyalty_points_used = 0
+        loyalty_discount_amount = Decimal("0.00")
+        subscription_preview: Optional[dict[str, Any]] = None
+        subscription_discount_amount = Decimal("0.00")
+        subscription_free_tickets_used = 0
+        referral_wallet_preview: Optional[dict[str, Any]] = None
+        referral_wallet_used_amount = Decimal("0.00")
         if coupon_code:
             seat_categories = [
                 seat.seat_type
@@ -5671,6 +9057,100 @@ def _create_booking_from_order(order: dict[str, Any]) -> tuple[Optional[dict[str
             discount_amount = _parse_price_amount(coupon_result.get("discount_amount")) or Decimal("0.00")
             total_amount = _parse_price_amount(coupon_result.get("final_total")) or subtotal_amount
 
+        if requested_reward_id or requested_points_to_redeem > 0:
+            loyalty_preview, loyalty_error, loyalty_status = loyalty.preview_checkout_redemption(
+                user,
+                {
+                    "subtotal": float(_quantize_money(total_amount)),
+                    "reward_id": requested_reward_id,
+                    "points_to_redeem": requested_points_to_redeem,
+                    "vendor_id": show.vendor_id,
+                },
+            )
+            if loyalty_error:
+                return None, loyalty_error, loyalty_status
+
+            loyalty_points_used = int((loyalty_preview or {}).get("total_points_to_use") or 0)
+            loyalty_discount_amount = _parse_price_amount(
+                (loyalty_preview or {}).get("total_discount")
+            ) or Decimal("0.00")
+            if loyalty_discount_amount > Decimal("0"):
+                total_amount = _quantize_money(total_amount - loyalty_discount_amount)
+                if total_amount < Decimal("0"):
+                    total_amount = Decimal("0.00")
+
+        if use_subscription:
+            subscription_preview, subscription_error, subscription_status = subscription.preview_checkout_subscription(
+                user.id,
+                {
+                    "subtotal": float(_quantize_money(total_amount)),
+                    "vendor_id": show.vendor_id,
+                    "seat_count": max(len(seat_records), 1),
+                    "user_subscription_id": requested_user_subscription_id,
+                    "use_free_ticket": use_subscription_free_ticket,
+                    "requested_free_tickets": requested_subscription_free_tickets,
+                    "coupon_applied": bool(coupon and discount_amount > Decimal("0")),
+                    "loyalty_applied": bool(loyalty_discount_amount > Decimal("0")),
+                    "referral_wallet_applied": False,
+                },
+            )
+            if subscription_error:
+                return None, subscription_error, subscription_status
+
+            subscription_discount_amount = _parse_price_amount(
+                coalesce(subscription_preview or {}, "total_discount", "discount_amount")
+            ) or Decimal("0.00")
+            subscription_free_tickets_used = int((subscription_preview or {}).get("free_tickets_to_use") or 0)
+
+            if subscription_discount_amount > Decimal("0"):
+                total_amount = _quantize_money(total_amount - subscription_discount_amount)
+                if total_amount < Decimal("0"):
+                    total_amount = Decimal("0.00")
+
+        if use_referral_wallet and subscription_preview:
+            plan_payload = (subscription_preview or {}).get("plan")
+            if isinstance(plan_payload, dict) and not bool(plan_payload.get("is_stackable_with_referral_wallet", True)):
+                return (
+                    None,
+                    {"message": "Selected subscription cannot be combined with referral wallet credit."},
+                    status.HTTP_400_BAD_REQUEST,
+                )
+
+        if use_referral_wallet:
+            referral_wallet_preview = preview_referral_wallet_usage_for_user(
+                user,
+                subtotal=total_amount,
+                requested_amount=requested_referral_wallet_amount,
+            )
+            referral_wallet_used_amount = _parse_price_amount(
+                referral_wallet_preview.get("applied_amount")
+            ) or Decimal("0.00")
+            if referral_wallet_used_amount > Decimal("0"):
+                total_amount = _quantize_money(total_amount - referral_wallet_used_amount)
+                if total_amount < Decimal("0"):
+                    total_amount = Decimal("0.00")
+
+        booking_fraud_payload = assess_booking_fraud_risk(
+            user=user,
+            show=show,
+            seat_count=len(seat_records),
+            subtotal_amount=subtotal_amount,
+            total_amount=total_amount,
+            discount_amount=discount_amount,
+            loyalty_discount_amount=loyalty_discount_amount,
+            subscription_discount_amount=subscription_discount_amount,
+            referral_wallet_used_amount=referral_wallet_used_amount,
+            source_ip=source_ip,
+            user_agent=user_agent,
+        )
+        fraud_score = int(booking_fraud_payload.get("score") or 0)
+        fraud_level = str(booking_fraud_payload.get("level") or Booking.FRAUD_LEVEL_LOW)
+        fraud_signals = (
+            booking_fraud_payload.get("signals")
+            if isinstance(booking_fraud_payload.get("signals"), list)
+            else []
+        )
+
         booking = Booking.objects.create(
             user=user,
             showtime=showtime,
@@ -5679,6 +9159,16 @@ def _create_booking_from_order(order: dict[str, Any]) -> tuple[Optional[dict[str
             coupon=coupon,
             vendor_promo_code=vendor_promo,
             discount_amount=discount_amount,
+            loyalty_points_redeemed=loyalty_points_used,
+            loyalty_discount_amount=loyalty_discount_amount,
+            subscription_discount_amount=subscription_discount_amount,
+            subscription_free_tickets_used=subscription_free_tickets_used,
+            referral_wallet_used_amount=referral_wallet_used_amount,
+            fraud_score=fraud_score,
+            fraud_level=fraud_level,
+            fraud_signals=fraud_signals,
+            source_ip=source_ip,
+            user_agent=user_agent,
         )
 
         for _, row_label, seat_number, seat, availability, seat_price in seat_records:
@@ -5694,7 +9184,49 @@ def _create_booking_from_order(order: dict[str, Any]) -> tuple[Optional[dict[str
             )
             persisted_seats.append(_join_seat_label(row_label, seat_number))
 
+        if loyalty_preview and (loyalty_points_used > 0 or loyalty_preview.get("reward")):
+            loyalty_result, loyalty_status = loyalty.consume_checkout_redemption(
+                user=user,
+                booking=booking,
+                preview=loyalty_preview,
+            )
+            if loyalty_status >= status.HTTP_400_BAD_REQUEST:
+                transaction.set_rollback(True)
+                return None, loyalty_result, loyalty_status
+
+        if subscription_preview and (
+            subscription_discount_amount > Decimal("0")
+            or subscription_free_tickets_used > 0
+            or (subscription_preview or {}).get("user_subscription_id")
+        ):
+            subscription_result, subscription_status = subscription.consume_checkout_subscription(
+                user_id=user.id,
+                booking=booking,
+                preview=subscription_preview,
+            )
+            if subscription_status >= status.HTTP_400_BAD_REQUEST:
+                transaction.set_rollback(True)
+                return None, subscription_result, subscription_status
+
+        if referral_wallet_used_amount > Decimal("0"):
+            _, wallet_error, wallet_status = _debit_referral_wallet(
+                user=user,
+                amount=referral_wallet_used_amount,
+                reason=ReferralTransaction.REASON_BOOKING_WALLET_USE,
+                booking=booking,
+                metadata={
+                    "requested_amount": float(requested_referral_wallet_amount or Decimal("0.00")),
+                    "preview": referral_wallet_preview or {},
+                },
+                require_available_balance=True,
+                allow_negative_balance=False,
+            )
+            if wallet_error:
+                transaction.set_rollback(True)
+                return None, wallet_error, wallet_status
+
         _record_vendor_booking_earning(booking, gross_amount=total_amount)
+        transaction.on_commit(lambda booking_id=booking.id, event=event_name: _run_post_booking_rewards(booking_id, event))
 
     try:
         _notify_booking_created(booking, show)
@@ -5715,7 +9247,16 @@ def _create_booking_from_order(order: dict[str, Any]) -> tuple[Optional[dict[str
             "show_id": show.id,
             "showtime_id": showtime.id,
             "screen": screen.screen_number,
+            "referral_wallet_used_amount": float(referral_wallet_used_amount),
+            "subscription_discount_amount": float(subscription_discount_amount),
+            "subscription_free_tickets_used": int(subscription_free_tickets_used),
+            "user_subscription_id": booking.user_subscription_id,
+            "price_lock_token": price_lock_token or None,
             "sold_seats": sorted(persisted_seats, key=_seat_sort_key),
+            "fraud_score": fraud_score,
+            "fraud_level": fraud_level,
+            "fraud_signals": fraud_signals,
+            "requires_manual_review": bool(booking_fraud_payload.get("requires_manual_review")),
         },
         None,
         status.HTTP_201_CREATED,
@@ -5758,9 +9299,18 @@ def _build_pricing_rule_payload(rule: PricingRule) -> dict[str, Any]:
         "id": rule.id,
         "name": rule.name,
         "vendor_id": rule.vendor_id,
+        "is_global": rule.vendor_id is None,
         "movie_id": rule.movie_id,
         "hall": rule.hall,
         "seat_category": rule.seat_category,
+        "day_of_week": getattr(rule, "day_of_week", PricingRule.DAY_OF_WEEK_ALL),
+        "start_time": rule.start_time.strftime("%H:%M") if getattr(rule, "start_time", None) else None,
+        "end_time": rule.end_time.strftime("%H:%M") if getattr(rule, "end_time", None) else None,
+        "occupancy_threshold": float(rule.occupancy_threshold) if getattr(rule, "occupancy_threshold", None) is not None else None,
+        "price_multiplier": float(rule.price_multiplier) if getattr(rule, "price_multiplier", None) is not None else None,
+        "flat_adjustment": float(rule.flat_adjustment) if getattr(rule, "flat_adjustment", None) is not None else None,
+        "min_price_cap": float(rule.min_price_cap) if getattr(rule, "min_price_cap", None) is not None else None,
+        "max_price_cap": float(rule.max_price_cap) if getattr(rule, "max_price_cap", None) is not None else None,
         "day_type": rule.day_type,
         "is_festival_pricing": bool(rule.is_festival_pricing),
         "festival_name": rule.festival_name,
@@ -5790,7 +9340,7 @@ def _clean_pricing_rule_input(payload: dict[str, Any], partial: bool = False) ->
     if "hall" in payload:
         cleaned["hall"] = str(payload.get("hall") or "").strip() or None
 
-    if not partial or "seat_category" in payload:
+    if not partial or "seat_category" in payload or "seatCategory" in payload:
         seat_category = str(coalesce(payload, "seat_category", "seatCategory") or PricingRule.SEAT_CATEGORY_ALL).upper()
         allowed = {
             PricingRule.SEAT_CATEGORY_ALL,
@@ -5798,12 +9348,35 @@ def _clean_pricing_rule_input(payload: dict[str, Any], partial: bool = False) ->
             PricingRule.SEAT_CATEGORY_EXECUTIVE,
             PricingRule.SEAT_CATEGORY_PREMIUM,
             PricingRule.SEAT_CATEGORY_VIP,
+            PricingRule.SEAT_CATEGORY_SILVER,
+            PricingRule.SEAT_CATEGORY_GOLD,
+            PricingRule.SEAT_CATEGORY_PLATINUM,
         }
         if seat_category not in allowed:
             return {}, "seat_category is invalid."
         cleaned["seat_category"] = seat_category
 
-    if not partial or "day_type" in payload:
+    if not partial or "day_of_week" in payload or "dayOfWeek" in payload:
+        day_of_week = str(
+            coalesce(payload, "day_of_week", "dayOfWeek") or PricingRule.DAY_OF_WEEK_ALL
+        ).upper()
+        allowed = {
+            PricingRule.DAY_OF_WEEK_ALL,
+            PricingRule.DAY_OF_WEEK_WEEKDAY,
+            PricingRule.DAY_OF_WEEK_WEEKEND,
+            PricingRule.DAY_OF_WEEK_MON,
+            PricingRule.DAY_OF_WEEK_TUE,
+            PricingRule.DAY_OF_WEEK_WED,
+            PricingRule.DAY_OF_WEEK_THU,
+            PricingRule.DAY_OF_WEEK_FRI,
+            PricingRule.DAY_OF_WEEK_SAT,
+            PricingRule.DAY_OF_WEEK_SUN,
+        }
+        if day_of_week not in allowed:
+            return {}, "day_of_week is invalid."
+        cleaned["day_of_week"] = day_of_week
+
+    if not partial or "day_type" in payload or "dayType" in payload:
         day_type = str(coalesce(payload, "day_type", "dayType") or PricingRule.DAY_TYPE_ALL).upper()
         allowed = {
             PricingRule.DAY_TYPE_ALL,
@@ -5813,6 +9386,54 @@ def _clean_pricing_rule_input(payload: dict[str, Any], partial: bool = False) ->
         if day_type not in allowed:
             return {}, "day_type is invalid."
         cleaned["day_type"] = day_type
+
+    if "start_time" in payload or "startTime" in payload:
+        cleaned["start_time"] = parse_time(coalesce(payload, "start_time", "startTime"))
+
+    if "end_time" in payload or "endTime" in payload:
+        cleaned["end_time"] = parse_time(coalesce(payload, "end_time", "endTime"))
+
+    if "occupancy_threshold" in payload or "occupancyThreshold" in payload:
+        occupancy_threshold = _parse_price_amount(
+            coalesce(payload, "occupancy_threshold", "occupancyThreshold")
+        )
+        if occupancy_threshold is None:
+            return {}, "occupancy_threshold must be a number between 0 and 100."
+        if occupancy_threshold > Decimal("100"):
+            return {}, "occupancy_threshold cannot exceed 100."
+        cleaned["occupancy_threshold"] = occupancy_threshold
+
+    if "price_multiplier" in payload or "priceMultiplier" in payload:
+        price_multiplier = _parse_price_amount(
+            coalesce(payload, "price_multiplier", "priceMultiplier")
+        )
+        if price_multiplier is None or price_multiplier <= Decimal("0"):
+            return {}, "price_multiplier must be a positive number."
+        cleaned["price_multiplier"] = price_multiplier.quantize(Decimal("0.0001"))
+
+    if "flat_adjustment" in payload or "flatAdjustment" in payload:
+        flat_adjustment = _parse_signed_price_amount(
+            coalesce(payload, "flat_adjustment", "flatAdjustment")
+        )
+        if flat_adjustment is None:
+            return {}, "flat_adjustment must be a valid number."
+        cleaned["flat_adjustment"] = flat_adjustment
+
+    if "min_price_cap" in payload or "minPriceCap" in payload:
+        min_price_cap = _parse_price_amount(coalesce(payload, "min_price_cap", "minPriceCap"))
+        if min_price_cap is None:
+            return {}, "min_price_cap must be a valid non-negative number."
+        cleaned["min_price_cap"] = min_price_cap
+
+    if "max_price_cap" in payload or "maxPriceCap" in payload:
+        max_price_cap = _parse_price_amount(coalesce(payload, "max_price_cap", "maxPriceCap"))
+        if max_price_cap is None:
+            return {}, "max_price_cap must be a valid non-negative number."
+        cleaned["max_price_cap"] = max_price_cap
+
+    if cleaned.get("min_price_cap") is not None and cleaned.get("max_price_cap") is not None:
+        if cleaned["min_price_cap"] > cleaned["max_price_cap"]:
+            return {}, "min_price_cap cannot be greater than max_price_cap."
 
     if "is_festival_pricing" in payload or "isFestivalPricing" in payload:
         cleaned["is_festival_pricing"] = parse_bool(
@@ -5830,8 +9451,27 @@ def _clean_pricing_rule_input(payload: dict[str, Any], partial: bool = False) ->
     if cleaned.get("start_date") and cleaned.get("end_date") and cleaned["start_date"] > cleaned["end_date"]:
         return {}, "start_date must be on or before end_date."
 
-    if not partial or "adjustment_type" in payload:
-        adjustment_type = str(coalesce(payload, "adjustment_type", "adjustmentType") or "").upper()
+    has_modern_adjustment = any(
+        key in payload
+        for key in (
+            "price_multiplier",
+            "priceMultiplier",
+            "flat_adjustment",
+            "flatAdjustment",
+        )
+    )
+
+    if (
+        not partial
+        and not has_modern_adjustment
+        and "adjustment_type" not in payload
+        and "adjustmentType" not in payload
+    ):
+        cleaned["adjustment_type"] = PricingRule.ADJUSTMENT_INCREMENT
+    elif "adjustment_type" in payload or "adjustmentType" in payload or (not partial and not has_modern_adjustment):
+        adjustment_type = str(
+            coalesce(payload, "adjustment_type", "adjustmentType") or PricingRule.ADJUSTMENT_INCREMENT
+        ).upper()
         allowed = {
             PricingRule.ADJUSTMENT_FIXED,
             PricingRule.ADJUSTMENT_INCREMENT,
@@ -5842,11 +9482,28 @@ def _clean_pricing_rule_input(payload: dict[str, Any], partial: bool = False) ->
             return {}, "adjustment_type is invalid."
         cleaned["adjustment_type"] = adjustment_type
 
-    if not partial or "adjustment_value" in payload or "adjustmentValue" in payload:
-        adjustment_value = _parse_price_amount(coalesce(payload, "adjustment_value", "adjustmentValue"))
+    if (
+        not partial
+        and not has_modern_adjustment
+        and "adjustment_value" not in payload
+        and "adjustmentValue" not in payload
+    ):
+        cleaned["adjustment_value"] = Decimal("0.00")
+    elif "adjustment_value" in payload or "adjustmentValue" in payload or (not partial and not has_modern_adjustment):
+        adjustment_value = _parse_signed_price_amount(coalesce(payload, "adjustment_value", "adjustmentValue"))
         if adjustment_value is None:
-            return {}, "adjustment_value is required and must be non-negative."
+            return {}, "adjustment_value must be a valid number."
         cleaned["adjustment_value"] = adjustment_value
+
+    if not partial and not has_modern_adjustment:
+        has_legacy_adjustment = cleaned.get("adjustment_value") is not None
+        if not has_legacy_adjustment:
+            return {}, "Provide either price_multiplier/flat_adjustment or adjustment_value."
+
+    if not partial and has_modern_adjustment and "adjustment_value" not in cleaned:
+        cleaned["adjustment_value"] = Decimal("0.00")
+    if not partial and has_modern_adjustment and "adjustment_type" not in cleaned:
+        cleaned["adjustment_type"] = PricingRule.ADJUSTMENT_INCREMENT
 
     if "priority" in payload:
         cleaned["priority"] = _parse_positive_int(payload.get("priority"), default=100, minimum=1, maximum=9999)
@@ -5975,7 +9632,14 @@ def list_vendor_pricing_rules(request: Any) -> list[dict[str, Any]]:
     if not vendor:
         return []
 
+    include_global = parse_bool(
+        coalesce(request.query_params, "include_global", "includeGlobal"),
+        default=True,
+    )
     queryset = PricingRule.objects.filter(vendor_id=vendor.id)
+    if include_global:
+        queryset = PricingRule.objects.filter(Q(vendor_id=vendor.id) | Q(vendor__isnull=True))
+
     movie_id = _coerce_int(coalesce(request.query_params, "movie_id", "movieId"))
     if movie_id:
         queryset = queryset.filter(Q(movie_id=movie_id) | Q(movie_id__isnull=True))
@@ -5984,7 +9648,17 @@ def list_vendor_pricing_rules(request: Any) -> list[dict[str, Any]]:
         is_active = parse_bool(coalesce(request.query_params, "is_active", "isActive"), default=True)
         queryset = queryset.filter(is_active=is_active)
 
-    return [_build_pricing_rule_payload(rule) for rule in queryset.order_by("priority", "id")]
+    rules = list(queryset.order_by("priority", "id"))
+    if include_global:
+        vendor_rules = [rule for rule in rules if rule.vendor_id == vendor.id]
+        global_rules = [rule for rule in rules if rule.vendor_id is None]
+        vendor_override_keys = {_pricing_rule_override_key(rule) for rule in vendor_rules}
+        rules = vendor_rules + [
+            rule for rule in global_rules if _pricing_rule_override_key(rule) not in vendor_override_keys
+        ]
+        rules = sorted(rules, key=lambda item: (int(item.priority or 0), int(item.id or 0)))
+
+    return [_build_pricing_rule_payload(rule) for rule in rules]
 
 
 def create_vendor_pricing_rule(request: Any) -> tuple[dict[str, Any], int]:
@@ -6029,6 +9703,263 @@ def delete_vendor_pricing_rule(rule: PricingRule) -> tuple[dict[str, Any], int]:
     """Delete one vendor pricing rule."""
     rule.delete()
     return {"message": "Pricing rule deleted."}, status.HTTP_200_OK
+
+
+def list_admin_pricing_rules(request: Any) -> tuple[dict[str, Any], int]:
+    """List pricing rules for admin with optional scope filters."""
+    queryset = PricingRule.objects.all()
+
+    scope = str(coalesce(request.query_params, "scope") or "ALL").strip().upper()
+    vendor_id = _coerce_int(coalesce(request.query_params, "vendor_id", "vendorId"))
+    if scope == "GLOBAL":
+        queryset = queryset.filter(vendor__isnull=True)
+    elif scope == "VENDOR":
+        queryset = queryset.filter(vendor__isnull=False)
+
+    if vendor_id is not None:
+        queryset = queryset.filter(vendor_id=vendor_id)
+
+    movie_id = _coerce_int(coalesce(request.query_params, "movie_id", "movieId"))
+    if movie_id:
+        queryset = queryset.filter(Q(movie_id=movie_id) | Q(movie_id__isnull=True))
+
+    if "is_active" in request.query_params or "isActive" in request.query_params:
+        is_active = parse_bool(coalesce(request.query_params, "is_active", "isActive"), default=True)
+        queryset = queryset.filter(is_active=is_active)
+
+    rules = [_build_pricing_rule_payload(rule) for rule in queryset.order_by("priority", "id")]
+    return {"rules": rules}, status.HTTP_200_OK
+
+
+def create_admin_pricing_rule(request: Any) -> tuple[dict[str, Any], int]:
+    """Create admin pricing rule scoped globally or to a vendor."""
+    payload = get_payload(request)
+    cleaned, error = _clean_pricing_rule_input(payload, partial=False)
+    if error:
+        return {"message": error}, status.HTTP_400_BAD_REQUEST
+
+    vendor_id = _coerce_int(coalesce(payload, "vendor_id", "vendorId"))
+    if vendor_id is not None and not Vendor.objects.filter(pk=vendor_id).exists():
+        return {"message": "vendor_id is invalid."}, status.HTTP_400_BAD_REQUEST
+
+    movie_id = cleaned.get("movie_id")
+    if movie_id and not Movie.objects.filter(pk=movie_id).exists():
+        return {"message": "movie_id is invalid."}, status.HTTP_400_BAD_REQUEST
+
+    rule = PricingRule.objects.create(vendor_id=vendor_id, **cleaned)
+    return {
+        "message": "Pricing rule created.",
+        "rule": _build_pricing_rule_payload(rule),
+    }, status.HTTP_201_CREATED
+
+
+def update_admin_pricing_rule(request: Any, rule: PricingRule) -> tuple[dict[str, Any], int]:
+    """Update one admin pricing rule, including vendor/global scope changes."""
+    payload = get_payload(request)
+    cleaned, error = _clean_pricing_rule_input(payload, partial=True)
+    if error:
+        return {"message": error}, status.HTTP_400_BAD_REQUEST
+
+    if "vendor_id" in payload or "vendorId" in payload:
+        next_vendor_id = _coerce_int(coalesce(payload, "vendor_id", "vendorId"))
+        if next_vendor_id is not None and not Vendor.objects.filter(pk=next_vendor_id).exists():
+            return {"message": "vendor_id is invalid."}, status.HTTP_400_BAD_REQUEST
+        cleaned["vendor_id"] = next_vendor_id
+
+    if not cleaned:
+        return {"message": "No pricing rule changes provided."}, status.HTTP_400_BAD_REQUEST
+
+    movie_id = cleaned.get("movie_id")
+    if movie_id and not Movie.objects.filter(pk=movie_id).exists():
+        return {"message": "movie_id is invalid."}, status.HTTP_400_BAD_REQUEST
+
+    for key, value in cleaned.items():
+        setattr(rule, key, value)
+    rule.save()
+    return {
+        "message": "Pricing rule updated.",
+        "rule": _build_pricing_rule_payload(rule),
+    }, status.HTTP_200_OK
+
+
+def delete_admin_pricing_rule(rule: PricingRule) -> tuple[dict[str, Any], int]:
+    """Delete one admin pricing rule."""
+    rule.delete()
+    return {"message": "Pricing rule deleted."}, status.HTTP_200_OK
+
+
+def _serialize_show_base_price_payload(item: ShowBasePrice) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "show_id": item.show_id,
+        "seat_category": item.seat_category,
+        "base_price": float(item.base_price),
+        "is_active": bool(item.is_active),
+        "created_at": item.created_at.isoformat() if item.created_at else None,
+        "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+    }
+
+
+def list_vendor_show_base_prices(request: Any) -> tuple[dict[str, Any], int]:
+    """List per-show base prices for the authenticated vendor."""
+    vendor = resolve_vendor(request)
+    if not vendor:
+        return {"message": "Vendor not found."}, status.HTTP_404_NOT_FOUND
+
+    show_id = _coerce_int(coalesce(request.query_params, "show_id", "showId"))
+    if not show_id:
+        return {"message": "show_id is required."}, status.HTTP_400_BAD_REQUEST
+
+    show = Show.objects.filter(id=show_id, vendor_id=vendor.id).first()
+    if not show:
+        return {"message": "show_id is invalid for this vendor."}, status.HTTP_400_BAD_REQUEST
+
+    rows = list(ShowBasePrice.objects.filter(show_id=show.id).order_by("seat_category", "id"))
+    return {
+        "show_id": show.id,
+        "movie_id": show.movie_id,
+        "hall": show.hall,
+        "base_prices": [_serialize_show_base_price_payload(item) for item in rows],
+    }, status.HTTP_200_OK
+
+
+def upsert_vendor_show_base_prices(request: Any) -> tuple[dict[str, Any], int]:
+    """Create or update per-show category base prices for vendor pricing engine."""
+    vendor = resolve_vendor(request)
+    if not vendor:
+        return {"message": "Vendor not found."}, status.HTTP_404_NOT_FOUND
+
+    payload = get_payload(request)
+    show_id = _coerce_int(coalesce(payload, "show_id", "showId"))
+    if not show_id:
+        return {"message": "show_id is required."}, status.HTTP_400_BAD_REQUEST
+
+    show = Show.objects.filter(id=show_id, vendor_id=vendor.id).first()
+    if not show:
+        return {"message": "show_id is invalid for this vendor."}, status.HTTP_400_BAD_REQUEST
+
+    incoming = payload.get("base_prices") if isinstance(payload.get("base_prices"), list) else []
+    if not incoming and isinstance(payload.get("prices"), list):
+        incoming = payload.get("prices")
+
+    if not incoming:
+        single = {
+            "seat_category": coalesce(payload, "seat_category", "seatCategory"),
+            "base_price": coalesce(payload, "base_price", "basePrice", "price"),
+            "is_active": coalesce(payload, "is_active", "isActive", default=True),
+        }
+        if single.get("seat_category") is not None:
+            incoming = [single]
+
+    if not incoming:
+        return {"message": "base_prices payload is required."}, status.HTTP_400_BAD_REQUEST
+
+    allowed_categories = {
+        PricingRule.SEAT_CATEGORY_NORMAL,
+        PricingRule.SEAT_CATEGORY_EXECUTIVE,
+        PricingRule.SEAT_CATEGORY_PREMIUM,
+        PricingRule.SEAT_CATEGORY_VIP,
+        PricingRule.SEAT_CATEGORY_SILVER,
+        PricingRule.SEAT_CATEGORY_GOLD,
+        PricingRule.SEAT_CATEGORY_PLATINUM,
+    }
+
+    with transaction.atomic():
+        for row in incoming:
+            if not isinstance(row, dict):
+                return {"message": "Each base_prices item must be an object."}, status.HTTP_400_BAD_REQUEST
+
+            seat_category = str(coalesce(row, "seat_category", "seatCategory") or "").strip().upper()
+            if seat_category not in allowed_categories:
+                return {"message": f"Invalid seat_category: {seat_category or 'blank'}."}, status.HTTP_400_BAD_REQUEST
+
+            base_price = _parse_price_amount(coalesce(row, "base_price", "basePrice", "price"))
+            if base_price is None:
+                return {"message": f"base_price is required for {seat_category}."}, status.HTTP_400_BAD_REQUEST
+
+            is_active = parse_bool(coalesce(row, "is_active", "isActive"), default=True)
+
+            ShowBasePrice.objects.update_or_create(
+                show_id=show.id,
+                seat_category=seat_category,
+                defaults={
+                    "base_price": base_price,
+                    "is_active": is_active,
+                },
+            )
+
+    rows = list(ShowBasePrice.objects.filter(show_id=show.id).order_by("seat_category", "id"))
+    return {
+        "message": "Show base prices updated.",
+        "show_id": show.id,
+        "base_prices": [_serialize_show_base_price_payload(item) for item in rows],
+    }, status.HTTP_200_OK
+
+
+def get_show_dynamic_prices(payload: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    """Return real-time dynamic category prices for a show context."""
+    context = _resolve_booking_context(payload)
+    show = _resolve_show_for_context(context)
+    if not show:
+        return {"message": "Selected show was not found."}, status.HTTP_404_NOT_FOUND
+
+    hall = str(context.get("hall") or show.hall or "").strip() or None
+    showtime = _find_showtime_for_context(show, hall)
+    screen = None
+    if hall:
+        screen = Screen.objects.filter(vendor_id=show.vendor_id, screen_number__iexact=hall).first()
+    if not screen and showtime:
+        screen = showtime.screen
+    if not screen:
+        screen = Screen.objects.filter(vendor_id=show.vendor_id).order_by("id").first()
+
+    event_name = str(coalesce(payload, "event", "event_name", "festival", "festival_name") or "").strip()
+
+    cache_key = (
+        f"{PRICING_CATEGORY_CACHE_PREFIX}{show.id}:"
+        f"{showtime.id if showtime else 'na'}:{(event_name or '').lower()}"
+    )
+    cached = cache.get(cache_key)
+    if isinstance(cached, dict):
+        return cached, status.HTTP_200_OK
+
+    occupancy = _showtime_occupancy_snapshot(showtime=showtime, screen=screen)
+
+    categories: list[tuple[str, str]] = [
+        ("normal", SEAT_CATEGORY_NORMAL),
+        ("executive", SEAT_CATEGORY_EXECUTIVE),
+        ("premium", SEAT_CATEGORY_PREMIUM),
+        ("vip", SEAT_CATEGORY_VIP),
+    ]
+    category_payload: dict[str, Any] = {}
+    for key, seat_type in categories:
+        base_price = _seat_price_for_category(screen=screen, showtime=showtime, seat_type=seat_type, show=show)
+        final_price, applied_rules = _resolve_dynamic_seat_price(
+            show=show,
+            showtime=showtime,
+            screen=screen,
+            seat_type=seat_type,
+            occupancy_snapshot=occupancy,
+            event_name=event_name,
+        )
+        category_payload[key] = {
+            "seat_type": seat_type,
+            "base_price": float(base_price) if base_price is not None else None,
+            "dynamic_price": float(final_price) if final_price is not None else None,
+            "rule_count": len(applied_rules),
+        }
+
+    response_payload = {
+        "show_id": show.id,
+        "showtime_id": showtime.id if showtime else None,
+        "hall": hall or (screen.screen_number if screen else None),
+        "occupancy": occupancy,
+        "categories": category_payload,
+        "indicator": "Price may increase as seats fill.",
+        "currency": "NPR",
+    }
+    cache.set(cache_key, response_payload, timeout=PRICING_CATEGORY_CACHE_TTL_SECONDS)
+    return response_payload, status.HTTP_200_OK
 
 
 def _serialize_private_screening_request(item: PrivateScreeningRequest) -> dict[str, Any]:
@@ -6211,6 +10142,7 @@ def _serialize_bulk_ticket_item(
     details_url = request.build_absolute_uri(f"/api/ticket/{reference}/details/")
     payload: dict[str, Any] = {
         "id": item.id,
+        "ticket_id": str(item.ticket.ticket_id) if item.ticket and item.ticket.ticket_id else None,
         "reference": reference,
         "employee_code": item.employee_code,
         "recipient_name": item.recipient_name,
@@ -6221,7 +10153,9 @@ def _serialize_bulk_ticket_item(
         "created_at": item.created_at.isoformat() if item.created_at else None,
     }
     if include_qr:
-        qr_image = _build_qr_image(details_url)
+        qr_payload = build_ticket_qr_payload(item.ticket)
+        qr_image = _build_qr_image(json.dumps(qr_payload, separators=(",", ":")))
+        payload["qr_payload"] = qr_payload
         payload["qr_code"] = _image_to_data_url(qr_image) if qr_image else None
     return payload
 
@@ -6278,10 +10212,45 @@ def create_vendor_bulk_ticket_batch(request: Any) -> tuple[dict[str, Any], int]:
     unit_price = _parse_price_amount(coalesce(payload, "unit_price", "unitPrice", "price"))
     if unit_price is None:
         unit_price = Decimal("0.00")
+    if unit_price < Decimal("0.00"):
+        return {"message": "unit_price must be non-negative."}, status.HTTP_400_BAD_REQUEST
+
+    selected_show = None
+    show_id = _coerce_int(coalesce(payload, "show_id", "showId"))
+    if show_id:
+        selected_show = (
+            Show.objects.select_related("movie")
+            .filter(id=show_id, vendor_id=vendor.id)
+            .first()
+        )
+        if not selected_show:
+            return {"message": "show_id is invalid for this vendor."}, status.HTTP_400_BAD_REQUEST
+
+        lifecycle = selectors.get_show_lifecycle_state(selected_show)
+        if not lifecycle.get("booking_open"):
+            return {
+                "message": "Selected show is not open for booking. Choose an available show slot."
+            }, status.HTTP_400_BAD_REQUEST
 
     show_date = parse_date(coalesce(payload, "show_date", "showDate", "date"))
     show_time = parse_time(coalesce(payload, "show_time", "showTime", "time"))
     valid_until = parse_date(coalesce(payload, "valid_until", "validUntil", "expiry_date", "expiryDate"))
+
+    movie_title = str(coalesce(payload, "movie_title", "movieTitle") or "").strip() or None
+    hall_name = str(coalesce(payload, "hall") or "").strip() or None
+
+    if selected_show:
+        movie_title = str(selected_show.movie.title if selected_show.movie else movie_title or "").strip() or None
+        hall_name = str(selected_show.hall or hall_name or "").strip() or None
+        show_date = selected_show.show_date or show_date
+        show_time = selected_show.start_time or show_time
+        if unit_price <= Decimal("0.00") and selected_show.price is not None:
+            unit_price = Decimal(selected_show.price).quantize(Decimal("0.01"))
+
+    if show_date and valid_until and valid_until < show_date:
+        return {
+            "message": "valid_until cannot be earlier than show_date."
+        }, status.HTTP_400_BAD_REQUEST
 
     recipient_items = payload.get("recipients") if isinstance(payload.get("recipients"), list) else []
 
@@ -6291,8 +10260,8 @@ def create_vendor_bulk_ticket_batch(request: Any) -> tuple[dict[str, Any], int]:
             corporate_name=corporate_name,
             contact_person=str(coalesce(payload, "contact_person", "contactPerson") or "").strip() or None,
             contact_email=str(coalesce(payload, "contact_email", "contactEmail") or "").strip() or None,
-            movie_title=str(coalesce(payload, "movie_title", "movieTitle") or "").strip() or None,
-            hall=str(coalesce(payload, "hall") or "").strip() or None,
+            movie_title=movie_title,
+            hall=hall_name,
             show_date=show_date,
             show_time=show_time,
             valid_until=valid_until,
@@ -6303,6 +10272,12 @@ def create_vendor_bulk_ticket_batch(request: Any) -> tuple[dict[str, Any], int]:
         )
 
         generated_items: list[BulkTicketItem] = []
+        bulk_show_datetime = None
+        if selected_show:
+            bulk_show_datetime = _ensure_timezone_aware(selected_show.start_datetime)
+        if not bulk_show_datetime and batch.show_date and batch.show_time:
+            bulk_show_datetime = _combine_local_date_time(batch.show_date, batch.show_time)
+
         for index in range(ticket_count):
             recipient = recipient_items[index] if index < len(recipient_items) and isinstance(recipient_items[index], dict) else {}
             reference = uuid.uuid4().hex[:10].upper()
@@ -6342,7 +10317,16 @@ def create_vendor_bulk_ticket_batch(request: Any) -> tuple[dict[str, Any], int]:
                 "created_at": timezone.now().isoformat(),
                 "details_url": details_url,
             }
-            ticket = Ticket.objects.create(reference=reference, payload=ticket_payload)
+            ticket_security_fields = build_ticket_security_fields(
+                show=selected_show,
+                show_datetime=bulk_show_datetime,
+                payment_status="PAID",
+            )
+            ticket = Ticket.objects.create(
+                reference=reference,
+                payload=ticket_payload,
+                **ticket_security_fields,
+            )
             generated_items.append(
                 BulkTicketItem(
                     batch=batch,
@@ -6436,9 +10420,17 @@ def export_vendor_bulk_ticket_batch(request: Any, batch: BulkTicketBatch) -> tup
 def calculate_dynamic_ticket_price(payload: dict[str, Any]) -> tuple[dict[str, Any], int]:
     """Calculate final ticket price dynamically for selected seats and context."""
     context = _resolve_booking_context(payload)
-    selected_seats = context.get("selected_seats") or []
+    selected_seats = _normalize_seat_labels(context.get("selected_seats") or [])
     if not selected_seats:
         return {"message": "selected_seats are required."}, status.HTTP_400_BAD_REQUEST
+
+    lock_requested = parse_bool(coalesce(payload, "lock_price", "lockPrice"), default=True)
+    use_preview_cache = parse_bool(coalesce(payload, "use_cache", "useCache"), default=True) and not lock_requested
+    preview_cache_key = _pricing_preview_cache_key(payload, context)
+    if use_preview_cache:
+        cached = cache.get(preview_cache_key)
+        if isinstance(cached, dict):
+            return cached, status.HTTP_200_OK
 
     show = _resolve_show_for_context(context)
     if not show:
@@ -6455,12 +10447,20 @@ def calculate_dynamic_ticket_price(payload: dict[str, Any]) -> tuple[dict[str, A
         screen = Screen.objects.filter(vendor_id=show.vendor_id).order_by("id").first()
 
     event_name = str(coalesce(payload, "event", "event_name", "festival", "festival_name") or "").strip()
+    occupancy_payload = _showtime_occupancy_snapshot(showtime=showtime, screen=screen)
 
     seats_payload: list[dict[str, Any]] = []
+    seat_price_lock_map: dict[str, str] = {}
     total = Decimal("0.00")
+    base_subtotal = Decimal("0.00")
+    occupancy_adjustment_total = Decimal("0.00")
+    rule_adjustment_total = Decimal("0.00")
+    invalid_seats: list[str] = []
+
     for label in selected_seats:
         row_label, seat_number = _split_seat_label(label)
         if not seat_number:
+            invalid_seats.append(str(label))
             continue
 
         seat = None
@@ -6472,12 +10472,31 @@ def calculate_dynamic_ticket_price(payload: dict[str, Any]) -> tuple[dict[str, A
             showtime=showtime,
             screen=screen,
             seat_type=seat_type,
+            occupancy_snapshot=occupancy_payload,
             event_name=event_name,
         )
-        base_price = _seat_price_for_category(screen=screen, showtime=showtime, seat_type=seat_type)
+        base_price = _seat_price_for_category(screen=screen, showtime=showtime, seat_type=seat_type, show=show)
         normalized_label = _join_seat_label(row_label, seat_number)
+
+        occupancy_delta = Decimal("0.00")
+        for applied in applied_rules:
+            if str(applied.get("adjustment_type") or "").upper() != "SYSTEM_OCCUPANCY_MULTIPLIER":
+                continue
+            before_value = _parse_signed_price_amount(applied.get("before")) or Decimal("0.00")
+            after_value = _parse_signed_price_amount(applied.get("after")) or Decimal("0.00")
+            occupancy_delta += (after_value - before_value)
+
         if final_price is not None:
             total += final_price
+            seat_price_lock_map[normalize_seat_label(normalized_label)] = f"{final_price.quantize(Decimal('0.01'))}"
+        if base_price is not None:
+            base_subtotal += base_price
+        base_for_delta = base_price or Decimal("0.00")
+        final_for_delta = final_price or Decimal("0.00")
+        seat_delta = final_for_delta - base_for_delta
+        rule_adjustment_total += (seat_delta - occupancy_delta)
+        occupancy_adjustment_total += occupancy_delta
+
         seats_payload.append(
             {
                 "label": normalized_label,
@@ -6487,6 +10506,12 @@ def calculate_dynamic_ticket_price(payload: dict[str, Any]) -> tuple[dict[str, A
                 "applied_rules": applied_rules,
             }
         )
+
+    if invalid_seats:
+        return {
+            "message": "Some selected_seats are invalid.",
+            "invalid_seats": invalid_seats,
+        }, status.HTTP_400_BAD_REQUEST
 
     normalized_total = total.quantize(Decimal("0.01"))
     coupon_payload = None
@@ -6519,18 +10544,64 @@ def calculate_dynamic_ticket_price(payload: dict[str, Any]) -> tuple[dict[str, A
     else:
         promo_payload = None
 
-    return {
+    lock_payload = None
+    if lock_requested:
+        lock_payload = _create_price_lock(
+            {
+                "show_id": show.id,
+                "showtime_id": showtime.id if showtime else None,
+                "hall": hall,
+                "selected_seats": [seat.get("label") for seat in seats_payload],
+                "seat_prices": seat_price_lock_map,
+                "subtotal": f"{normalized_total}",
+                "currency": "NPR",
+                "occupancy": occupancy_payload,
+            },
+            ttl_seconds=_settings_int("PRICING_LOCK_TTL_SECONDS", PRICING_LOCK_TTL_SECONDS),
+        )
+
+    category_snapshot_payload, _ = get_show_dynamic_prices(
+        {
+            "show_id": show.id,
+            "hall": hall,
+            "event": event_name,
+        }
+    )
+
+    response_payload = {
         "show_id": show.id,
         "showtime_id": showtime.id if showtime else None,
         "currency": "NPR",
         "seat_count": len(seats_payload),
         "seats": seats_payload,
+        "occupancy": occupancy_payload,
+        "dynamic_by_category": category_snapshot_payload.get("categories") or {},
+        "pricing_indicator": "Price may increase as seats fill.",
+        "breakdown": {
+            "base_subtotal": float(base_subtotal.quantize(Decimal("0.01"))),
+            "rule_adjustment": float(rule_adjustment_total.quantize(Decimal("0.01"))),
+            "occupancy_adjustment": float(occupancy_adjustment_total.quantize(Decimal("0.01"))),
+            "subtotal": float(normalized_total),
+            "discount_amount": float(discount_amount),
+            "final_total": float(payable_total),
+        },
         "subtotal": float(normalized_total),
         "discount_amount": float(discount_amount),
         "total": float(payable_total),
         "coupon": coupon_payload,
         "promo_code": promo_payload,
-    }, status.HTTP_200_OK
+    }
+    if lock_payload:
+        response_payload["price_lock"] = lock_payload
+
+    if use_preview_cache:
+        cache.set(
+            preview_cache_key,
+            response_payload,
+            timeout=PRICING_PREVIEW_CACHE_TTL_SECONDS,
+        )
+
+    return response_payload, status.HTTP_200_OK
 
 
 def _row_label_from_index(index: int) -> str:
@@ -6567,6 +10638,53 @@ def _parse_positive_int(
     return max(minimum, min(maximum, parsed))
 
 
+def _payload_has_non_empty_value(payload: dict[str, Any], *keys: str) -> bool:
+    """Return True when any provided payload key has a meaningful value."""
+    for key in keys:
+        if key not in payload:
+            continue
+        value = payload.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        return True
+    return False
+
+
+def _parse_numeric_seat_number(value: Any) -> Optional[int]:
+    """Extract a numeric seat index from seat labels like '1' or 'S12'."""
+    match = re.search(r"\d+", str(value or "").strip())
+    if not match:
+        return None
+    try:
+        parsed = int(match.group(0))
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _seat_has_booked_history(seat: Seat) -> bool:
+    """Return True if a seat is already sold/booked in any show."""
+    if seat.booking_seats.exists():
+        return True
+    return seat.availabilities.filter(
+        Q(seat_status__iexact=SEAT_STATUS_BOOKED)
+        | Q(seat_status__iexact=SEAT_STATUS_SOLD)
+    ).exists()
+
+
+def _seat_has_layout_mutation_lock(seat: Seat) -> bool:
+    """Return True when seat cannot be removed due active usage/locks."""
+    if _seat_has_booked_history(seat):
+        return True
+    now = timezone.now()
+    return seat.availabilities.filter(
+        Q(seat_status__iexact=SEAT_STATUS_UNAVAILABLE)
+        | Q(locked_until__gt=now)
+    ).exists()
+
+
 def _normalize_seat_category(value: Any) -> str:
     """Normalize free-text seat category labels."""
     text = str(value or "").strip().lower()
@@ -6577,6 +10695,16 @@ def _normalize_seat_category(value: Any) -> str:
     if text.startswith("exec"):
         return SEAT_CATEGORY_EXECUTIVE
     return SEAT_CATEGORY_NORMAL
+
+
+def _rule_categories_for_seat(seat_type: Any) -> set[str]:
+    """Return all rule category values compatible with a seat type."""
+    normalized = _normalize_seat_category(seat_type)
+    aliases = SEAT_CATEGORY_RULE_ALIASES.get(normalized)
+    if aliases:
+        return set(aliases)
+    primary = SEAT_CATEGORY_RULE_VALUES.get(normalized, PricingRule.SEAT_CATEGORY_NORMAL)
+    return {primary}
 
 
 def _parse_price_amount(value: Any) -> Optional[Decimal]:
@@ -6590,6 +10718,222 @@ def _parse_price_amount(value: Any) -> Optional[Decimal]:
     if parsed < Decimal("0"):
         return None
     return parsed.quantize(Decimal("0.01"))
+
+
+def _parse_signed_price_amount(value: Any) -> Optional[Decimal]:
+    """Parse signed price values like +50/-25.5 and quantize to 0.01."""
+    if value in (None, ""):
+        return None
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    return parsed.quantize(Decimal("0.01"))
+
+
+def _pricing_preview_cache_key(payload: dict[str, Any], context: dict[str, Any]) -> str:
+    """Build stable cache key for preview requests with short-lived context."""
+    selected = sorted(_normalize_seat_labels(context.get("selected_seats") or []), key=_seat_sort_key)
+    key_payload = {
+        "show_id": context.get("show_id"),
+        "movie_id": context.get("movie_id"),
+        "cinema_id": context.get("cinema_id"),
+        "show_date": context.get("show_date").isoformat() if context.get("show_date") else None,
+        "show_time": context.get("show_time").strftime("%H:%M") if context.get("show_time") else None,
+        "hall": str(context.get("hall") or "").strip().lower(),
+        "event": str(coalesce(payload, "event", "event_name", "festival", "festival_name") or "").strip().lower(),
+        "coupon": str(coalesce(payload, "coupon_code", "couponCode", "code") or "").strip().upper(),
+        "selected": selected,
+    }
+    encoded = json.dumps(key_payload, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    return f"{PRICING_PREVIEW_CACHE_PREFIX}{digest}"
+
+
+def _pricing_lock_cache_key(lock_token: str) -> str:
+    token = str(lock_token or "").strip()
+    return f"{PRICING_LOCK_CACHE_PREFIX}{token}"
+
+
+def _create_price_lock(payload: dict[str, Any], ttl_seconds: int = PRICING_LOCK_TTL_SECONDS) -> dict[str, Any]:
+    """Persist locked price snapshot for checkout consistency."""
+    token = uuid.uuid4().hex
+    now = timezone.now()
+    expires_at = now + timedelta(seconds=max(60, int(ttl_seconds or PRICING_LOCK_TTL_SECONDS)))
+    snapshot = {
+        **payload,
+        "token": token,
+        "created_at": now.isoformat(),
+        "expires_at": expires_at.isoformat(),
+    }
+    cache.set(_pricing_lock_cache_key(token), snapshot, timeout=max(60, int(ttl_seconds or PRICING_LOCK_TTL_SECONDS)))
+    return {
+        "token": token,
+        "expires_at": expires_at.isoformat(),
+        "ttl_seconds": max(60, int(ttl_seconds or PRICING_LOCK_TTL_SECONDS)),
+    }
+
+
+def _load_price_lock(lock_token: Any) -> Optional[dict[str, Any]]:
+    token = str(lock_token or "").strip()
+    if not token:
+        return None
+    payload = cache.get(_pricing_lock_cache_key(token))
+    return payload if isinstance(payload, dict) else None
+
+
+def _extract_price_lock_token(payload: dict[str, Any]) -> str:
+    """Extract a lock token from top-level payload, booking, or pricing objects."""
+    booking_payload = payload.get("booking") if isinstance(payload.get("booking"), dict) else {}
+    booking_context = payload.get("bookingContext") if isinstance(payload.get("bookingContext"), dict) else {}
+    pricing_payload = payload.get("pricing") if isinstance(payload.get("pricing"), dict) else {}
+    return str(
+        coalesce(
+            payload,
+            "price_lock_token",
+            "priceLockToken",
+            default=coalesce(
+                pricing_payload,
+                "price_lock_token",
+                "priceLockToken",
+                default=coalesce(
+                    booking_payload,
+                    "price_lock_token",
+                    "priceLockToken",
+                    default=coalesce(booking_context, "price_lock_token", "priceLockToken", default=""),
+                ),
+            ),
+        )
+        or ""
+    ).strip()
+
+
+def _seat_price_from_lock(lock_snapshot: Optional[dict[str, Any]], seat_label: str) -> Optional[Decimal]:
+    """Read locked seat price from cached lock snapshot payload."""
+    if not isinstance(lock_snapshot, dict):
+        return None
+    seat_prices = lock_snapshot.get("seat_prices")
+    if not isinstance(seat_prices, dict):
+        return None
+    return _parse_price_amount(seat_prices.get(normalize_seat_label(seat_label)))
+
+
+def normalize_seat_label(value: Any) -> str:
+    """Normalize seat labels to comparable uppercase format."""
+    return str(value or "").replace(" ", "").strip().upper()
+
+
+def _is_price_lock_compatible(
+    lock_snapshot: Optional[dict[str, Any]],
+    *,
+    show: Optional[Show],
+    showtime: Optional[Showtime],
+    selected_seats: list[str],
+) -> bool:
+    if not isinstance(lock_snapshot, dict) or not show:
+        return False
+    locked_show_id = _coerce_int(lock_snapshot.get("show_id"))
+    if locked_show_id and locked_show_id != int(show.id):
+        return False
+    locked_showtime_id = _coerce_int(lock_snapshot.get("showtime_id"))
+    if locked_showtime_id and showtime and locked_showtime_id != int(showtime.id):
+        return False
+
+    locked_seats_raw = lock_snapshot.get("selected_seats")
+    if isinstance(locked_seats_raw, list):
+        locked_seats = sorted([normalize_seat_label(item) for item in locked_seats_raw if normalize_seat_label(item)], key=_seat_sort_key)
+        incoming_seats = sorted([normalize_seat_label(item) for item in selected_seats if normalize_seat_label(item)], key=_seat_sort_key)
+        if locked_seats != incoming_seats:
+            return False
+
+    return True
+
+
+def _showtime_occupancy_snapshot(
+    *,
+    showtime: Optional[Showtime],
+    screen: Optional[Screen],
+) -> dict[str, Any]:
+    """Compute booked seat ratio with short cache to avoid repeated heavy counting."""
+    if not showtime:
+        return {
+            "booked_seats": 0,
+            "total_seats": int(screen.capacity or 0) if screen and screen.capacity else 0,
+            "occupancy_percent": 0.0,
+            "occupancy_multiplier": float(PRICING_OCCUPANCY_NORMAL_MULTIPLIER),
+            "occupancy_band": "NORMAL",
+        }
+
+    cache_key = f"{PRICING_OCCUPANCY_CACHE_PREFIX}{showtime.id}"
+    cached = cache.get(cache_key)
+    if isinstance(cached, dict):
+        return cached
+
+    booked_from_availability = SeatAvailability.objects.filter(
+        showtime_id=showtime.id,
+        seat_status__in=[SEAT_STATUS_BOOKED, SEAT_STATUS_SOLD],
+    ).count()
+    booked_from_bookings = (
+        BookingSeat.objects.filter(showtime_id=showtime.id)
+        .exclude(booking__booking_status__iexact=BOOKING_STATUS_CANCELLED)
+        .values("seat_id")
+        .distinct()
+        .count()
+    )
+    booked_seats = max(int(booked_from_availability or 0), int(booked_from_bookings or 0))
+
+    if screen and screen.id:
+        total_seats = Seat.objects.filter(screen_id=screen.id).count()
+        if total_seats <= 0:
+            total_seats = int(screen.capacity or 0)
+    else:
+        total_seats = 0
+
+    if total_seats <= 0:
+        occupancy_percent = Decimal("0.00")
+    else:
+        occupancy_percent = ((Decimal(booked_seats) / Decimal(total_seats)) * Decimal("100")).quantize(Decimal("0.01"))
+
+    if occupancy_percent <= PRICING_OCCUPANCY_LOW_MAX:
+        occupancy_band = "LOW"
+        occupancy_multiplier = PRICING_OCCUPANCY_LOW_MULTIPLIER
+    elif occupancy_percent < PRICING_OCCUPANCY_HIGH_MIN:
+        occupancy_band = "NORMAL"
+        occupancy_multiplier = PRICING_OCCUPANCY_NORMAL_MULTIPLIER
+    else:
+        occupancy_band = "HIGH"
+        occupancy_multiplier = PRICING_OCCUPANCY_HIGH_MULTIPLIER
+
+    payload = {
+        "booked_seats": int(booked_seats),
+        "total_seats": int(total_seats),
+        "occupancy_percent": float(occupancy_percent),
+        "occupancy_multiplier": float(occupancy_multiplier),
+        "occupancy_band": occupancy_band,
+    }
+    cache.set(cache_key, payload, timeout=PRICING_OCCUPANCY_CACHE_TTL_SECONDS)
+    return payload
+
+
+def _is_time_in_range(
+    current: Optional[time_cls],
+    start: Optional[time_cls],
+    end: Optional[time_cls],
+) -> bool:
+    """Check if current time falls in [start,end], including overnight windows."""
+    if not current:
+        return True
+    if not start and not end:
+        return True
+    if start and not end:
+        return current >= start
+    if end and not start:
+        return current <= end
+    if not start or not end:
+        return True
+    if start <= end:
+        return start <= current <= end
+    return current >= start or current <= end
 
 
 def _collect_screen_category_prices(
@@ -6632,9 +10976,31 @@ def _seat_price_for_category(
     screen: Optional[Screen],
     showtime: Optional[Showtime],
     seat_type: Any,
+    show: Optional[Show] = None,
 ) -> Optional[Decimal]:
     """Resolve effective seat price for one category from screen/showtime values."""
-    category_key = SEAT_CATEGORY_KEYS.get(_normalize_seat_category(seat_type), "normal")
+    normalized = _normalize_seat_category(seat_type)
+    category_key = SEAT_CATEGORY_KEYS.get(normalized, "normal")
+
+    if show and show.id:
+        candidates = list(_rule_categories_for_seat(normalized))
+        primary = _normalize_rule_seat_category(normalized)
+        show_base_prices = list(
+            ShowBasePrice.objects.filter(
+                show_id=show.id,
+                is_active=True,
+                seat_category__in=candidates,
+            ).order_by("id")
+        )
+        if show_base_prices:
+            preferred = next(
+                (item for item in show_base_prices if str(item.seat_category or "").upper() == primary),
+                show_base_prices[0],
+            )
+            parsed = _parse_price_amount(preferred.base_price)
+            if parsed is not None:
+                return parsed
+
     return _collect_screen_category_prices(screen=screen, showtime=showtime).get(category_key)
 
 
@@ -6687,15 +11053,112 @@ def _apply_pricing_adjustment(
     return result.quantize(Decimal("0.01"))
 
 
+def _rule_matches_day(rule: PricingRule, show_date: Optional[date_cls]) -> bool:
+    """Return True when rule day constraints match the selected show date."""
+    if not show_date:
+        return True
+
+    day_code = WEEKDAY_TO_DAY_CODE.get(show_date.weekday(), PricingRule.DAY_OF_WEEK_MON)
+    day_of_week = str(getattr(rule, "day_of_week", "") or "").strip().upper() or PricingRule.DAY_OF_WEEK_ALL
+    is_weekend = show_date.weekday() >= 5
+    if day_of_week == PricingRule.DAY_OF_WEEK_WEEKDAY and is_weekend:
+        return False
+    if day_of_week == PricingRule.DAY_OF_WEEK_WEEKEND and not is_weekend:
+        return False
+    if day_of_week not in {
+        PricingRule.DAY_OF_WEEK_ALL,
+        PricingRule.DAY_OF_WEEK_WEEKDAY,
+        PricingRule.DAY_OF_WEEK_WEEKEND,
+    } and day_of_week != day_code:
+        return False
+
+    # Backward compatibility for legacy day_type rules.
+    day_type = str(getattr(rule, "day_type", "") or "").strip().upper() or PricingRule.DAY_TYPE_ALL
+    if day_type == PricingRule.DAY_TYPE_WEEKDAY and is_weekend:
+        return False
+    if day_type == PricingRule.DAY_TYPE_WEEKEND and not is_weekend:
+        return False
+    return True
+
+
+def _rule_matches_occupancy(rule: PricingRule, occupancy_percent: Decimal) -> bool:
+    """Apply occupancy threshold rules; discount-like rules use <= threshold, surcharge uses >=."""
+    threshold = _parse_price_amount(getattr(rule, "occupancy_threshold", None))
+    if threshold is None:
+        return True
+
+    multiplier = _parse_signed_price_amount(getattr(rule, "price_multiplier", None))
+    flat_adjustment = _parse_signed_price_amount(getattr(rule, "flat_adjustment", None))
+    legacy_adjustment = _parse_signed_price_amount(getattr(rule, "adjustment_value", None))
+    adjustment_type = str(getattr(rule, "adjustment_type", "") or "").strip().upper()
+
+    is_discount_like = (
+        (multiplier is not None and multiplier < Decimal("1"))
+        or (flat_adjustment is not None and flat_adjustment < Decimal("0"))
+        or (adjustment_type == PricingRule.ADJUSTMENT_PERCENT and legacy_adjustment is not None and legacy_adjustment < Decimal("0"))
+        or (adjustment_type == PricingRule.ADJUSTMENT_INCREMENT and legacy_adjustment is not None and legacy_adjustment < Decimal("0"))
+    )
+
+    if is_discount_like:
+        return occupancy_percent <= threshold
+    return occupancy_percent >= threshold
+
+
+def _pricing_rule_override_key(rule: PricingRule) -> tuple[Any, ...]:
+    """Build override key so vendor-specific rules can override matching global scope."""
+    return (
+        int(rule.movie_id or 0),
+        str(rule.hall or "").strip().lower(),
+        str(rule.seat_category or "").strip().upper(),
+        str(getattr(rule, "day_of_week", "") or "").strip().upper(),
+        str(getattr(rule, "day_type", "") or "").strip().upper(),
+        rule.start_time.isoformat() if getattr(rule, "start_time", None) else "",
+        rule.end_time.isoformat() if getattr(rule, "end_time", None) else "",
+        str(getattr(rule, "occupancy_threshold", "") or ""),
+        bool(getattr(rule, "is_festival_pricing", False)),
+        str(getattr(rule, "festival_name", "") or "").strip().lower(),
+    )
+
+
+def _apply_rule_price_modifiers(
+    current_price: Optional[Decimal],
+    rule: PricingRule,
+) -> tuple[Optional[Decimal], str, Optional[Decimal], Optional[Decimal]]:
+    """Apply modern multiplier/flat fields first, fallback to legacy adjustment fields."""
+    current = current_price if current_price is not None else Decimal("0.00")
+    multiplier = _parse_signed_price_amount(getattr(rule, "price_multiplier", None))
+    flat_adjustment = _parse_signed_price_amount(getattr(rule, "flat_adjustment", None))
+
+    if multiplier is not None or flat_adjustment is not None:
+        next_price = current
+        if multiplier is not None:
+            next_price = (next_price * multiplier).quantize(Decimal("0.01"))
+        if flat_adjustment is not None:
+            next_price = (next_price + flat_adjustment).quantize(Decimal("0.01"))
+        if next_price < Decimal("0"):
+            next_price = Decimal("0.00")
+        return next_price, "RULE_COMPOSITE", multiplier, flat_adjustment
+
+    legacy_adjustment = _parse_signed_price_amount(getattr(rule, "adjustment_value", None))
+    next_price = _apply_pricing_adjustment(current, rule.adjustment_type, legacy_adjustment)
+    return next_price, str(rule.adjustment_type or "").upper(), None, legacy_adjustment
+
+
 def _list_applicable_pricing_rules(
     show: Show,
-    seat_category_rule: str,
+    seat_category_rules: set[str],
     hall: Optional[str],
     show_date: Optional[date_cls],
+    show_time: Optional[time_cls],
+    occupancy_percent: Decimal,
     event_name: str = "",
 ) -> list[PricingRule]:
-    """List active vendor pricing rules applicable to one show + seat category."""
-    queryset = PricingRule.objects.filter(vendor_id=show.vendor_id, is_active=True).filter(
+    """List active pricing rules (vendor + global fallback) for one show context."""
+    queryset = PricingRule.objects.filter(
+        is_active=True,
+    ).filter(
+        Q(vendor_id=show.vendor_id) | Q(vendor__isnull=True)
+    ).filter(
         Q(movie_id__isnull=True) | Q(movie_id=show.movie_id)
     )
 
@@ -6711,16 +11174,30 @@ def _list_applicable_pricing_rules(
             Q(end_date__isnull=True) | Q(end_date__gte=show_date),
         )
 
-    day_type = PricingRule.DAY_TYPE_WEEKEND if _is_weekend(show_date) else PricingRule.DAY_TYPE_WEEKDAY
-    queryset = queryset.filter(Q(day_type=PricingRule.DAY_TYPE_ALL) | Q(day_type=day_type))
-    queryset = queryset.filter(
-        Q(seat_category=PricingRule.SEAT_CATEGORY_ALL) | Q(seat_category=seat_category_rule)
-    )
+    category_query = Q(seat_category=PricingRule.SEAT_CATEGORY_ALL)
+    for category_value in seat_category_rules:
+        category_query |= Q(seat_category=str(category_value).upper())
+    queryset = queryset.filter(category_query)
 
     event_text = str(event_name or "").strip().lower()
     rules = list(queryset.order_by("priority", "id"))
+
+    vendor_rules = [rule for rule in rules if rule.vendor_id == show.vendor_id]
+    global_rules = [rule for rule in rules if rule.vendor_id is None]
+    vendor_override_keys = {_pricing_rule_override_key(rule) for rule in vendor_rules}
+    merged_rules = vendor_rules + [
+        rule for rule in global_rules if _pricing_rule_override_key(rule) not in vendor_override_keys
+    ]
+
     applicable: list[PricingRule] = []
-    for rule in rules:
+    for rule in sorted(merged_rules, key=lambda item: (int(item.priority or 0), int(item.id or 0))):
+        if not _rule_matches_day(rule, show_date):
+            continue
+        if not _is_time_in_range(show_time, getattr(rule, "start_time", None), getattr(rule, "end_time", None)):
+            continue
+        if not _rule_matches_occupancy(rule, occupancy_percent):
+            continue
+
         if not rule.is_festival_pricing:
             applicable.append(rule)
             continue
@@ -6737,10 +11214,11 @@ def _resolve_dynamic_seat_price(
     showtime: Optional[Showtime],
     screen: Optional[Screen],
     seat_type: Any,
+    occupancy_snapshot: Optional[dict[str, Any]] = None,
     event_name: str = "",
 ) -> tuple[Optional[Decimal], list[dict[str, Any]]]:
     """Resolve final seat price after applying vendor pricing rules."""
-    base_price = _seat_price_for_category(screen=screen, showtime=showtime, seat_type=seat_type)
+    base_price = _seat_price_for_category(screen=screen, showtime=showtime, seat_type=seat_type, show=show)
     if base_price is None:
         base_price = _parse_price_amount(show.price)
 
@@ -6750,33 +11228,99 @@ def _resolve_dynamic_seat_price(
     elif show.hall:
         hall = str(show.hall)
     show_date = show.show_date
-    seat_category_rule = _normalize_rule_seat_category(seat_type)
+    show_time = show.start_time
+    seat_category_rules = _rule_categories_for_seat(seat_type)
+    occupancy_payload = occupancy_snapshot or _showtime_occupancy_snapshot(showtime=showtime, screen=screen)
+    occupancy_percent = _parse_price_amount(occupancy_payload.get("occupancy_percent")) or Decimal("0.00")
     rules = _list_applicable_pricing_rules(
         show=show,
-        seat_category_rule=seat_category_rule,
+        seat_category_rules=seat_category_rules,
         hall=hall,
         show_date=show_date,
+        show_time=show_time,
+        occupancy_percent=occupancy_percent,
         event_name=event_name,
     )
 
     current = base_price
     applied: list[dict[str, Any]] = []
     for rule in rules:
-        adjustment_value = _parse_price_amount(rule.adjustment_value)
         before = current
-        current = _apply_pricing_adjustment(current, rule.adjustment_type, adjustment_value)
+        current, mode, multiplier, flat_adjustment = _apply_rule_price_modifiers(current, rule)
+
+        min_cap = _parse_price_amount(getattr(rule, "min_price_cap", None))
+        max_cap = _parse_price_amount(getattr(rule, "max_price_cap", None))
+        if current is not None and min_cap is not None and current < min_cap:
+            current = min_cap
+        if current is not None and max_cap is not None and current > max_cap:
+            current = max_cap
+
         applied.append(
             {
                 "rule_id": rule.id,
                 "name": rule.name,
-                "adjustment_type": rule.adjustment_type,
-                "adjustment_value": float(adjustment_value) if adjustment_value is not None else None,
+                "adjustment_type": mode,
+                "price_multiplier": float(multiplier) if multiplier is not None else None,
+                "flat_adjustment": float(flat_adjustment) if flat_adjustment is not None else None,
+                "adjustment_value": float(_parse_signed_price_amount(rule.adjustment_value) or Decimal("0.00")),
                 "before": float(before) if before is not None else None,
                 "after": float(current) if current is not None else None,
                 "is_festival_pricing": bool(rule.is_festival_pricing),
                 "festival_name": rule.festival_name,
+                "occupancy_threshold": float(rule.occupancy_threshold) if rule.occupancy_threshold is not None else None,
             }
         )
+
+    # Roll out occupancy slab pricing only when at least one rule is configured for this seat context.
+    apply_occupancy_slab = bool(rules)
+    occupancy_multiplier = _parse_price_amount(occupancy_payload.get("occupancy_multiplier"))
+    if apply_occupancy_slab and current is not None and occupancy_multiplier is not None and occupancy_multiplier != Decimal("1.00"):
+        before = current
+        current = (current * occupancy_multiplier).quantize(Decimal("0.01"))
+        applied.append(
+            {
+                "rule_id": None,
+                "name": "Occupancy Demand Slab",
+                "adjustment_type": "SYSTEM_OCCUPANCY_MULTIPLIER",
+                "price_multiplier": float(occupancy_multiplier),
+                "flat_adjustment": None,
+                "adjustment_value": float(occupancy_multiplier),
+                "before": float(before),
+                "after": float(current),
+                "occupancy_band": occupancy_payload.get("occupancy_band"),
+                "occupancy_percent": occupancy_payload.get("occupancy_percent"),
+            }
+        )
+
+    if base_price is not None and current is not None:
+        min_allowed = (base_price * PRICING_MIN_PRICE_FACTOR).quantize(Decimal("0.01"))
+        max_allowed = (base_price * PRICING_MAX_PRICE_FACTOR).quantize(Decimal("0.01"))
+        if current < min_allowed:
+            before = current
+            current = min_allowed
+            applied.append(
+                {
+                    "rule_id": None,
+                    "name": "Safety Floor Cap",
+                    "adjustment_type": "SYSTEM_MIN_CAP",
+                    "before": float(before),
+                    "after": float(current),
+                    "cap_value": float(min_allowed),
+                }
+            )
+        if current > max_allowed:
+            before = current
+            current = max_allowed
+            applied.append(
+                {
+                    "rule_id": None,
+                    "name": "Safety Ceiling Cap",
+                    "adjustment_type": "SYSTEM_MAX_CAP",
+                    "before": float(before),
+                    "after": float(current),
+                    "cap_value": float(max_allowed),
+                }
+            )
 
     return current, applied
 
@@ -6912,6 +11456,8 @@ def _build_default_layout_payload() -> dict[str, Any]:
         "sold_seats": [],
         "unavailable_seats": [],
         "reserved_seats": [],
+        "reserved_seat_locks": {},
+        "reservation_hold_minutes": RESERVE_HOLD_MINUTES,
         "category_prices": {
             "normal": None,
             "executive": None,
@@ -6922,6 +11468,289 @@ def _build_default_layout_payload() -> dict[str, Any]:
         "total_rows": 10,
         "total_columns": 15,
     }
+
+
+def _summarize_screen_layout(
+    screen: Screen,
+    *,
+    seat_count_hint: Optional[int] = None,
+) -> dict[str, Any]:
+    """Summarize hall seat-grid metrics for hall listing payloads."""
+    category_rows = {
+        "normal": 0,
+        "executive": 0,
+        "premium": 0,
+        "vip": 0,
+    }
+    seat_count = int(seat_count_hint or 0)
+    if seat_count <= 0:
+        seat_count = Seat.objects.filter(screen_id=screen.id).count()
+    if seat_count <= 0:
+        return {
+            "seat_count": 0,
+            "total_rows": 0,
+            "total_columns": 0,
+            "category_rows": category_rows,
+        }
+
+    seats = list(
+        Seat.objects.filter(screen_id=screen.id).values_list(
+            "row_label", "seat_number", "seat_type"
+        )
+    )
+    if not seats:
+        return {
+            "seat_count": seat_count,
+            "total_rows": 0,
+            "total_columns": 0,
+            "category_rows": category_rows,
+        }
+
+    row_labels = sorted(
+        {
+            str(row_label or "").strip().upper()
+            for row_label, _, _ in seats
+            if str(row_label or "").strip()
+        },
+        key=_row_label_sort_key,
+    )
+
+    column_set: set[int] = set()
+    row_category_map: dict[str, str] = {}
+    for row_label, seat_number, seat_type in seats:
+        parsed_column = _parse_numeric_seat_number(seat_number)
+        if parsed_column is not None:
+            column_set.add(parsed_column)
+
+        row_text = str(row_label or "").strip().upper()
+        if not row_text or row_text in row_category_map:
+            continue
+        row_category_map[row_text] = _normalize_seat_category(seat_type)
+
+    for row_label in row_labels:
+        category_label = row_category_map.get(row_label, SEAT_CATEGORY_NORMAL)
+        key = SEAT_CATEGORY_KEYS.get(category_label, "normal")
+        category_rows[key] += 1
+
+    return {
+        "seat_count": seat_count,
+        "total_rows": len(row_labels),
+        "total_columns": len(column_set),
+        "category_rows": category_rows,
+    }
+
+
+_AUTO_HALL_PATTERN = re.compile(r"^hall\s+([a-z]+)$", re.IGNORECASE)
+
+
+def _hall_letters_to_index(value: str) -> Optional[int]:
+    """Convert alphabetical hall suffix (A, Z, AA) to a 1-based index."""
+    letters = str(value or "").strip().upper()
+    if not letters or not letters.isalpha():
+        return None
+    index = 0
+    for char in letters:
+        index = (index * 26) + (ord(char) - ord("A") + 1)
+    return index if index > 0 else None
+
+
+def _hall_index_to_letters(index: int) -> str:
+    """Convert a 1-based index to alphabetical hall suffix (1->A, 27->AA)."""
+    value = max(1, int(index))
+    letters: list[str] = []
+    while value > 0:
+        value, remainder = divmod(value - 1, 26)
+        letters.append(chr(ord("A") + remainder))
+    return "".join(reversed(letters))
+
+
+def _hall_name_sort_key(value: Any) -> tuple[int, int, str]:
+    """Sort auto-generated hall names in natural sequence before custom names."""
+    text = str(value or "").strip()
+    if not text:
+        return (2, 0, "")
+    match = _AUTO_HALL_PATTERN.fullmatch(text)
+    if match:
+        hall_index = _hall_letters_to_index(match.group(1))
+        if hall_index is not None:
+            return (0, hall_index, "")
+    return (1, 0, text.lower())
+
+
+def _next_auto_hall_name(vendor: Vendor) -> str:
+    """Return the next unique auto-generated hall name for one vendor."""
+    existing_names = [
+        str(item or "").strip()
+        for item in Screen.objects.filter(vendor_id=vendor.id).values_list(
+            "screen_number", flat=True
+        )
+    ]
+    occupied = {name.lower() for name in existing_names if name}
+
+    max_index = 0
+    for name in existing_names:
+        match = _AUTO_HALL_PATTERN.fullmatch(name)
+        if not match:
+            continue
+        hall_index = _hall_letters_to_index(match.group(1))
+        if hall_index and hall_index > max_index:
+            max_index = hall_index
+
+    next_index = max_index + 1
+    while next_index <= 10000:
+        candidate = f"Hall {_hall_index_to_letters(next_index)}"
+        if candidate.lower() not in occupied:
+            return candidate
+        next_index += 1
+
+    # Fallback should never be reached under normal usage.
+    return f"Hall {_hall_index_to_letters(max_index + 1)}"
+
+
+def _serialize_vendor_hall(screen: Screen) -> dict[str, Any]:
+    """Serialize hall metadata for vendor hall management views."""
+    seat_count_hint = getattr(screen, "seat_count", None)
+    seat_count = int(seat_count_hint or 0)
+    layout_summary = _summarize_screen_layout(screen, seat_count_hint=seat_count)
+    return {
+        "id": screen.id,
+        "hall": screen.screen_number,
+        "screen_type": screen.screen_type,
+        "capacity": int(screen.capacity or 0) if screen.capacity is not None else 0,
+        "seat_count": layout_summary["seat_count"],
+        "has_layout": bool(layout_summary["seat_count"] > 0),
+        "total_rows": layout_summary["total_rows"],
+        "total_columns": layout_summary["total_columns"],
+        "category_rows": layout_summary["category_rows"],
+        "status": screen.status,
+    }
+
+
+def list_vendor_halls(request: Any) -> tuple[dict[str, Any], int]:
+    """List halls/screens for the authenticated vendor."""
+    query_payload = {
+        key: request.query_params.get(key) for key in request.query_params.keys()
+    }
+    vendor, error_payload, status_code = _resolve_vendor_for_payload(request, query_payload)
+    if error_payload:
+        return error_payload, status_code
+
+    screens = list(
+        Screen.objects.filter(vendor_id=vendor.id)
+        .annotate(seat_count=Count("seats", distinct=True))
+        .order_by("id")
+    )
+    screens.sort(key=lambda item: _hall_name_sort_key(item.screen_number))
+
+    return {
+        "vendor_id": vendor.id,
+        "vendor_name": vendor.name,
+        "halls": [_serialize_vendor_hall(screen) for screen in screens],
+        "next_hall_name": _next_auto_hall_name(vendor),
+    }, status.HTTP_200_OK
+
+
+def create_vendor_hall(request: Any) -> tuple[dict[str, Any], int]:
+    """Create a new vendor hall with auto-generated sequential name."""
+    payload = get_payload(request)
+    vendor, error_payload, status_code = _resolve_vendor_for_payload(request, payload)
+    if error_payload:
+        return error_payload, status_code
+
+    screen_type_value = str(coalesce(payload, "screen_type", "screenType") or "").strip() or None
+
+    total_rows = _parse_positive_int(
+        coalesce(payload, "rows", "row_count", "rowCount"),
+        default=10,
+        minimum=1,
+        maximum=52,
+    )
+    total_columns = _parse_positive_int(
+        coalesce(payload, "columns", "cols", "column_count", "columnCount"),
+        default=15,
+        minimum=1,
+        maximum=40,
+    )
+    category_counts = _normalize_category_counts(total_rows, payload)
+
+    created_screen = None
+    category_prices: dict[str, Optional[Decimal]] = {
+        "normal": None,
+        "executive": None,
+        "premium": None,
+        "vip": None,
+    }
+    created_seat_count = 0
+    with transaction.atomic():
+        for _ in range(10):
+            next_name = _next_auto_hall_name(vendor)
+            try:
+                created_screen = Screen.objects.create(
+                    vendor_id=vendor.id,
+                    screen_number=next_name,
+                    screen_type=screen_type_value,
+                    status="Active",
+                )
+                break
+            except IntegrityError:
+                continue
+
+        if created_screen:
+            category_prices = _normalize_category_prices(payload, screen=created_screen)
+            created_screen.capacity = total_rows * total_columns
+            created_screen.normal_price = category_prices.get("normal")
+            created_screen.executive_price = category_prices.get("executive")
+            created_screen.premium_price = category_prices.get("premium")
+            created_screen.vip_price = category_prices.get("vip")
+            created_screen.status = "Active"
+            created_screen.save(
+                update_fields=[
+                    "capacity",
+                    "normal_price",
+                    "executive_price",
+                    "premium_price",
+                    "vip_price",
+                    "status",
+                ]
+            )
+
+            row_labels = [_row_label_from_index(index) for index in range(total_rows)]
+            row_category_map = _build_row_category_map(row_labels, category_counts)
+            seats_to_create: list[Seat] = []
+            for row_label in row_labels:
+                seat_category = row_category_map.get(row_label, SEAT_CATEGORY_NORMAL)
+                for col in range(1, total_columns + 1):
+                    seats_to_create.append(
+                        Seat(
+                            screen=created_screen,
+                            row_label=row_label,
+                            seat_number=str(col),
+                            seat_type=seat_category,
+                        )
+                    )
+            if seats_to_create:
+                Seat.objects.bulk_create(seats_to_create)
+                created_seat_count = len(seats_to_create)
+
+    if not created_screen:
+        return {
+            "message": "Unable to auto-generate a unique hall name. Please try again.",
+        }, status.HTTP_409_CONFLICT
+
+    created_screen.seat_count = created_seat_count
+    return {
+        "message": "Hall created with default seat layout.",
+        "vendor_id": vendor.id,
+        "hall": _serialize_vendor_hall(created_screen),
+        "layout": {
+            "total_rows": total_rows,
+            "total_columns": total_columns,
+            "category_rows": category_counts,
+            "category_prices": _serialize_category_prices(category_prices),
+            "total_seats": created_seat_count,
+        },
+        "next_hall_name": _next_auto_hall_name(vendor),
+    }, status.HTTP_201_CREATED
 
 
 def _resolve_vendor_for_payload(
@@ -7035,6 +11864,11 @@ def _build_screen_layout_payload(
     reserved_labels = (
         set(_collect_reserved_labels_for_showtime(showtime, lock=False)) if showtime else set()
     )
+    reserved_lock_deadlines = (
+        _collect_reserved_lock_deadlines_for_showtime(showtime, lock=False)
+        if showtime
+        else {}
+    )
     category_prices = _collect_screen_category_prices(screen=screen, showtime=showtime)
 
     category_rows: dict[str, set[str]] = {
@@ -7096,6 +11930,8 @@ def _build_screen_layout_payload(
         "sold_seats": sorted(sold_labels, key=_seat_sort_key),
         "unavailable_seats": sorted(unavailable_labels, key=_seat_sort_key),
         "reserved_seats": sorted(reserved_labels, key=_seat_sort_key),
+        "reserved_seat_locks": reserved_lock_deadlines,
+        "reservation_hold_minutes": RESERVE_HOLD_MINUTES,
         "total_rows": len(row_labels),
         "total_columns": len(seat_columns),
         "total_seats": len(seat_items),
@@ -7119,7 +11955,13 @@ def list_vendor_seat_layout(request: Any) -> tuple[dict[str, Any], int]:
 
     screen = None
     if hall:
-        screen = Screen.objects.filter(vendor_id=vendor.id, screen_number=hall).first()
+        screen = Screen.objects.filter(vendor_id=vendor.id, screen_number__iexact=hall).first()
+        if screen:
+            hall = str(screen.screen_number or "").strip()
+        else:
+            return {
+                "message": "Selected hall does not exist.",
+            }, status.HTTP_404_NOT_FOUND
     if not screen:
         screen = Screen.objects.filter(vendor_id=vendor.id).order_by("id").first()
 
@@ -7150,12 +11992,43 @@ def create_or_update_vendor_seat_layout(request: Any) -> tuple[dict[str, Any], i
     if not hall:
         return {"message": "hall is required."}, status.HTTP_400_BAD_REQUEST
 
+    screen = Screen.objects.filter(vendor_id=vendor.id, screen_number__iexact=hall).first()
+    if not screen:
+        return {
+            "message": "Selected hall does not exist. Please add hall first.",
+        }, status.HTTP_400_BAD_REQUEST
+
+    hall = str(screen.screen_number or "").strip() or hall
+
+    existing_layout_seats = list(
+        Seat.objects.filter(screen=screen).order_by("row_label", "seat_number", "id")
+    )
+    existing_row_labels = sorted(
+        {
+            str(seat.row_label or "").strip().upper()
+            for seat in existing_layout_seats
+            if str(seat.row_label or "").strip()
+        },
+        key=_row_label_sort_key,
+    )
+    existing_column_set: set[int] = set()
+    for seat in existing_layout_seats:
+        parsed_column = _parse_numeric_seat_number(seat.seat_number)
+        if parsed_column is not None:
+            existing_column_set.add(parsed_column)
+    existing_columns = sorted(existing_column_set)
+
+    rows_provided = _payload_has_non_empty_value(payload, "rows", "row_count", "rowCount")
+
     total_rows = _parse_positive_int(
-        coalesce(payload, "rows", "row_count", "rowCount"), default=10, minimum=1, maximum=52
+        coalesce(payload, "rows", "row_count", "rowCount"),
+        default=len(existing_row_labels) if existing_row_labels else 10,
+        minimum=1,
+        maximum=52,
     )
     total_columns = _parse_positive_int(
         coalesce(payload, "columns", "cols", "column_count", "columnCount"),
-        default=15,
+        default=len(existing_columns) if existing_columns else 15,
         minimum=1,
         maximum=40,
     )
@@ -7164,49 +12037,94 @@ def create_or_update_vendor_seat_layout(request: Any) -> tuple[dict[str, Any], i
         if isinstance(payload.get("category_rows"), dict)
         else {}
     )
-    provided_counts = {
-        "normal": _parse_positive_int(
-            coalesce(raw_category_rows, "normal", default=coalesce(payload, "normal_rows", "normalRows", default=0)),
-            default=0,
-            minimum=0,
-            maximum=52,
-        ),
-        "executive": _parse_positive_int(
-            coalesce(
-                raw_category_rows,
-                "executive",
-                default=coalesce(payload, "executive_rows", "executiveRows", default=0),
-            ),
-            default=0,
-            minimum=0,
-            maximum=52,
-        ),
-        "premium": _parse_positive_int(
-            coalesce(raw_category_rows, "premium", default=coalesce(payload, "premium_rows", "premiumRows", default=0)),
-            default=0,
-            minimum=0,
-            maximum=52,
-        ),
-        "vip": _parse_positive_int(
-            coalesce(raw_category_rows, "vip", default=coalesce(payload, "vip_rows", "vipRows", default=0)),
-            default=0,
-            minimum=0,
-            maximum=52,
-        ),
-    }
-    provided_total = sum(provided_counts.values())
-    if provided_total > 0:
-        total_rows = max(1, min(52, provided_total))
-    category_counts = _normalize_category_counts(total_rows, payload)
-
-    screen, _ = Screen.objects.get_or_create(
-        vendor_id=vendor.id,
-        screen_number=hall,
-        defaults={
-            "screen_type": coalesce(payload, "screen_type", "screenType"),
-            "status": "Active",
-        },
+    has_category_row_overrides = bool(raw_category_rows) or _payload_has_non_empty_value(
+        payload,
+        "normal_rows",
+        "normalRows",
+        "executive_rows",
+        "executiveRows",
+        "premium_rows",
+        "premiumRows",
+        "vip_rows",
+        "vipRows",
     )
+
+    if has_category_row_overrides:
+        provided_counts = {
+            "normal": _parse_positive_int(
+                coalesce(
+                    raw_category_rows,
+                    "normal",
+                    default=coalesce(payload, "normal_rows", "normalRows", default=0),
+                ),
+                default=0,
+                minimum=0,
+                maximum=52,
+            ),
+            "executive": _parse_positive_int(
+                coalesce(
+                    raw_category_rows,
+                    "executive",
+                    default=coalesce(payload, "executive_rows", "executiveRows", default=0),
+                ),
+                default=0,
+                minimum=0,
+                maximum=52,
+            ),
+            "premium": _parse_positive_int(
+                coalesce(
+                    raw_category_rows,
+                    "premium",
+                    default=coalesce(payload, "premium_rows", "premiumRows", default=0),
+                ),
+                default=0,
+                minimum=0,
+                maximum=52,
+            ),
+            "vip": _parse_positive_int(
+                coalesce(
+                    raw_category_rows,
+                    "vip",
+                    default=coalesce(payload, "vip_rows", "vipRows", default=0),
+                ),
+                default=0,
+                minimum=0,
+                maximum=52,
+            ),
+        }
+        provided_total = sum(provided_counts.values())
+        if rows_provided and provided_total > 0 and provided_total != total_rows:
+            return {
+                "message": (
+                    f"rows ({total_rows}) must match the total category rows ({provided_total})."
+                )
+            }, status.HTTP_400_BAD_REQUEST
+        if provided_total > 0 and not rows_provided:
+            total_rows = max(1, min(52, provided_total))
+        category_counts = _normalize_category_counts(total_rows, payload)
+    elif existing_row_labels:
+        existing_category_counts = {
+            "normal": 0,
+            "executive": 0,
+            "premium": 0,
+            "vip": 0,
+        }
+        row_category_map_existing: dict[str, str] = {}
+        for seat in existing_layout_seats:
+            row_text = str(seat.row_label or "").strip().upper()
+            if not row_text or row_text in row_category_map_existing:
+                continue
+            row_category_map_existing[row_text] = _normalize_seat_category(seat.seat_type)
+        for row_label in existing_row_labels:
+            category_label = row_category_map_existing.get(row_label, SEAT_CATEGORY_NORMAL)
+            existing_category_counts[SEAT_CATEGORY_KEYS.get(category_label, "normal")] += 1
+        category_counts = _normalize_category_counts(
+            total_rows,
+            {"category_rows": existing_category_counts},
+        )
+    else:
+        category_counts = _default_category_counts(total_rows)
+
     screen.capacity = total_rows * total_columns
     provided_screen_type = coalesce(payload, "screen_type", "screenType")
     if provided_screen_type:
@@ -7231,6 +12149,7 @@ def create_or_update_vendor_seat_layout(request: Any) -> tuple[dict[str, Any], i
 
     row_labels = [_row_label_from_index(index) for index in range(total_rows)]
     row_category_map = _build_row_category_map(row_labels, category_counts)
+    mutation_conflicts = {"category_locked": [], "deletion_locked": []}
 
     desired_pairs = set()
     for row_label in row_labels:
@@ -7245,20 +12164,40 @@ def create_or_update_vendor_seat_layout(request: Any) -> tuple[dict[str, Any], i
                 defaults={"seat_type": seat_category},
             )
             if not created and _normalize_seat_category(seat.seat_type) != seat_category:
+                if _seat_has_booked_history(seat):
+                    mutation_conflicts["category_locked"].append(
+                        _join_seat_label(row_label, seat_number)
+                    )
+                    continue
                 seat.seat_type = seat_category
                 seat.save(update_fields=["seat_type"])
 
-    existing_seats = Seat.objects.filter(screen=screen)
-    for seat in existing_seats:
+    for seat in existing_layout_seats:
         pair = (str(seat.row_label or "").upper(), str(seat.seat_number or ""))
         if pair in desired_pairs:
             continue
-        if seat.booking_seats.exists() or seat.availabilities.exists():
+        if _seat_has_layout_mutation_lock(seat):
+            mutation_conflicts["deletion_locked"].append(
+                _join_seat_label(seat.row_label, seat.seat_number)
+            )
             continue
         seat.delete()
 
     show = _resolve_show_for_vendor(vendor, payload)
     showtime = _find_showtime_for_context(show, hall) if show else None
+    locked_category_seats = sorted(
+        set(mutation_conflicts["category_locked"]), key=_seat_sort_key
+    )
+    locked_deletion_seats = sorted(
+        set(mutation_conflicts["deletion_locked"]), key=_seat_sort_key
+    )
+    protected_count = len(locked_category_seats) + len(locked_deletion_seats)
+    message = "Seat layout saved."
+    if protected_count:
+        message = (
+            f"Seat layout saved. {protected_count} seat(s) were protected because they are already booked or actively locked."
+        )
+
     layout_payload = _build_screen_layout_payload(screen, showtime=showtime, show=show)
     layout_payload.update(
         {
@@ -7266,7 +12205,9 @@ def create_or_update_vendor_seat_layout(request: Any) -> tuple[dict[str, Any], i
             "vendor_name": vendor.name,
             "category_rows": category_counts,
             "category_prices": _serialize_category_prices(category_prices),
-            "message": "Seat layout saved.",
+            "locked_category_seats": locked_category_seats,
+            "locked_deletion_seats": locked_deletion_seats,
+            "message": message,
         }
     )
     return layout_payload, status.HTTP_200_OK
@@ -7315,12 +12256,15 @@ def update_vendor_seat_status(request: Any) -> tuple[dict[str, Any], int]:
                 conflicts["invalid"].append(label)
                 continue
 
-            seat, _ = Seat.objects.get_or_create(
+            seat = Seat.objects.filter(
                 screen=screen,
                 row_label=row_label or None,
                 seat_number=seat_number,
-                defaults={"seat_type": SEAT_CATEGORY_NORMAL},
-            )
+            ).first()
+            if not seat:
+                conflicts["invalid"].append(label)
+                continue
+
             availability, _ = SeatAvailability.objects.select_for_update().get_or_create(
                 seat=seat,
                 showtime=showtime,
@@ -7335,6 +12279,15 @@ def update_vendor_seat_status(request: Any) -> tuple[dict[str, Any], int]:
             availability.locked_until = None
             availability.save(update_fields=["seat_status", "locked_until", "last_updated"])
             updated.append(label)
+
+    if not updated and conflicts["invalid"] and not conflicts["booked"]:
+        return {
+            "message": "Selected seats are not part of this hall layout.",
+            "conflicts": {
+                "booked": sorted(conflicts["booked"], key=_seat_sort_key),
+                "invalid": sorted(conflicts["invalid"], key=_seat_sort_key),
+            },
+        }, status.HTTP_400_BAD_REQUEST
 
     layout_payload = _build_screen_layout_payload(screen, showtime=showtime, show=show)
     layout_payload.update(
@@ -7378,7 +12331,7 @@ def list_booking_seat_layout(payload: dict[str, Any]) -> tuple[dict[str, Any], i
     hall = str(context.get("hall") or show.hall or "").strip()
     screen = None
     if hall:
-        screen = Screen.objects.filter(vendor_id=show.vendor_id, screen_number=hall).first()
+        screen = Screen.objects.filter(vendor_id=show.vendor_id, screen_number__iexact=hall).first()
     if not screen:
         screen = Screen.objects.filter(vendor_id=show.vendor_id).order_by("id").first()
 
@@ -7429,11 +12382,15 @@ def reserve_booking_seats(request: Any) -> tuple[dict[str, Any], int]:
                 conflicts["invalid"].append(label)
                 continue
 
-            seat, _ = Seat.objects.get_or_create(
+            seat = Seat.objects.filter(
                 screen=screen,
                 row_label=row_label or None,
                 seat_number=seat_number,
-            )
+            ).first()
+            if not seat:
+                conflicts["invalid"].append(label)
+                continue
+
             availability, _ = SeatAvailability.objects.select_for_update().get_or_create(
                 seat=seat,
                 showtime=showtime,
@@ -7454,6 +12411,19 @@ def reserve_booking_seats(request: Any) -> tuple[dict[str, Any], int]:
             availability.locked_until = lock_until
             availability.save(update_fields=["seat_status", "locked_until", "last_updated"])
             updated.append(label)
+
+    if not updated and conflicts["invalid"] and not (
+        conflicts["sold"] or conflicts["unavailable"] or conflicts["reserved"]
+    ):
+        return {
+            "message": "Selected seats are not part of this hall layout.",
+            "conflicts": {
+                "sold": sorted(conflicts["sold"], key=_seat_sort_key),
+                "unavailable": sorted(conflicts["unavailable"], key=_seat_sort_key),
+                "reserved": sorted(conflicts["reserved"], key=_seat_sort_key),
+                "invalid": sorted(conflicts["invalid"], key=_seat_sort_key),
+            },
+        }, status.HTTP_400_BAD_REQUEST
 
     layout_payload = _build_screen_layout_payload(screen, showtime=showtime, show=show)
     layout_payload.update(
@@ -7507,6 +12477,7 @@ def release_booking_seats(request: Any) -> tuple[dict[str, Any], int]:
                 seat_number=seat_number,
             ).first()
             if not seat:
+                invalid.append(label)
                 continue
             availability = (
                 SeatAvailability.objects.select_for_update()
@@ -7524,6 +12495,40 @@ def release_booking_seats(request: Any) -> tuple[dict[str, Any], int]:
                 availability.locked_until = None
                 availability.save(update_fields=["locked_until", "last_updated"])
                 released.append(label)
+
+    track_dropoff = parse_bool(
+        coalesce(payload, "track_dropoff", "trackDropoff"),
+        default=False,
+    )
+    dropoff_stage = str(
+        coalesce(payload, "dropoff_stage", "dropoffStage", default="") or ""
+    ).strip().upper()
+    if track_dropoff and dropoff_stage == BookingDropoffEvent.STAGE_BOOKING:
+        try:
+            customer = resolve_customer(request)
+        except Exception:
+            customer = None
+        requested_reason = str(
+            coalesce(payload, "dropoff_reason", "dropoffReason", default="") or ""
+        ).strip().upper()
+        _record_booking_dropoff_event(
+            stage=BookingDropoffEvent.STAGE_BOOKING,
+            reason=(
+                requested_reason
+                if requested_reason
+                else BookingDropoffEvent.REASON_LEFT_BOOKING_PROCESS
+            ),
+            seat_count=len(selected_seats),
+            user=customer,
+            vendor=show.vendor,
+            show=show,
+            metadata={
+                "show_id": show.id,
+                "hall": hall,
+                "released_seats": sorted(released, key=_seat_sort_key),
+                "requested_seats": sorted(selected_seats, key=_seat_sort_key),
+            },
+        )
 
     layout_payload = _build_screen_layout_payload(screen, showtime=showtime, show=show)
     layout_payload.update(
@@ -7891,6 +12896,209 @@ def _normalize_items(items: Any) -> list[dict[str, Any]]:
     return normalized
 
 
+def _ensure_timezone_aware(value: Optional[datetime]) -> Optional[datetime]:
+    """Normalize datetimes into aware UTC values for backend consistency."""
+    return ensure_utc_datetime(value)
+
+
+def _combine_local_date_time(show_date: Any, show_time: Any) -> Optional[datetime]:
+    """Combine a date and time into an aware UTC datetime when available."""
+    if not show_date or not show_time:
+        return None
+    return combine_date_time_utc(show_date, show_time)
+
+
+def _seat_summary_for_booking(booking: Optional[Booking], fallback: Any = None) -> Optional[str]:
+    """Return a compact seat label string for display/validation payloads."""
+    if booking:
+        seat_labels = []
+        booking_seats = booking.booking_seats.select_related("seat").all()
+        for booking_seat in booking_seats:
+            if booking_seat.seat:
+                seat_labels.append(_seat_label(booking_seat.seat))
+        if seat_labels:
+            return ", ".join(seat_labels)
+
+    if isinstance(fallback, list):
+        labels = [str(label).strip() for label in fallback if str(label).strip()]
+        return ", ".join(labels) if labels else None
+
+    raw = str(fallback or "").strip()
+    return raw or None
+
+
+def _resolve_show_for_booking_ticket(booking: Optional[Booking]) -> Optional[Show]:
+    """Resolve app.Show row from a booking's showtime context."""
+    if not booking or not booking.showtime_id:
+        return None
+    showtime = booking.showtime
+    if not showtime or not showtime.screen_id:
+        return None
+    return Show.objects.filter(
+        vendor_id=showtime.screen.vendor_id,
+        movie_id=showtime.movie_id,
+        show_date=showtime.start_time.date(),
+        start_time=showtime.start_time.time(),
+    ).first()
+
+
+def compute_ticket_validation_window(
+    show_datetime: Optional[datetime],
+) -> tuple[Optional[datetime], Optional[datetime]]:
+    """Compute allowed scan window: 1 hour before show until 15 minutes after."""
+    show_dt = _ensure_timezone_aware(show_datetime)
+    if not show_dt:
+        return None, None
+    return (
+        show_dt - timedelta(hours=TICKET_VALIDATION_OPEN_WINDOW_HOURS),
+        show_dt + timedelta(minutes=TICKET_VALIDATION_GRACE_MINUTES),
+    )
+
+
+def resolve_ticket_token_expiry(show_datetime: Optional[datetime]) -> datetime:
+    """Resolve token expiry from showtime, with fallback validity for legacy data."""
+    _, window_end = compute_ticket_validation_window(show_datetime)
+    if window_end:
+        return window_end
+    return timezone.now() + timedelta(hours=TICKET_QR_FALLBACK_VALIDITY_HOURS)
+
+
+def build_ticket_security_fields(
+    *,
+    booking: Optional[Booking] = None,
+    show: Optional[Show] = None,
+    user: Optional[User] = None,
+    seats: Any = None,
+    show_datetime: Optional[datetime] = None,
+    payment_status: Optional[str] = None,
+) -> dict[str, Any]:
+    """Build persistent secure ticket metadata from booking/show context."""
+    resolved_show = show or _resolve_show_for_booking_ticket(booking)
+    resolved_user = user or (booking.user if booking else None)
+
+    resolved_show_datetime = _ensure_timezone_aware(show_datetime)
+    if not resolved_show_datetime and booking and booking.showtime and booking.showtime.start_time:
+        resolved_show_datetime = _ensure_timezone_aware(booking.showtime.start_time)
+    if not resolved_show_datetime and resolved_show:
+        resolved_show_datetime = _ensure_timezone_aware(resolved_show.start_datetime)
+    if not resolved_show_datetime and resolved_show:
+        resolved_show_datetime = _combine_local_date_time(resolved_show.show_date, resolved_show.start_time)
+
+    normalized_payment_status = str(payment_status or "").strip().upper() or "PENDING"
+    if normalized_payment_status in {"SUCCESS", "COMPLETED", "CONFIRMED"}:
+        normalized_payment_status = "PAID"
+
+    return {
+        "user": resolved_user,
+        "show": resolved_show,
+        "seats": _seat_summary_for_booking(booking, seats),
+        "show_datetime": resolved_show_datetime,
+        "payment_status": normalized_payment_status,
+        "token_expires_at": resolve_ticket_token_expiry(resolved_show_datetime),
+    }
+
+
+def _ensure_ticket_security_defaults(ticket: Ticket, *, save: bool) -> Ticket:
+    """Ensure required secure ticket fields are populated for old/new rows."""
+    update_fields: list[str] = []
+
+    if not ticket.ticket_id:
+        ticket.ticket_id = uuid.uuid4()
+        update_fields.append("ticket_id")
+
+    if not ticket.show_datetime:
+        candidate_show_datetime = None
+        if ticket.show:
+            candidate_show_datetime = ticket.show.start_datetime or _combine_local_date_time(
+                ticket.show.show_date,
+                ticket.show.start_time,
+            )
+        ticket.show_datetime = _ensure_timezone_aware(candidate_show_datetime)
+        if ticket.show_datetime:
+            update_fields.append("show_datetime")
+
+    if not ticket.token_expires_at:
+        ticket.token_expires_at = resolve_ticket_token_expiry(ticket.show_datetime)
+        update_fields.append("token_expires_at")
+
+    if not ticket.payment_status:
+        ticket.payment_status = "PENDING"
+        update_fields.append("payment_status")
+
+    if save and update_fields:
+        ticket.save(update_fields=update_fields)
+
+    return ticket
+
+
+def generate_ticket_qr_token(ticket: Ticket) -> str:
+    """Generate a signed token containing ticket identity + expiry."""
+    ticket = _ensure_ticket_security_defaults(ticket, save=True)
+    expiry = _ensure_timezone_aware(ticket.token_expires_at) or resolve_ticket_token_expiry(ticket.show_datetime)
+    payload = {
+        "ticket_id": str(ticket.ticket_id),
+        "reference": str(ticket.reference or ""),
+        "exp": int(expiry.timestamp()),
+    }
+    return signing.dumps(payload, salt=TICKET_QR_SIGNING_SALT, compress=True)
+
+
+def build_ticket_qr_payload(ticket: Ticket) -> dict[str, Any]:
+    """Build secure QR payload with UUID + signed token."""
+    token = generate_ticket_qr_token(ticket)
+    return {
+        "ticket_id": str(ticket.ticket_id),
+        "token": token,
+    }
+
+
+def build_ticket_qr_data(ticket: Ticket) -> str:
+    """Return compact JSON payload string to embed into the QR image."""
+    return json.dumps(build_ticket_qr_payload(ticket), separators=(",", ":"))
+
+
+def verify_ticket_qr_token(
+    ticket: Ticket,
+    token: Any,
+    *,
+    now: Optional[datetime] = None,
+) -> tuple[bool, Optional[str]]:
+    """Verify signed token integrity, ticket match, and token expiry."""
+    raw_token = str(token or "").strip()
+    if not raw_token:
+        return False, "missing"
+
+    _ensure_ticket_security_defaults(ticket, save=False)
+
+    try:
+        decoded = signing.loads(raw_token, salt=TICKET_QR_SIGNING_SALT)
+    except signing.BadSignature:
+        return False, "invalid"
+
+    if not isinstance(decoded, dict):
+        return False, "invalid"
+
+    token_ticket_id = str(decoded.get("ticket_id") or decoded.get("tid") or "").strip()
+    if token_ticket_id != str(ticket.ticket_id):
+        return False, "invalid"
+
+    exp_value = decoded.get("exp")
+    try:
+        exp_epoch = int(exp_value)
+    except (TypeError, ValueError):
+        return False, "invalid"
+
+    current = _ensure_timezone_aware(now or timezone.now()) or timezone.now()
+    if int(current.timestamp()) > exp_epoch:
+        return False, "expired"
+
+    stored_expiry = _ensure_timezone_aware(ticket.token_expires_at)
+    if stored_expiry and current > stored_expiry:
+        return False, "expired"
+
+    return True, None
+
+
 def _build_ticket_payload(order: dict[str, Any], reference: str, request: Any) -> dict[str, Any]:
     """Build the ticket payload that is persisted in the database."""
     if not isinstance(order, dict):
@@ -8187,6 +13395,24 @@ def _render_ticket_image(payload: dict[str, Any], qr_image: Any) -> Any:
         )
         right_y += 18
 
+    right_limit = ticket_rect[2] - 18
+    if qr_image:
+        qr_size = min(130, right_limit - right_x)
+        if qr_size >= 90:
+            qr_resized = qr_image.resize((qr_size, qr_size))
+            img.paste(qr_resized, (right_x, right_y))
+            right_y += qr_size + 12
+
+    ticket_id_text = str(payload.get("ticket_id") or payload.get("reference") or "-")
+    draw.text(
+        (right_x, ticket_rect[3] - 56),
+        _clamp_text(f"TICKET ID : {ticket_id_text}", 30),
+        fill=text_color,
+        font=small_font,
+    )
+
+    return img
+
 
 def get_vendor_analytics(vendor: Vendor, request: Any) -> dict[str, Any]:
     """Build comprehensive analytics payload for a vendor dashboard."""
@@ -8217,6 +13443,25 @@ def get_vendor_analytics(vendor: Vendor, request: Any) -> dict[str, Any]:
         total_bookings = vendor_bookings.count()
         confirmed_bookings = vendor_bookings.filter(booking_status='Confirmed').count()
         completed_bookings = vendor_bookings.filter(booking_status='Completed').count()
+        fraud_review_threshold = _booking_fraud_review_threshold()
+        fraud_level_counts = {
+            Booking.FRAUD_LEVEL_LOW: 0,
+            Booking.FRAUD_LEVEL_MEDIUM: 0,
+            Booking.FRAUD_LEVEL_HIGH: 0,
+            Booking.FRAUD_LEVEL_CRITICAL: 0,
+        }
+        for row in vendor_bookings.values('fraud_level').annotate(total=Count('id')):
+            level_key = str(row.get('fraud_level') or Booking.FRAUD_LEVEL_LOW).upper()
+            if level_key not in fraud_level_counts:
+                level_key = Booking.FRAUD_LEVEL_LOW
+            fraud_level_counts[level_key] += int(row.get('total') or 0)
+
+        fraud_score_stats = vendor_bookings.aggregate(
+            avg_score=Avg('fraud_score'),
+            max_score=Max('fraud_score'),
+        )
+        high_risk_bookings = vendor_bookings.filter(fraud_score__gte=fraud_review_threshold).count()
+        critical_risk_bookings = vendor_bookings.filter(fraud_score__gte=90).count()
         
         total_revenue = float(vendor_payments.filter(
             payment_status='Success'
@@ -8274,7 +13519,10 @@ def get_vendor_analytics(vendor: Vendor, request: Any) -> dict[str, Any]:
                 'status': booking.booking_status,
                 'total': float(booking.total_amount or 0),
                 'date': booking.booking_date.isoformat(),
-                'seats': booking.booking_seats.count()
+                'seats': booking.booking_seats.count(),
+                'fraud_score': int(booking.fraud_score or 0),
+                'fraud_level': str(booking.fraud_level or Booking.FRAUD_LEVEL_LOW),
+                'requires_manual_review': int(booking.fraud_score or 0) >= fraud_review_threshold,
             }
             for booking in recent_bookings
         ]
@@ -8296,16 +13544,37 @@ def get_vendor_analytics(vendor: Vendor, request: Any) -> dict[str, Any]:
             select={'date': 'DATE(booking_date)'}
         ).values('date').annotate(
             count=Count('id'),
-            revenue=Sum('payments__amount')
+            revenue=Sum('payments__amount'),
+            avg_fraud_score=Avg('fraud_score'),
+            high_risk_count=Count('id', filter=Q(fraud_score__gte=fraud_review_threshold)),
         ).order_by('date')
         
         monthly_trend = [
             {
                 'date': str(item['date']),
                 'bookings': item['count'],
-                'revenue': float(item['revenue'] or 0)
+                'revenue': float(item['revenue'] or 0),
+                'avg_fraud_score': round(float(item.get('avg_fraud_score') or 0), 2),
+                'high_risk_bookings': int(item.get('high_risk_count') or 0),
             }
             for item in monthly_bookings
+        ]
+
+        recent_risky_bookings = vendor_bookings.filter(
+            fraud_score__gte=fraud_review_threshold,
+        ).order_by('-booking_date', '-id')[:10]
+        risky_bookings = [
+            {
+                'id': booking.id,
+                'user': " ".join(
+                    part for part in [booking.user.first_name, booking.user.last_name] if part
+                ).strip() or booking.user.email,
+                'status': booking.booking_status,
+                'fraud_score': int(booking.fraud_score or 0),
+                'fraud_level': str(booking.fraud_level or Booking.FRAUD_LEVEL_LOW),
+                'date': booking.booking_date.isoformat() if booking.booking_date else None,
+            }
+            for booking in recent_risky_bookings
         ]
         
         # Top shows
@@ -8343,8 +13612,8 @@ def get_vendor_analytics(vendor: Vendor, request: Any) -> dict[str, Any]:
         ]
         
         # Bookings by day of week
-        weekly_distribution = vendor_bookings.extra(
-            select={'day_of_week': 'DAYOFWEEK(booking_date)'}
+        weekly_distribution = vendor_bookings.annotate(
+            day_of_week=ExtractWeekDay('booking_date')
         ).values('day_of_week').annotate(
             count=Count('id')
         ).order_by('day_of_week')
@@ -8381,6 +13650,11 @@ def get_vendor_analytics(vendor: Vendor, request: Any) -> dict[str, Any]:
             }
             for item in revenue_per_show
         ]
+
+        dropoff_payload = _build_dropoff_analytics_payload(
+            BookingDropoffEvent.objects.filter(vendor_id=vendor.id),
+            days=14,
+        )
         
         return {
             'vendor_id': vendor.id,
@@ -8396,7 +13670,24 @@ def get_vendor_analytics(vendor: Vendor, request: Any) -> dict[str, Any]:
                 'total_food_items_sold': vendor_food_bookings.aggregate(
                     total=Sum('quantity')
                 )['total'] or 0,
+                'average_fraud_score': round(float(fraud_score_stats.get('avg_score') or 0), 2),
+                'high_risk_bookings': high_risk_bookings,
+                'critical_risk_bookings': critical_risk_bookings,
             },
+            'fraud_summary': {
+                'review_threshold': fraud_review_threshold,
+                'average_score': round(float(fraud_score_stats.get('avg_score') or 0), 2),
+                'max_score': int(fraud_score_stats.get('max_score') or 0),
+                'high_risk_bookings': high_risk_bookings,
+                'critical_risk_bookings': critical_risk_bookings,
+                'levels': {
+                    'low': int(fraud_level_counts[Booking.FRAUD_LEVEL_LOW]),
+                    'medium': int(fraud_level_counts[Booking.FRAUD_LEVEL_MEDIUM]),
+                    'high': int(fraud_level_counts[Booking.FRAUD_LEVEL_HIGH]),
+                    'critical': int(fraud_level_counts[Booking.FRAUD_LEVEL_CRITICAL]),
+                },
+            },
+            'risky_bookings': risky_bookings,
             'payment_methods': payment_methods,
             'booking_status_breakdown': booking_status_breakdown,
             'top_food_items': top_food_list,
@@ -8407,6 +13698,8 @@ def get_vendor_analytics(vendor: Vendor, request: Any) -> dict[str, Any]:
             'weekly_bookings': weekly_bookings,
             'booking_value_stats': booking_value_stats,
             'revenue_per_show': revenue_per_show_list,
+            'dropoff_summary': dropoff_payload['summary'],
+            'dropoff_trend': dropoff_payload['trend'],
             'message': 'Analytics data retrieved successfully'
         }
     except Exception as e:
@@ -8415,31 +13708,6 @@ def get_vendor_analytics(vendor: Vendor, request: Any) -> dict[str, Any]:
             'error': str(e),
             'message': 'Failed to retrieve analytics data'
         }
-
-    right_limit = ticket_rect[2] - 18
-    if qr_image:
-        qr_size = min(130, right_limit - right_x)
-        if qr_size >= 90:
-            qr_resized = qr_image.resize((qr_size, qr_size))
-            img.paste(qr_resized, (right_x, right_y))
-            right_y += qr_size + 12
-
-    barcode_width = min(200, right_limit - right_x)
-    barcode_box = (
-        right_x,
-        ticket_rect[3] - 76,
-        right_x + barcode_width,
-        ticket_rect[3] - 24,
-    )
-    _draw_barcode(draw, barcode_box, reference + "right", color=text_color)
-    draw.text(
-        (right_x, ticket_rect[3] - 22),
-        _clamp_text(f"NO. {reference}", 20),
-        fill=text_color,
-        font=small_font,
-    )
-
-    return img
 
 
 def _render_food_slip_image(payload: dict[str, Any]) -> Any:
@@ -8536,6 +13804,12 @@ def _render_ticket_bundle_image(payload: dict[str, Any], qr_image: Any) -> Any:
     """Render the combined ticket + food slip bundle image."""
     bg_color = "#3f3f44"
     ticket_image = _render_ticket_image(payload, qr_image)
+    items = payload.get("items") if isinstance(payload.get("items"), list) else []
+    has_food_item = any(str(item.get("name") or "").strip() for item in items if isinstance(item, dict))
+    has_food_total = _safe_number(payload.get("food_total")) > 0
+    if not has_food_item and not has_food_total:
+        return ticket_image
+
     food_image = _render_food_slip_image(payload)
     margin = 24
     spacing = 20
@@ -8556,13 +13830,14 @@ def create_payment_qr(request: Any) -> tuple[dict[str, Any], int]:
     if not order:
         return {"message": "Order data is required"}, status.HTTP_400_BAD_REQUEST
 
-    booking_payload, booking_error, booking_status = _create_booking_from_order(order)
+    booking_payload, booking_error, booking_status = _create_booking_from_order(order, request=request)
     if booking_error:
         return booking_error, booking_status
 
     reference = uuid.uuid4().hex[:10].upper()
     ticket_payload = _build_ticket_payload(order, reference, request)
     booking_instance: Optional[Booking] = None
+    linked_show: Optional[Show] = None
     if booking_payload:
         ticket_payload["booking"] = booking_payload
         booking_id = _coerce_int(booking_payload.get("booking_id"))
@@ -8572,37 +13847,53 @@ def create_payment_qr(request: Any) -> tuple[dict[str, Any], int]:
                 "showtime__movie",
                 "showtime__screen__vendor",
             ).filter(pk=booking_id).first()
-    Ticket.objects.create(reference=reference, payload=ticket_payload)
+        if booking_instance:
+            linked_show = Show.objects.filter(
+                vendor_id=booking_instance.showtime.screen.vendor_id,
+                movie_id=booking_instance.showtime.movie_id,
+                show_date=booking_instance.showtime.start_time.date(),
+                start_time=booking_instance.showtime.start_time.time(),
+            ).first()
 
-    if booking_instance:
-        linked_show = Show.objects.filter(
-            vendor_id=booking_instance.showtime.screen.vendor_id,
-            movie_id=booking_instance.showtime.movie_id,
-            show_date=booking_instance.showtime.start_time.date(),
-            start_time=booking_instance.showtime.start_time.time(),
-        ).first()
-        if linked_show:
-            try:
-                _notify_payment_success(booking_instance, linked_show)
-            except Exception:
-                logger.exception("Failed to dispatch payment-success notifications for booking %s", booking_instance.id)
+    ticket_security_fields = build_ticket_security_fields(
+        booking=booking_instance,
+        show=linked_show,
+        payment_status="PAID",
+    )
+    ticket = Ticket.objects.create(
+        reference=reference,
+        payload=ticket_payload,
+        **ticket_security_fields,
+    )
+
+    if booking_instance and linked_show:
+        try:
+            _notify_payment_success(booking_instance, linked_show)
+        except Exception:
+            logger.exception("Failed to dispatch payment-success notifications for booking %s", booking_instance.id)
 
     details_url = ticket_payload.get("details_url", "")
-    qr_image = _build_qr_image(details_url)
+    qr_payload = build_ticket_qr_payload(ticket)
+    qr_image = _build_qr_image(json.dumps(qr_payload, separators=(",", ":")))
     if not qr_image:
         return {
             "message": "QR code library not installed. Please install qrcode."
         }, status.HTTP_500_INTERNAL_SERVER_ERROR
 
-    ticket_image = _render_ticket_bundle_image(ticket_payload, qr_image)
+    render_payload = dict(ticket_payload)
+    render_payload["ticket_id"] = str(ticket.ticket_id)
+    ticket_image = _render_ticket_bundle_image(render_payload, qr_image)
     return {
         "message": "Payment ticket created",
         "reference": reference,
+        "ticket_id": str(ticket.ticket_id),
+        "token": qr_payload.get("token"),
         "booking": booking_payload,
         "qr_code": _image_to_data_url(qr_image),
         "ticket_image": _image_to_data_url(ticket_image),
         "download_url": request.build_absolute_uri(f"/api/ticket/{reference}/download/"),
         "details_url": details_url,
+        "qr_payload": qr_payload,
     }, status.HTTP_200_OK
 
 
@@ -8613,8 +13904,10 @@ def build_ticket_download(reference: str) -> Optional[bytes]:
         return None
 
     payload = ticket.payload or {}
-    qr_image = _build_qr_image(payload.get("details_url", ""))
-    ticket_image = _render_ticket_image(payload, qr_image)
+    qr_image = _build_qr_image(build_ticket_qr_data(ticket))
+    render_payload = dict(payload)
+    render_payload["ticket_id"] = str(ticket.ticket_id)
+    ticket_image = _render_ticket_image(render_payload, qr_image)
     buffer = io.BytesIO()
     ticket_image.save(buffer, format="PNG")
     buffer.seek(0)
@@ -8628,6 +13921,7 @@ def build_ticket_details_html(reference: str) -> Optional[str]:
         return None
 
     payload = ticket.payload or {}
+    ticket_id_text = str(ticket.ticket_id or reference)
     movie = payload.get("movie", {}) if isinstance(payload.get("movie"), dict) else {}
     items = payload.get("items") if isinstance(payload.get("items"), list) else []
     user = payload.get("user", {}) if isinstance(payload.get("user"), dict) else {}
@@ -8837,11 +14131,15 @@ def build_ticket_details_html(reference: str) -> Optional[str]:
           <div class="receipt-header">
             <div class="brand">Mero Ticket</div>
             <div class="title">Ticket & Food Bill</div>
-            <div class="meta">Reference: {escape(reference)}</div>
+                        <div class="meta">Ticket ID: {escape(ticket_id_text)}</div>
           </div>
 
           <div class="section">
             <div class="section-title">Ticket Details</div>
+                        <div class="row">
+                            <div class="label">Ticket ID</div>
+                            <div class="value">{escape(ticket_id_text)}</div>
+                        </div>
             <div class="row">
               <div class="label">Movie</div>
               <div class="value">{escape(movie.get("title", ""))}</div>

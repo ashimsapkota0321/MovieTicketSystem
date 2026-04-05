@@ -21,6 +21,14 @@ def admin_bookings(request: Any):
     return Response({"bookings": payload}, status=status.HTTP_200_OK)
 
 
+@api_view(["GET"])
+@admin_required
+def admin_booking_dropoff_analytics(request: Any):
+    """Return platform-level booking/payment drop-off analytics for admin dashboard."""
+    payload = services.get_admin_dropoff_analytics()
+    return Response(payload, status=status.HTTP_200_OK)
+
+
 @api_view(["GET", "DELETE"])
 @admin_required
 def admin_booking_detail(request: Any, booking_id: int):

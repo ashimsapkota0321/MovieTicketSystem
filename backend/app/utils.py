@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import re
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timezone as datetime_timezone
 from typing import Any, Iterable, Optional
+
+from django.utils import timezone as django_timezone
 
 DATE_FORMAT = "%Y-%m-%d"
 TIME_FORMAT = "%H:%M"
 DEFAULT_SHORT_LABEL = "CIN"
+UTC = datetime_timezone.utc
 
 YOUTUBE_ID_PATTERNS: tuple[str, ...] = (
     r"(?:v=|vi=)([0-9A-Za-z_-]{11})",
@@ -109,6 +112,40 @@ def parse_time(value: Any) -> Optional[time]:
         return datetime.strptime(str(value), TIME_FORMAT).time()
     except Exception:
         return None
+
+
+def ensure_utc_datetime(value: Optional[datetime]) -> Optional[datetime]:
+    """Return a timezone-aware UTC datetime for consistent storage/comparisons."""
+    if value is None:
+        return None
+    if django_timezone.is_naive(value):
+        return django_timezone.make_aware(value, UTC)
+    return value.astimezone(UTC)
+
+
+def combine_date_time_utc(day_value: Optional[date], time_value: Optional[time]) -> Optional[datetime]:
+    """Combine date/time and normalize result into aware UTC datetime."""
+    if not day_value or not time_value:
+        return None
+    return ensure_utc_datetime(datetime.combine(day_value, time_value))
+
+
+def parse_datetime_utc(value: Any) -> Optional[datetime]:
+    """Parse ISO datetime input and normalize it into aware UTC datetime."""
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        return ensure_utc_datetime(value)
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    return ensure_utc_datetime(parsed)
 
 
 def extract_youtube_id(url: Any) -> Optional[str]:

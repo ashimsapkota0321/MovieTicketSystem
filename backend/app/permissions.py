@@ -18,13 +18,12 @@ ADMIN_REQUIRED_MESSAGE = "Admin access required."
 SUPER_ADMIN_REQUIRED_MESSAGE = "Super admin access required."
 AUTH_REQUIRED_MESSAGE = "Authentication required."
 VENDOR_REQUIRED_MESSAGE = "Vendor access required."
+CUSTOMER_REQUIRED_MESSAGE = "Customer access required."
 
 ROLE_ADMIN = "admin"
 ROLE_VENDOR = "vendor"
 ROLE_CUSTOMER = "customer"
 ROLE_CHOICES = {ROLE_ADMIN, ROLE_VENDOR, ROLE_CUSTOMER}
-STAFF_ROLE_CASHIER = VendorStaff.ROLE_CASHIER
-STAFF_ROLE_MANAGER = VendorStaff.ROLE_MANAGER
 AUTH_TOKEN_SALT = "meroticket.auth.token.v1"
 DEFAULT_TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24 * 7  # 7 days
 
@@ -291,17 +290,13 @@ def is_vendor_owner(request: Any) -> bool:
 
 
 def is_vendor_manager(request: Any) -> bool:
-    """Return True when request is owner vendor or manager sub-account."""
-    if is_vendor_owner(request):
-        return True
-    staff = resolve_vendor_staff(request)
-    return bool(staff and str(staff.role).upper() == STAFF_ROLE_MANAGER)
+    """Return True only for owner vendor account."""
+    return is_vendor_owner(request)
 
 
-def _staff_can_access_path(staff_role: str, path: str) -> bool:
-    """Restrict vendor staff routes by role."""
+def _staff_can_access_path(_staff_role: str, path: str) -> bool:
+    """Restrict vendor staff routes to staff-level operations only."""
     normalized_path = str(path or "").lower()
-    role = str(staff_role or "").upper()
 
     cashier_allowed_prefixes = [
         "/api/vendor/bookings/",
@@ -310,24 +305,7 @@ def _staff_can_access_path(staff_role: str, path: str) -> bool:
         "/api/vendor/ticket-validation",
         "/api/profile/vendor/",
     ]
-    manager_extra_prefixes = [
-        "/api/vendor/pricing-rules/",
-        "/api/vendor/pricing-rules",
-        "/api/vendor/seat-layout/",
-        "/api/vendor/seat-layout",
-        "/api/vendor/shows/",
-        "/api/vendor/shows",
-        "/api/vendor/promo-codes/",
-        "/api/vendor/promo-codes",
-        "/api/vendor/campaigns/",
-        "/api/vendor/campaigns",
-    ]
-
     if any(normalized_path.startswith(prefix) for prefix in cashier_allowed_prefixes):
-        return True
-    if role == STAFF_ROLE_MANAGER and any(
-        normalized_path.startswith(prefix) for prefix in manager_extra_prefixes
-    ):
         return True
     return False
 
@@ -359,6 +337,8 @@ def role_required(*roles: str):
                 message = ADMIN_REQUIRED_MESSAGE
                 if ROLE_VENDOR in allowed_roles and ROLE_ADMIN not in allowed_roles:
                     message = VENDOR_REQUIRED_MESSAGE
+                if ROLE_CUSTOMER in allowed_roles and ROLE_ADMIN not in allowed_roles and ROLE_VENDOR not in allowed_roles:
+                    message = CUSTOMER_REQUIRED_MESSAGE
                 return Response(
                     {"message": message},
                     status=status.HTTP_403_FORBIDDEN,
@@ -420,6 +400,15 @@ class IsVendor(BasePermission):
 
     def has_permission(self, request: Any, view: Any) -> bool:
         return is_vendor_request(request)
+
+
+class IsCustomer(BasePermission):
+    """Allow only customers."""
+
+    message = CUSTOMER_REQUIRED_MESSAGE
+
+    def has_permission(self, request: Any, view: Any) -> bool:
+        return get_request_role(request) == ROLE_CUSTOMER
 
 
 class IsAdminOrReadOnly(BasePermission):

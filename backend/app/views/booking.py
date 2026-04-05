@@ -9,7 +9,7 @@ import json
 import urllib.parse
 import urllib.request
 import uuid
-from datetime import datetime, timedelta
+from datetime import timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from types import SimpleNamespace
 from typing import Any, Optional
@@ -25,7 +25,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from .. import selectors, services
-from ..models import Booking, BookingSeat, Payment, Seat, SeatAvailability, Show, Ticket
+from ..models import Booking, BookingDropoffEvent, BookingSeat, Payment, Seat, SeatAvailability, Show, Ticket
 from ..permissions import ROLE_CUSTOMER, role_required
 from ..utils import coalesce, parse_bool, parse_date
 
@@ -120,7 +120,7 @@ def _format_amount(value: Decimal) -> str:
 
 def _build_transaction_uuid() -> str:
     """Build eSewa-safe transaction UUID (alphanumeric and hyphen only)."""
-    now = datetime.utcnow()
+    now = timezone.now()
     return f"{now.strftime('%y%m%d-%H%M%S')}-{now.microsecond // 1000:03d}"
 
 
@@ -362,11 +362,14 @@ def _build_ticket_response(
     details_url = payload.get("details_url") or request.build_absolute_uri(
         f"/api/ticket/{ticket.reference}/details/"
     )
-    qr_image = services._build_qr_image(details_url)
+    qr_payload = services.build_ticket_qr_payload(ticket)
+    qr_image = services._build_qr_image(json.dumps(qr_payload, separators=(",", ":")))
     qr_code_data = services._image_to_data_url(qr_image) if qr_image else None
     ticket_image_data = None
     try:
-        ticket_image = services._render_ticket_bundle_image(payload, qr_image)
+        render_payload = dict(payload)
+        render_payload["ticket_id"] = str(ticket.ticket_id)
+        ticket_image = services._render_ticket_bundle_image(render_payload, qr_image)
         ticket_image_data = services._image_to_data_url(ticket_image)
     except Exception:
         ticket_image_data = None
@@ -377,8 +380,11 @@ def _build_ticket_response(
         "order": payload.get("order"),
         "ticket": {
             "reference": ticket.reference,
+            "ticket_id": str(ticket.ticket_id),
+            "token": qr_payload.get("token"),
             "booking": booking_payload or payload.get("booking"),
             "qr_code": qr_code_data,
+            "qr_payload": qr_payload,
             "ticket_image": ticket_image_data,
             "download_url": request.build_absolute_uri(
                 f"/api/ticket/{ticket.reference}/download/"
@@ -450,6 +456,20 @@ def _pending_payment_method(transaction_uuid: str) -> str:
     return f"{ESEWA_PAYMENT_METHOD_PREFIX}{transaction_uuid}"[:30]
 
 
+def _lock_transaction_payment(transaction_uuid: str) -> Optional[Payment]:
+    """Lock latest payment row for transaction so confirmation is serialized."""
+    if not transaction_uuid:
+        return None
+    payment_method = _pending_payment_method(transaction_uuid)
+    return (
+        Payment.objects.select_for_update()
+        .select_related("booking")
+        .filter(payment_method=payment_method)
+        .order_by("-id")
+        .first()
+    )
+
+
 def _cancel_pending_booking_for_transaction(
     transaction_uuid: str,
     *,
@@ -490,6 +510,69 @@ def _cancel_pending_booking_for_transaction(
                 locked_booking.delete()
 
 
+def _find_pending_payment_and_booking_for_transaction(
+    transaction_uuid: str,
+) -> tuple[Optional[Payment], Optional[Booking]]:
+    """Return latest pending payment + booking pair for a transaction UUID."""
+    if not transaction_uuid:
+        return None, None
+    payment_method = _pending_payment_method(transaction_uuid)
+    payment = (
+        Payment.objects.select_related(
+            "booking",
+            "booking__user",
+            "booking__showtime__screen__vendor",
+            "booking__showtime__movie",
+        )
+        .filter(
+            payment_method=payment_method,
+            payment_status__iexact="Pending",
+        )
+        .order_by("-id")
+        .first()
+    )
+    if not payment:
+        return None, None
+    booking = payment.booking
+    if not booking or str(booking.booking_status or "").strip().lower() != services.BOOKING_STATUS_PENDING.lower():
+        return payment, None
+    return payment, booking
+
+
+def _clear_user_pending_payment_bookings(
+    *,
+    user_id: int,
+    showtime_id: int,
+) -> None:
+    """Cancel same-user stale pending payment bookings before creating a fresh attempt."""
+    stale_ids = list(
+        Booking.objects.filter(
+            user_id=user_id,
+            showtime_id=showtime_id,
+            booking_status__iexact=services.BOOKING_STATUS_PENDING,
+            payments__payment_status__iexact="Pending",
+            payments__payment_method__startswith=ESEWA_PAYMENT_METHOD_PREFIX,
+        )
+        .values_list("id", flat=True)
+        .distinct()
+    )
+    for booking_id in stale_ids:
+        locked_booking = Booking.objects.select_for_update().filter(pk=booking_id).first()
+        if not locked_booking:
+            continue
+        if str(locked_booking.booking_status or "").strip().lower() == services.BOOKING_STATUS_CANCELLED.lower():
+            continue
+
+        services._release_booking_seats(locked_booking)
+        BookingSeat.objects.filter(booking=locked_booking).delete()
+        locked_booking.booking_status = services.BOOKING_STATUS_CANCELLED
+        locked_booking.save(update_fields=["booking_status"])
+        Payment.objects.filter(
+            booking=locked_booking,
+            payment_status__iexact="Pending",
+        ).update(payment_status="Failed")
+
+
 def _create_pending_booking_record(
     *,
     order: Optional[dict[str, Any]],
@@ -527,6 +610,12 @@ def _create_pending_booking_record(
     hall = context.get("hall") or show.hall
     now = timezone.now()
     lock_until = now + timedelta(minutes=services.RESERVE_HOLD_MINUTES)
+    price_lock_token = services._extract_price_lock_token(order if isinstance(order, dict) else {})
+    price_lock_snapshot = services._load_price_lock(price_lock_token) if price_lock_token else None
+    strict_price_lock = parse_bool(
+        coalesce(order or {}, "strict_price_lock", "strictPriceLock"),
+        default=bool(price_lock_token),
+    )
 
     # If same transaction was retried, drop previous pending copy first.
     _cancel_pending_booking_for_transaction(transaction_uuid, keep_booking=False)
@@ -535,6 +624,29 @@ def _create_pending_booking_record(
         with transaction.atomic():
             screen, showtime = services._get_or_create_showtime_for_context(show, hall)
             services._prune_expired_reservations(showtime)
+
+            if price_lock_token and not services._is_price_lock_compatible(
+                price_lock_snapshot,
+                show=show,
+                showtime=showtime,
+                selected_seats=selected_seats,
+            ):
+                if strict_price_lock:
+                    raise _PendingBookingError(
+                        {
+                            "message": "Locked ticket price expired or no longer matches selected seats. Please refresh price and retry.",
+                            "code": "PRICE_LOCK_EXPIRED",
+                        },
+                        status.HTTP_409_CONFLICT,
+                    )
+                price_lock_snapshot = None
+
+            occupancy_snapshot = services._showtime_occupancy_snapshot(showtime=showtime, screen=screen)
+
+            _clear_user_pending_payment_bookings(
+                user_id=user.id,
+                showtime_id=showtime.id,
+            )
 
             booking = Booking.objects.create(
                 user=user,
@@ -585,15 +697,18 @@ def _create_pending_booking_record(
                 availability.locked_until = lock_until
                 availability.save(update_fields=["seat_status", "locked_until", "last_updated"])
 
-                seat_price, _ = services._resolve_dynamic_seat_price(
-                    show=show,
-                    showtime=showtime,
-                    screen=screen,
-                    seat_type=seat.seat_type,
-                    event_name=str(
-                        coalesce(order, "event", "event_name", "festival", "festival_name") or ""
-                    ).strip(),
-                )
+                seat_price = services._seat_price_from_lock(price_lock_snapshot, label)
+                if seat_price is None:
+                    seat_price, _ = services._resolve_dynamic_seat_price(
+                        show=show,
+                        showtime=showtime,
+                        screen=screen,
+                        seat_type=seat.seat_type,
+                        occupancy_snapshot=occupancy_snapshot,
+                        event_name=str(
+                            coalesce(order, "event", "event_name", "festival", "festival_name") or ""
+                        ).strip(),
+                    )
                 BookingSeat.objects.create(
                     booking=booking,
                     showtime=showtime,
@@ -622,61 +737,110 @@ def _confirm_booking_after_payment(
     status_check_payload: dict[str, Any],
 ) -> tuple[Optional[dict[str, Any]], Optional[dict[str, Any]], int]:
     """Create booking/payment/ticket once payment is verified successful."""
-    _cancel_pending_booking_for_transaction(transaction_uuid, keep_booking=False)
+    payment_method = _pending_payment_method(transaction_uuid)
 
-    booking_payload, booking_error, booking_status = services._create_booking_from_order(order)
-    if booking_error:
-        return None, booking_error, booking_status
+    with transaction.atomic():
+        locked_payment = _lock_transaction_payment(transaction_uuid)
 
-    reference = uuid.uuid4().hex[:10].upper()
-    ticket_payload = services._build_ticket_payload(order, reference, request)
-    ticket_payload["order"] = order
-    if booking_payload:
-        ticket_payload["booking"] = booking_payload
-    ticket_payload["payment"] = {
-        "provider": "ESEWA",
-        "transaction_uuid": transaction_uuid,
-        "total_amount": paid_total_amount,
-        "status": str(
-            decoded_payload.get("status") or status_check_payload.get("status") or ""
-        ).upper(),
-        "status_check": status_check_payload,
-        "verified_at": timezone.now().isoformat(),
-    }
-    ticket = Ticket.objects.create(reference=reference, payload=ticket_payload)
+        existing_ticket = _find_ticket_by_transaction_uuid(transaction_uuid)
+        if existing_ticket:
+            return _build_ticket_response(request, existing_ticket), None, status.HTTP_200_OK
 
-    booking_instance = None
-    booking_id = _coerce_int((booking_payload or {}).get("booking_id"))
-    if booking_id:
-        booking_instance = (
-            Booking.objects.select_related("showtime__screen", "showtime__movie")
-            .filter(pk=booking_id)
-            .first()
-        )
-    if booking_instance:
-        payment_amount = _coerce_decimal(paid_total_amount) or _coerce_decimal(
-            booking_instance.total_amount
-        ) or Decimal("0")
-        payment_method = f"{ESEWA_PAYMENT_METHOD_PREFIX}{transaction_uuid}"[:30]
-        if not Payment.objects.filter(
-            booking=booking_instance,
-            payment_method=payment_method,
-            payment_status="Success",
-        ).exists():
-            Payment.objects.create(
+        if locked_payment and str(locked_payment.payment_status or "").strip().lower() == "success":
+            existing_for_booking = None
+            if locked_payment.booking_id:
+                existing_for_booking = (
+                    Ticket.objects.filter(payload__booking__booking_id=locked_payment.booking_id)
+                    .order_by("-id")
+                    .first()
+                )
+            if existing_for_booking:
+                return _build_ticket_response(request, existing_for_booking), None, status.HTTP_200_OK
+            return (
+                None,
+                {"message": "Payment already confirmed. Ticket is being prepared. Retry shortly."},
+                status.HTTP_409_CONFLICT,
+            )
+
+        _cancel_pending_booking_for_transaction(transaction_uuid, keep_booking=True)
+
+        booking_payload, booking_error, booking_status = services._create_booking_from_order(order, request=request)
+        if booking_error:
+            return None, booking_error, booking_status
+
+        booking_instance = None
+        linked_show = None
+        booking_id = _coerce_int((booking_payload or {}).get("booking_id"))
+        if booking_id:
+            booking_instance = (
+                Booking.objects.select_related("showtime__screen", "showtime__movie")
+                .filter(pk=booking_id)
+                .first()
+            )
+        if booking_instance:
+            linked_show = _linked_show_for_booking(booking_instance)
+            payment_amount = _coerce_decimal(paid_total_amount) or _coerce_decimal(
+                booking_instance.total_amount
+            ) or Decimal("0")
+
+            if locked_payment:
+                locked_payment.booking = booking_instance
+                locked_payment.payment_method = payment_method
+                locked_payment.payment_status = "Success"
+                locked_payment.amount = payment_amount
+                locked_payment.save(
+                    update_fields=[
+                        "booking",
+                        "payment_method",
+                        "payment_status",
+                        "amount",
+                    ]
+                )
+            elif not Payment.objects.filter(
                 booking=booking_instance,
                 payment_method=payment_method,
                 payment_status="Success",
-                amount=payment_amount,
-            )
+            ).exists():
+                Payment.objects.create(
+                    booking=booking_instance,
+                    payment_method=payment_method,
+                    payment_status="Success",
+                    amount=payment_amount,
+                )
 
-        linked_show = _linked_show_for_booking(booking_instance)
-        if linked_show:
-            try:
-                services._notify_payment_success(booking_instance, linked_show)
-            except Exception:
-                # Keep booking/ticket success response even if notification fails.
-                pass
+        reference = uuid.uuid4().hex[:10].upper()
+        ticket_payload = services._build_ticket_payload(order, reference, request)
+        ticket_payload["order"] = order
+        if booking_payload:
+            ticket_payload["booking"] = booking_payload
+        ticket_payload["payment"] = {
+            "provider": "ESEWA",
+            "transaction_uuid": transaction_uuid,
+            "total_amount": paid_total_amount,
+            "status": str(
+                decoded_payload.get("status") or status_check_payload.get("status") or ""
+            ).upper(),
+            "status_check": status_check_payload,
+            "verified_at": timezone.now().isoformat(),
+        }
+
+        ticket_security_fields = services.build_ticket_security_fields(
+            booking=booking_instance,
+            show=linked_show,
+            payment_status="PAID",
+        )
+        ticket = Ticket.objects.create(
+            reference=reference,
+            payload=ticket_payload,
+            **ticket_security_fields,
+        )
+
+    if booking_instance and linked_show:
+        try:
+            services._notify_payment_success(booking_instance, linked_show)
+        except Exception:
+            # Keep booking/ticket success response even if notification fails.
+            pass
 
     return _build_ticket_response(request, ticket, booking_payload=booking_payload), None, status.HTTP_200_OK
 
@@ -801,6 +965,27 @@ def booking_ticket_price(request: Any):
     payload, status_code = services.calculate_dynamic_ticket_price(
         request.data if isinstance(request.data, dict) else {}
     )
+    return Response(payload, status=status_code)
+
+
+@api_view(["POST"])
+def booking_price_preview(request: Any):
+    """Preview dynamic pricing before booking confirmation."""
+    payload = request.data if isinstance(request.data, dict) else {}
+    if "lock_price" not in payload and "lockPrice" not in payload:
+        payload = {**payload, "lock_price": False}
+    response_payload, status_code = services.calculate_dynamic_ticket_price(payload)
+    return Response(response_payload, status=status_code)
+
+
+@api_view(["GET"])
+def booking_dynamic_price(request: Any):
+    """Return real-time category-wise dynamic prices for selected show context."""
+    query_payload = {
+        key: request.query_params.get(key)
+        for key in request.query_params.keys()
+    }
+    payload, status_code = services.get_show_dynamic_prices(query_payload)
     return Response(payload, status=status_code)
 
 
@@ -1180,6 +1365,36 @@ def esewa_verify(request: Any):
             status=status.HTTP_200_OK,
         )
 
+    pending_payment, pending_booking = _find_pending_payment_and_booking_for_transaction(
+        transaction_uuid
+    )
+    pending_order = pending.get("order") if pending and isinstance(pending.get("order"), dict) else None
+    fallback_seat_count = 0
+    if pending_order:
+        try:
+            fallback_seat_count = len(services._resolve_booking_context(pending_order).get("selected_seats") or [])
+        except Exception:
+            fallback_seat_count = 0
+    seat_count = (
+        BookingSeat.objects.filter(booking_id=pending_booking.id).count()
+        if pending_booking
+        else fallback_seat_count
+    )
+    services._record_booking_dropoff_event(
+        stage=BookingDropoffEvent.STAGE_PAYMENT,
+        reason=BookingDropoffEvent.REASON_PAYMENT_NOT_COMPLETED,
+        seat_count=seat_count,
+        booking=pending_booking,
+        payment=pending_payment,
+        transaction_uuid=transaction_uuid,
+        metadata={
+            "decoded_status": decoded_status,
+            "status_check": status_check_value,
+            "release_requested": bool(release_requested),
+        },
+        dedupe_by_transaction=True,
+    )
+
     if release_requested and pending and isinstance(pending.get("order"), dict):
         _cancel_pending_booking_for_transaction(transaction_uuid, keep_booking=True)
         _release_pending_reserved_seats(pending.get("order"))
@@ -1198,7 +1413,7 @@ def esewa_verify(request: Any):
             "decoded": decoded,
             "expected_signature": expected_signature,
             "message": (
-                "Payment not completed."
+                "Payment not completed. Continue your booking and try payment again."
                 if not release_requested
                 else "Payment not completed. Reserved seats were released."
             ),
