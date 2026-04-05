@@ -1,0 +1,140 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend checks
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_DATABASE: moviebooking
+          MYSQL_USER: ashim
+          MYSQL_PASSWORD: root123
+          MYSQL_ROOT_PASSWORD: root123
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot123"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=30
+
+    defaults:
+      run:
+        working-directory: backend
+
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      USE_MYSQL: "1"
+      DB_NAME: moviebooking
+      DB_USER: ashim
+      DB_PASSWORD: root123
+      DB_HOST: 127.0.0.1
+      DB_PORT: "3306"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y default-libmysqlclient-dev pkg-config
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ../requirement.txt
+          pip install flake8 bandit
+
+      - name: Wait for MySQL
+        run: |
+          python - <<'PY'
+          import time
+          import MySQLdb
+
+          deadline = time.time() + 90
+          last_error = None
+          while time.time() < deadline:
+              try:
+                  connection = MySQLdb.connect(
+                      host="127.0.0.1",
+                      user="ashim",
+                      passwd="root123",
+                      db="moviebooking",
+                      port=3306,
+                  )
+                  connection.close()
+                  print("MySQL is ready.")
+                  break
+              except Exception as exc:
+                  last_error = exc
+                  time.sleep(3)
+          else:
+              raise SystemExit(f"MySQL did not become ready: {last_error}")
+          PY
+
+      - name: Migration consistency checks
+        run: |
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+          python manage.py migrate --check
+
+      - name: Backend linting
+        run: |
+          flake8 app backend --exclude=app/migrations --count --select=E9,F63,F7,F82 --show-source --statistics
+
+      - name: Backend tests
+        run: python manage.py test --verbosity 2
+
+      - name: Backend security checks
+        run: |
+          bandit -r app backend -x app/migrations -lll
+
+  frontend:
+    name: Frontend checks
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Frontend linting
+        run: npm run lint
+
+      - name: Frontend build
+        run: npm run build
+
+      - name: Frontend security checks
+        run: npm audit --omit=dev --audit-level=critical

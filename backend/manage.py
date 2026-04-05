@@ -15,6 +15,14 @@ def main():
             "available on your PYTHONPATH environment variable? Did you "
             "forget to activate a virtual environment?"
         ) from exc
+
+    startup_commands = {"runserver", "runserver_plus", "testserver"}
+    command_name = str(sys.argv[1]).strip().lower() if len(sys.argv) > 1 else ""
+    if command_name in startup_commands:
+        from backend.startup import ensure_schema_ready
+
+        ensure_schema_ready()
+
     execute_from_command_line(sys.argv)
 
 

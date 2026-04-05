@@ -15,6 +15,35 @@ import os
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = BASE_DIR.parent
+
+
+def _load_env_file(path: Path) -> None:
+    """Load KEY=VALUE pairs into process environment without overriding existing variables."""
+    if not path.is_file():
+        return
+
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key or key in os.environ:
+            continue
+
+        cleaned_value = value.strip().strip('"').strip("'")
+        os.environ[key] = cleaned_value
+
+
+for env_file in (
+    PROJECT_ROOT / ".env.local",
+    PROJECT_ROOT / ".env",
+    BASE_DIR / ".env.local",
+    BASE_DIR / ".env",
+):
+    _load_env_file(env_file)
 
 
 # Quick-start development settings - unsuitable for production
@@ -47,6 +76,7 @@ MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
+    'app.middleware.RequestIDLoggingMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
@@ -55,6 +85,7 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 CORS_ALLOW_ALL_ORIGINS = True
+CORS_EXPOSE_HEADERS = ["X-Request-ID"]
 
 ROOT_URLCONF = 'backend.urls'
 
@@ -79,17 +110,20 @@ WSGI_APPLICATION = 'backend.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
-USE_MYSQL = os.environ.get("USE_MYSQL", "").strip().lower() in ("1", "true", "yes")
+# Default to SQLite for local/dev reliability.
+# Set USE_MYSQL=1 explicitly when MySQL is available and intended.
+
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'moviebooking',
-        'USER': 'ashim',
-        'PASSWORD': 'root123',
-        'HOST': 'localhost',
-        'PORT': '3306',
+        'default': {
+            'ENGINE': os.environ.get('DB_ENGINE', 'django.db.backends.mysql'),
+            'NAME': os.environ.get('DB_NAME', 'moviebooking'),
+            'USER': os.environ.get('DB_USER', 'ashim'),
+            'PASSWORD': os.environ.get('DB_PASSWORD', 'root123'),
+            'HOST': os.environ.get('DB_HOST', '127.0.0.1'),
+            'PORT': os.environ.get('DB_PORT', '3306'),
+        }
     }
-}  
+
 
 
 
@@ -148,3 +182,124 @@ try:
 except (TypeError, ValueError):
     ESEWA_PENDING_TTL_SECONDS = 1800
 FRONTEND_BASE_URL = os.environ.get("FRONTEND_BASE_URL", "http://localhost:5173").strip() or "http://localhost:5173"
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+def _env_non_negative_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, str(default))
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        parsed = int(default)
+    return max(parsed, 0)
+    
+# Ticket validation API rate limiting (per minute)
+TICKET_VALIDATION_SCAN_RATE_LIMIT_STAFF_PER_MINUTE = _env_non_negative_int(
+    "TICKET_VALIDATION_SCAN_RATE_LIMIT_STAFF_PER_MINUTE",
+    60,
+)
+TICKET_VALIDATION_SCAN_RATE_LIMIT_IP_PER_MINUTE = _env_non_negative_int(
+    "TICKET_VALIDATION_SCAN_RATE_LIMIT_IP_PER_MINUTE",
+    120,
+)
+TICKET_VALIDATION_MONITOR_RATE_LIMIT_STAFF_PER_MINUTE = _env_non_negative_int(
+    "TICKET_VALIDATION_MONITOR_RATE_LIMIT_STAFF_PER_MINUTE",
+    120,
+)
+TICKET_VALIDATION_MONITOR_RATE_LIMIT_IP_PER_MINUTE = _env_non_negative_int(
+    "TICKET_VALIDATION_MONITOR_RATE_LIMIT_IP_PER_MINUTE",
+    240,
+)
+
+
+# Email settings (used for OTP/reset and notifications)
+_has_smtp_credentials = bool(os.environ.get("EMAIL_HOST_USER", "").strip()) and bool(
+    os.environ.get("EMAIL_HOST_PASSWORD", "").strip()
+)
+_default_email_backend = (
+    "django.core.mail.backends.smtp.EmailBackend"
+    if (not DEBUG or _has_smtp_credentials)
+    else "django.core.mail.backends.console.EmailBackend"
+)
+EMAIL_BACKEND = os.environ.get(
+    "EMAIL_BACKEND",
+    _default_email_backend,
+).strip() or _default_email_backend
+EMAIL_HOST = os.environ.get("EMAIL_HOST", "smtp.gmail.com").strip() or "smtp.gmail.com"
+try:
+    EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
+except (TypeError, ValueError):
+    EMAIL_PORT = 587
+EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "").strip()
+EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "").strip()
+EMAIL_USE_TLS = _env_bool("EMAIL_USE_TLS", True)
+EMAIL_USE_SSL = _env_bool("EMAIL_USE_SSL", False)
+_configured_default_from_email = os.environ.get("DEFAULT_FROM_EMAIL", "").strip()
+DEFAULT_FROM_EMAIL = (
+    _configured_default_from_email
+    or EMAIL_HOST_USER
+    or "noreply@meroticket.local"
+)
+
+# Resend email provider configuration
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "").strip()
+RESEND_FROM_EMAIL = os.environ.get(
+    "RESEND_FROM_EMAIL",
+    "Mero Ticket <onboarding@resend.dev>",
+).strip() or "Mero Ticket <onboarding@resend.dev>"
+RESEND_API_BASE_URL = os.environ.get(
+    "RESEND_API_BASE_URL",
+    "https://api.resend.com",
+).strip() or "https://api.resend.com"
+
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "filters": {
+        "request_context": {
+            "()": "app.logging_utils.RequestContextFilter",
+        },
+    },
+    "formatters": {
+        "default": {
+            "format": "%(asctime)s %(levelname)s %(name)s request_id=%(request_id)s %(message)s",
+        },
+        "request": {
+            "format": (
+                "%(asctime)s %(levelname)s %(name)s "
+                "request_id=%(request_id)s method=%(method)s path=%(path)s "
+                "status=%(status_code)s duration_ms=%(duration_ms)s "
+                "user_id=%(user_id)s ip=%(client_ip)s %(message)s"
+            ),
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "filters": ["request_context"],
+            "formatter": "default",
+        },
+        "request_console": {
+            "class": "logging.StreamHandler",
+            "filters": ["request_context"],
+            "formatter": "request",
+        },
+    },
+    "loggers": {
+        "app.request": {
+            "handlers": ["request_console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": "INFO",
+    },
+}
