@@ -151,6 +151,7 @@ export default function AdminShows() {
           <table className="table admin-table">
             <thead>
               <tr>
+                <th>ID</th>
                 <th>Movie</th>
                 <th>Vendor</th>
                 <th>Hall</th>
@@ -166,9 +167,9 @@ export default function AdminShows() {
             <tbody>
               {shows.map((show) => (
                 <tr key={show.id}>
+                  <td>{show.id}</td>
                   <td>
                     <div className="fw-semibold">{show.movie}</div>
-                    <small className="text-muted">{show.id}</small>
                   </td>
                   <td>{show.vendor}</td>
                   <td>{show.hall}</td>
@@ -217,7 +218,7 @@ export default function AdminShows() {
               ))}
               {shows.length === 0 ? (
                 <tr>
-                  <td colSpan="10">No shows scheduled yet.</td>
+                  <td colSpan="11">No shows scheduled yet.</td>
                 </tr>
               ) : null}
             </tbody>
