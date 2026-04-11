@@ -59,14 +59,31 @@ export default function PaymentFailure() {
 
   return (
     <div className="wf2-orderPage">
-      <div className="wf2-orderPanel" style={{ maxWidth: 640, margin: "40px auto" }}>
-        <h2>{confirmed ? "Payment Received" : "Payment Failed"}</h2>
-        {loading ? <p>Checking payment status...</p> : null}
-        {!loading && !error ? (
-          <p>{message || "Your eSewa payment was not completed. Please try again."}</p>
-        ) : null}
-        {error ? <p style={{ color: "#ff6b6b" }}>{error}</p> : null}
-        <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+      <div className="wf2-orderPanel wf2-lifecycleShell" style={{ maxWidth: 720, margin: "40px auto" }}>
+        <div className="wf2-lifecycleHero">
+          <span className="wf2-orderChip">Payment review</span>
+          <h2>{confirmed ? "Payment received" : "Payment failed"}</h2>
+          <p>The booking is either ready to continue or waiting for another payment attempt.</p>
+        </div>
+
+        {loading ? <div className="wf2-lifecycleAlert">Checking payment status...</div> : null}
+        {!loading && !error ? <div className="wf2-lifecycleAlert">{message || "Your eSewa payment was not completed. Please try again."}</div> : null}
+        {error ? <div className="wf2-lifecycleAlert wf2-lifecycleAlertDanger">{error}</div> : null}
+
+        <div className="wf2-lifecycleGrid">
+          <div className="wf2-lifecycleCard">
+            <span>Payment callback</span>
+            <strong>{confirmed ? "Recovered" : "Failed"}</strong>
+            <p>{confirmed ? "The gateway returned a confirmed ticket payload." : "No confirmed ticket was created yet."}</p>
+          </div>
+          <div className="wf2-lifecycleCard">
+            <span>Booking recovery</span>
+            <strong>{confirmed ? "Continue" : "Retry"}</strong>
+            <p>{confirmed ? "Continue to ticket handoff." : "Use the booking form to try again."}</p>
+          </div>
+        </div>
+
+        <div className="wf2-lifecycleActions">
           {confirmed && ticketPayload ? (
             <button
               className="wf2-orderPayBtn"
@@ -99,7 +116,7 @@ export default function PaymentFailure() {
           <button className="wf2-orderPayBtn" type="button" onClick={() => navigate(-1)}>
             Try Again
           </button>
-          <button className="wf2-orderPayBtn" type="button" onClick={() => navigate("/")}>
+          <button className="wf2-orderPayBtn" type="button" onClick={() => navigate("/") }>
             Go Home
           </button>
         </div>
