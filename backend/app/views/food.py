@@ -14,17 +14,21 @@ from rest_framework.response import Response
 
 from ..models import Booking, BookingFoodItem, Combo, ComboItem, FoodItem, Order, OrderItem
 from ..permissions import is_authenticated, resolve_customer, resolve_vendor, vendor_required
+from ..utils import build_media_url
 
 
-def _serialize_food_item(item: FoodItem) -> dict[str, Any]:
+def _serialize_food_item(item: FoodItem, request: Any | None = None) -> dict[str, Any]:
     stock_quantity = int(item.stock_quantity or 0)
     sold_out_threshold = int(item.sold_out_threshold or 0)
     sold_out = bool(item.track_inventory and stock_quantity <= sold_out_threshold)
     stock_status = "SOLD_OUT" if sold_out else ("LOW_STOCK" if item.track_inventory and stock_quantity <= (sold_out_threshold + 10) else "IN_STOCK")
+    image_url = build_media_url(request, getattr(item, "item_image", None))
     return {
         "id": item.id,
         "itemName": item.item_name,
         "category": item.category,
+        "isVeg": bool(item.is_veg),
+        "is_veg": bool(item.is_veg),
         "price": float(item.price),
         "isAvailable": bool(item.is_available),
         "trackInventory": bool(item.track_inventory),
@@ -35,6 +39,8 @@ def _serialize_food_item(item: FoodItem) -> dict[str, Any]:
         "soldOutAt": item.sold_out_at.isoformat() if item.sold_out_at else None,
         "hall": item.hall,
         "vendorId": item.vendor_id,
+        "imageUrl": image_url,
+        "itemImage": image_url,
     }
 
 
@@ -56,6 +62,16 @@ def _truthy(value: Any, default: bool = False) -> bool:
     if value is None:
         return default
     return str(value).strip().lower() not in {"0", "false", "no", "off", ""}
+
+
+def _get_uploaded_file(request: Any, *keys: str) -> Any:
+    files = getattr(request, "FILES", None)
+    if not files:
+        return None
+    for key in keys:
+        if key in files:
+            return files.get(key)
+    return None
 
 
 def _sync_food_item_availability(item: FoodItem) -> None:
@@ -138,7 +154,7 @@ def food_items(request: Any):
             Q(hall__iexact=hall) | Q(hall__isnull=True) | Q(hall__exact="")
         )
 
-    payload = [_serialize_food_item(item) for item in queryset.order_by("category", "item_name")]
+    payload = [_serialize_food_item(item, request) for item in queryset.order_by("category", "item_name")]
     return Response({"items": payload}, status=status.HTTP_200_OK)
 
 
@@ -152,11 +168,16 @@ def vendor_food_items(request: Any):
 
     if request.method == "GET":
         items = FoodItem.objects.filter(vendor=vendor).order_by("-id")
-        return Response({"items": [_serialize_food_item(item) for item in items]}, status=status.HTTP_200_OK)
+        return Response({"items": [_serialize_food_item(item, request) for item in items]}, status=status.HTTP_200_OK)
 
     item_name = str(request.data.get("item_name") or request.data.get("itemName") or "").strip()
     category = str(request.data.get("category") or "").strip() or None
+    is_veg_raw = request.data.get("is_veg")
+    if is_veg_raw is None:
+        is_veg_raw = request.data.get("isVeg")
+    is_veg = _truthy(is_veg_raw, default=True)
     hall = str(request.data.get("hall") or "").strip() or None
+    item_image = _get_uploaded_file(request, "item_image", "itemImage")
     price = _to_decimal(request.data.get("price"))
     track_inventory = _truthy(request.data.get("track_inventory", request.data.get("trackInventory")), default=False)
     stock_quantity = _to_int(request.data.get("stock_quantity", request.data.get("stockQuantity")))
@@ -183,6 +204,8 @@ def vendor_food_items(request: Any):
         vendor=vendor,
         item_name=item_name,
         category=category,
+        is_veg=is_veg,
+        item_image=item_image,
         hall=hall,
         price=price,
         track_inventory=track_inventory,
@@ -192,7 +215,7 @@ def vendor_food_items(request: Any):
     )
     _sync_food_item_availability(item)
     item.save()
-    return Response({"item": _serialize_food_item(item)}, status=status.HTTP_201_CREATED)
+    return Response({"item": _serialize_food_item(item, request)}, status=status.HTTP_201_CREATED)
 
 
 @api_view(["PATCH", "DELETE"])
@@ -223,8 +246,27 @@ def vendor_food_item_detail(request: Any, item_id: int):
     if "category" in request.data:
         item.category = str(request.data.get("category") or "").strip() or None
 
+    if "is_veg" in request.data or "isVeg" in request.data:
+        raw = request.data.get("is_veg")
+        if raw is None:
+            raw = request.data.get("isVeg")
+        item.is_veg = _truthy(raw, default=True)
+
     if "hall" in request.data:
         item.hall = str(request.data.get("hall") or "").strip() or None
+
+    if "remove_image" in request.data or "removeImage" in request.data:
+        raw = request.data.get("remove_image")
+        if raw is None:
+            raw = request.data.get("removeImage")
+        if _truthy(raw, default=False):
+            if item.item_image:
+                item.item_image.delete(save=False)
+            item.item_image = None
+
+    uploaded_image = _get_uploaded_file(request, "item_image", "itemImage")
+    if uploaded_image is not None:
+        item.item_image = uploaded_image
 
     if "price" in request.data:
         next_price = _to_decimal(request.data.get("price"))
@@ -264,7 +306,7 @@ def vendor_food_item_detail(request: Any, item_id: int):
 
     _sync_food_item_availability(item)
     item.save()
-    return Response({"item": _serialize_food_item(item)}, status=status.HTTP_200_OK)
+    return Response({"item": _serialize_food_item(item, request)}, status=status.HTTP_200_OK)
 
 
 @api_view(["GET"])
