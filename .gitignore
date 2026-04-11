@@ -41,6 +41,8 @@ db.sqlite3-journal
 !/media/.gitkeep
 /static
 /staticfiles
+backend/media/
+backend/staticfiles/
 
 # IDE
 .vscode/
@@ -79,13 +81,10 @@ Thumbs.db
 *.bak
 temp/
 tmp/
+auto_feature_push.ps1
 
 # Keep migrations but ignore cache
 !backend/app/migrations/
 backend/app/migrations/__pycache__/
 !backend/app/management/
 backend/app/management/__pycache__/
-
-# Project media/static artifacts
-backend/media/
-backend/staticfiles/
