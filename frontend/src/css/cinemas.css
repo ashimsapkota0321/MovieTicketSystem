@@ -1,5 +1,10 @@
 .cinemas-page {
   width: 100%;
+  padding-top: 12px;
+  background-image: var(--page-pattern);
+  background-repeat: repeat;
+  background-size: var(--page-pattern-size);
+  background-position: top center;
 }
 
 .cinemas-wrap {
@@ -15,7 +20,7 @@
   align-items: flex-end;
   justify-content: space-between;
   gap: 16px;
-  margin: 26px 0 22px;
+  margin: 14px 0 22px;
 }
 
 .cinemas-title {
@@ -35,13 +40,17 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 18px;
+  background: #3f3f44;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  padding: 18px;
 }
 
 .cinema-card {
   position: relative;
   width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(16, 19, 28, 0.95);
+  background: #4a4b53;
   border-radius: 18px;
   padding: 18px;
   text-align: left;
@@ -154,5 +163,9 @@
   .cinemas-head {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .cinemas-grid {
+    padding: 12px;
   }
 }
