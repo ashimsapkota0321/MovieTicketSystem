@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
+import hashlib
+import secrets
+import uuid
 from functools import wraps
+from datetime import timedelta
 from typing import Any, Optional
 
 from django.conf import settings
 from django.core import signing
 from django.db.models import Q
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import SAFE_METHODS, BasePermission
 from rest_framework.response import Response
 
-from .models import Admin, User, Vendor, VendorStaff
+from .models import Admin, AuthSession, User, Vendor, VendorStaff
 
 ADMIN_REQUIRED_MESSAGE = "Admin access required."
 SUPER_ADMIN_REQUIRED_MESSAGE = "Super admin access required."
@@ -25,31 +30,127 @@ ROLE_VENDOR = "vendor"
 ROLE_CUSTOMER = "customer"
 ROLE_CHOICES = {ROLE_ADMIN, ROLE_VENDOR, ROLE_CUSTOMER}
 AUTH_TOKEN_SALT = "meroticket.auth.token.v1"
-DEFAULT_TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24 * 7  # 7 days
+DEFAULT_ACCESS_TOKEN_MAX_AGE_SECONDS = 60 * 15
+DEFAULT_REFRESH_TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24 * 30
 
 
-def _token_max_age_seconds() -> int:
-    """Return the configured auth token max age in seconds."""
+def _access_token_max_age_seconds() -> int:
+    """Return the configured auth access token max age in seconds."""
     configured = getattr(
-        settings, "APP_AUTH_TOKEN_MAX_AGE_SECONDS", DEFAULT_TOKEN_MAX_AGE_SECONDS
+        settings,
+        "APP_AUTH_ACCESS_TOKEN_MAX_AGE_SECONDS",
+        getattr(settings, "APP_AUTH_TOKEN_MAX_AGE_SECONDS", DEFAULT_ACCESS_TOKEN_MAX_AGE_SECONDS),
     )
     try:
         parsed = int(configured)
     except (TypeError, ValueError):
-        parsed = DEFAULT_TOKEN_MAX_AGE_SECONDS
+        parsed = DEFAULT_ACCESS_TOKEN_MAX_AGE_SECONDS
     return max(parsed, 60)
 
 
-def issue_access_token(role: str, user_id: Any, extras: Optional[dict[str, Any]] = None) -> str:
+def _refresh_token_max_age_seconds() -> int:
+    """Return the configured auth refresh token max age in seconds."""
+    configured = getattr(
+        settings,
+        "APP_AUTH_REFRESH_TOKEN_MAX_AGE_SECONDS",
+        DEFAULT_REFRESH_TOKEN_MAX_AGE_SECONDS,
+    )
+    try:
+        parsed = int(configured)
+    except (TypeError, ValueError):
+        parsed = DEFAULT_REFRESH_TOKEN_MAX_AGE_SECONDS
+    return max(parsed, 60)
+
+
+def _token_digest(value: str) -> str:
+    """Return a stable hash for persisted token lookup."""
+    return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
+
+
+def issue_access_token(
+    role: str,
+    user_id: Any,
+    extras: Optional[dict[str, Any]] = None,
+    *,
+    session_id: Any = None,
+) -> str:
     """Issue a signed access token containing role and subject ID."""
     normalized_role = str(role or "").strip().lower()
     if normalized_role not in ROLE_CHOICES:
         raise ValueError("Unsupported role")
     subject_id = int(user_id)
-    payload = {"role": normalized_role, "user_id": subject_id}
+    payload = {"role": normalized_role, "user_id": subject_id, "token_type": "access"}
+    if session_id is not None:
+        payload["session_id"] = str(session_id)
     if isinstance(extras, dict):
         payload.update(extras)
     return signing.dumps(payload, salt=AUTH_TOKEN_SALT, compress=True)
+
+
+def create_auth_session(
+    role: str,
+    user_id: Any,
+    extras: Optional[dict[str, Any]] = None,
+) -> tuple[AuthSession, str]:
+    """Create a revocable auth session and return the refresh token."""
+    normalized_role = str(role or "").strip().lower()
+    if normalized_role not in ROLE_CHOICES:
+        raise ValueError("Unsupported role")
+
+    subject_id = int(user_id)
+    now = timezone.now()
+    session = AuthSession.objects.create(
+        role=normalized_role,
+        user_id=subject_id,
+        staff_id=(int(extras.get("staff_id")) if isinstance(extras, dict) and extras.get("staff_id") is not None else None),
+        staff_role=(str(extras.get("staff_role") or "").strip().upper() if isinstance(extras, dict) else None) or None,
+        access_expires_at=now + timedelta(seconds=_access_token_max_age_seconds()),
+        refresh_expires_at=now + timedelta(seconds=_refresh_token_max_age_seconds()),
+    )
+    refresh_token = secrets.token_urlsafe(48)
+    session.refresh_token_hash = _token_digest(refresh_token)
+    session.save(update_fields=["refresh_token_hash"])
+    return session, refresh_token
+
+
+def _get_active_session(session_id: Any) -> Optional[AuthSession]:
+    """Return the active auth session for a token payload."""
+    token_session_id = str(session_id or "").strip()
+    if not token_session_id:
+        return None
+    try:
+        token_session_id = str(uuid.UUID(token_session_id))
+    except (TypeError, ValueError, AttributeError):
+        return None
+    session = AuthSession.objects.filter(session_id=token_session_id).first()
+    if not session:
+        return None
+    now = timezone.now()
+    if session.revoked_at or session.refresh_expires_at <= now:
+        return None
+    return session
+
+
+def _session_payload_matches(session: AuthSession, token_payload: dict[str, Any]) -> bool:
+    """Confirm the decoded token still belongs to the active session."""
+    if session.role != str(token_payload.get("role") or "").strip().lower():
+        return False
+    try:
+        if int(token_payload.get("user_id")) != int(session.user_id):
+            return False
+    except (TypeError, ValueError):
+        return False
+    token_staff_id = token_payload.get("staff_id")
+    if token_staff_id is not None:
+        try:
+            if int(token_staff_id) != int(session.staff_id or 0):
+                return False
+        except (TypeError, ValueError):
+            return False
+    token_staff_role = str(token_payload.get("staff_role") or "").strip().upper() or None
+    if token_staff_role and token_staff_role != str(session.staff_role or "").strip().upper():
+        return False
+    return True
 
 
 def _extract_bearer_token(request: Any) -> str:
@@ -78,7 +179,7 @@ def _decode_access_token(token: str) -> Optional[dict[str, Any]]:
         payload = signing.loads(
             token,
             salt=AUTH_TOKEN_SALT,
-            max_age=_token_max_age_seconds(),
+            max_age=_access_token_max_age_seconds(),
         )
     except signing.BadSignature:
         return None
@@ -86,6 +187,9 @@ def _decode_access_token(token: str) -> Optional[dict[str, Any]]:
         return None
 
     if not isinstance(payload, dict):
+        return None
+    token_type = str(payload.get("token_type") or "access").strip().lower()
+    if token_type != "access":
         return None
     role = str(payload.get("role") or "").strip().lower()
     if role not in ROLE_CHOICES:
@@ -96,7 +200,14 @@ def _decode_access_token(token: str) -> Optional[dict[str, Any]]:
         return None
     if user_id <= 0:
         return None
+    session_id = payload.get("session_id")
+    if session_id is not None:
+        session = _get_active_session(session_id)
+        if not session or not _session_payload_matches(session, payload):
+            return None
     decoded = {"role": role, "user_id": user_id}
+    if session_id is not None:
+        decoded["session_id"] = str(session_id)
     if "staff_id" in payload:
         try:
             decoded["staff_id"] = int(payload.get("staff_id"))
@@ -105,6 +216,73 @@ def _decode_access_token(token: str) -> Optional[dict[str, Any]]:
     if "staff_role" in payload:
         decoded["staff_role"] = str(payload.get("staff_role") or "").strip().upper()
     return decoded
+
+
+def _find_refresh_session(refresh_token: str) -> Optional[AuthSession]:
+    """Return the active session associated with a refresh token."""
+    token = str(refresh_token or "").strip()
+    if not token:
+        return None
+    token_hash = _token_digest(token)
+    session = AuthSession.objects.filter(refresh_token_hash=token_hash).first()
+    if not session:
+        return None
+    now = timezone.now()
+    if session.revoked_at or session.refresh_expires_at <= now:
+        return None
+    return session
+
+
+def refresh_access_token(refresh_token: str) -> Optional[dict[str, Any]]:
+    """Rotate a refresh token and issue a new access token pair."""
+    session = _find_refresh_session(refresh_token)
+    if not session:
+        return None
+
+    extras: dict[str, Any] = {}
+    if session.staff_id is not None:
+        extras["staff_id"] = session.staff_id
+    if session.staff_role:
+        extras["staff_role"] = session.staff_role
+
+    new_refresh_token = secrets.token_urlsafe(48)
+    now = timezone.now()
+    session.refresh_token_hash = _token_digest(new_refresh_token)
+    session.access_expires_at = now + timedelta(seconds=_access_token_max_age_seconds())
+    session.last_used_at = now
+    session.save(update_fields=["refresh_token_hash", "access_expires_at", "last_used_at"])
+
+    access_token = issue_access_token(
+        session.role,
+        session.user_id,
+        extras=extras or None,
+        session_id=session.session_id,
+    )
+    return {
+        "session": session,
+        "access_token": access_token,
+        "refresh_token": new_refresh_token,
+    }
+
+
+def revoke_auth_session(session_id: Any, reason: str = "logout") -> bool:
+    """Revoke a session by its identifier."""
+    token_session_id = str(session_id or "").strip()
+    if not token_session_id:
+        return False
+    updated = AuthSession.objects.filter(
+        session_id=token_session_id,
+        revoked_at__isnull=True,
+    ).update(revoked_at=timezone.now(), revoked_reason=reason)
+    return bool(updated)
+
+
+def revoke_refresh_token(refresh_token: str, reason: str = "logout") -> bool:
+    """Revoke a session by its refresh token."""
+    session = _find_refresh_session(refresh_token)
+    if not session:
+        return False
+    return revoke_auth_session(session.session_id, reason=reason)
 
 
 def _identity_query(user: Any) -> Optional[Q]:
@@ -132,9 +310,11 @@ def _resolve_identity_from_token(token_payload: dict[str, Any]) -> dict[str, Any
         "vendor": None,
         "vendor_staff": None,
         "customer": None,
+        "session_id": None,
     }
     role = token_payload.get("role")
     user_id = token_payload.get("user_id")
+    session_id = token_payload.get("session_id")
     if role == ROLE_ADMIN:
         admin = Admin.objects.filter(pk=user_id, is_active=True).first()
         if admin:
@@ -163,6 +343,8 @@ def _resolve_identity_from_token(token_payload: dict[str, Any]) -> dict[str, Any
         if customer:
             identity["role"] = ROLE_CUSTOMER
             identity["customer"] = customer
+    if session_id is not None:
+        identity["session_id"] = str(session_id)
     return identity
 
 
@@ -174,6 +356,7 @@ def _resolve_identity_from_request_user(request: Any) -> dict[str, Any]:
         "vendor": None,
         "vendor_staff": None,
         "customer": None,
+        "session_id": None,
     }
     user = getattr(request, "user", None)
     if not user:
@@ -241,6 +424,7 @@ def resolve_request_identity(request: Any) -> dict[str, Any]:
         "vendor": None,
         "vendor_staff": None,
         "customer": None,
+        "session_id": None,
     }
     token = _extract_bearer_token(request)
     token_payload = _decode_access_token(token)
@@ -276,6 +460,12 @@ def resolve_vendor(request: Any) -> Optional[Any]:
 def resolve_customer(request: Any) -> Optional[Any]:
     """Resolve the customer actor attached to the request, if any."""
     return resolve_request_identity(request).get("customer")
+
+
+def get_request_session_id(request: Any) -> Optional[str]:
+    """Return the active auth session ID for the current request, if available."""
+    session_id = resolve_request_identity(request).get("session_id")
+    return str(session_id) if session_id else None
 
 
 def resolve_vendor_staff(request: Any) -> Optional[VendorStaff]:
