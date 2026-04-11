@@ -7,10 +7,18 @@ from typing import Any
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
+from django.utils import timezone
 
 from ..models import Admin, User, Vendor
 from .. import services
-from ..permissions import admin_required, vendor_required
+from ..permissions import (
+    admin_required,
+    get_request_session_id,
+    refresh_access_token,
+    revoke_auth_session,
+    revoke_refresh_token,
+    vendor_required,
+)
 
 
 @api_view(["GET", "POST"])
@@ -51,12 +59,44 @@ def login(request: Any):
                 "message": "Login endpoint",
                 "method": "POST",
                 "required_fields": ["email_or_phone", "password"],
+                "response_fields": ["access_token", "refresh_token", "session_id", "expires_in", "refresh_expires_in"],
             },
             status=status.HTTP_200_OK,
         )
 
     payload, status_code = services.login_user(request)
     return Response(payload, status=status_code)
+
+
+@api_view(["POST"])
+def refresh(request: Any):
+    """Refresh an auth session using a refresh token."""
+    refresh_token = request.data.get("refresh_token") or request.data.get("refreshToken")
+    payload = refresh_access_token(refresh_token)
+    if not payload:
+        return Response({"message": "Invalid or expired refresh token"}, status=status.HTTP_401_UNAUTHORIZED)
+    session = payload.pop("session")
+    response_payload = {
+        **payload,
+        "session_id": str(session.session_id),
+        "expires_in": max(int((session.access_expires_at - timezone.now()).total_seconds()), 0),
+        "refresh_expires_in": max(int((session.refresh_expires_at - timezone.now()).total_seconds()), 0),
+    }
+    return Response(response_payload, status=status.HTTP_200_OK)
+
+
+@api_view(["POST"])
+def logout(request: Any):
+    """Revoke the current auth session."""
+    refresh_token = request.data.get("refresh_token") or request.data.get("refreshToken")
+    if refresh_token and revoke_refresh_token(refresh_token):
+        return Response({"message": "Logged out successfully"}, status=status.HTTP_200_OK)
+
+    session_id = get_request_session_id(request)
+    if session_id and revoke_auth_session(session_id):
+        return Response({"message": "Logged out successfully"}, status=status.HTTP_200_OK)
+
+    return Response({"message": "Session not found or already revoked"}, status=status.HTTP_404_NOT_FOUND)
 
 
 @api_view(["POST"])
