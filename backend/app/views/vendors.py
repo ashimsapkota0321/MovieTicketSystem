@@ -20,6 +20,7 @@ from ..models import (
     VendorStaff,
 )
 from ..permissions import admin_required, vendor_required, resolve_vendor, is_vendor_owner
+from ..revenue_serializers import RevenueConfigUpdateSerializer
 from ..utils import coalesce
 
 
@@ -56,6 +57,70 @@ def vendor_analytics(request: Any):
     
     analytics_data = services.get_vendor_analytics(vendor, request)
     return Response(analytics_data, status=status.HTTP_200_OK)
+
+
+@api_view(["GET"])
+@vendor_required
+def vendor_revenue_analytics(request: Any):
+    """Get vendor revenue analytics (daily/weekly/monthly + chart-ready)."""
+    payload, status_code = services.get_vendor_revenue_analytics(request)
+    return Response(payload, status=status_code)
+
+
+@api_view(["GET"])
+@vendor_required
+def vendor_revenue_transactions(request: Any):
+    """Get vendor revenue transaction history."""
+    payload, status_code = services.list_vendor_revenue_transactions(request)
+    return Response(payload, status=status_code)
+
+
+@api_view(["GET"])
+@vendor_required
+def vendor_revenue_report(request: Any):
+    """Get vendor revenue report grouped per show with date-range filter."""
+    payload, status_code = services.get_vendor_revenue_report(request)
+    return Response(payload, status=status_code)
+
+
+@api_view(["GET", "PATCH"])
+@admin_required
+def admin_revenue_config(request: Any):
+    """Get or update platform commission configuration."""
+    if request.method == "GET":
+        payload, status_code = services.get_admin_revenue_config(request)
+        return Response(payload, status=status_code)
+
+    serializer = RevenueConfigUpdateSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response({"message": "Invalid payload.", "errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+    payload, status_code = services.update_admin_revenue_config(request, payload_override=serializer.validated_data)
+    return Response(payload, status=status_code)
+
+
+@api_view(["GET"])
+@admin_required
+def admin_revenue_analytics(request: Any):
+    """Get admin revenue analytics (overall platform + top vendors + charts)."""
+    payload, status_code = services.get_admin_revenue_analytics(request)
+    return Response(payload, status=status_code)
+
+
+@api_view(["GET"])
+@admin_required
+def admin_revenue_transactions(request: Any):
+    """Get admin commission transaction history."""
+    payload, status_code = services.list_admin_revenue_transactions(request)
+    return Response(payload, status=status_code)
+
+
+@api_view(["GET"])
+@admin_required
+def admin_revenue_report(request: Any):
+    """Get admin report grouped by vendor and show with date-range filter."""
+    payload, status_code = services.get_admin_revenue_report(request)
+    return Response(payload, status=status_code)
 
 
 @api_view(["GET", "POST"])
