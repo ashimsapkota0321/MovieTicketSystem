@@ -177,8 +177,8 @@
   position: sticky;
   top: 0;
   height: 100vh;
-  background: #000000;
-  border-right: 1px solid #000000;
+  background: #ffffff;
+  border-right: 1px solid var(--admin-border);
   padding: 24px 18px;
   display: flex;
   flex-direction: column;
@@ -190,18 +190,18 @@
 .admin-sidebar .admin-nav-link,
 .admin-sidebar .admin-email,
 .admin-sidebar .admin-user {
-  color: #ffffff;
+  color: var(--admin-text);
 }
 
 .admin-sidebar .admin-nav-link:hover,
 .admin-sidebar .admin-nav-link.active {
-  color: #ffffff;
-  background: rgba(255, 255, 255, 0.12);
+  color: var(--admin-text);
+  background: rgba(16, 185, 129, 0.1);
 }
 
 .admin-sidebar .admin-sidebar-footer {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(17, 24, 39, 0.04);
+  border-color: var(--admin-border);
 }
 
 .admin-brand {
@@ -766,6 +766,49 @@
   font-size: 0.9rem;
 }
 
+.revenue-head-admin {
+  padding-top: 14px;
+  padding-bottom: 14px;
+}
+
+.revenue-head-admin .revenue-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.revenue-head-admin .form-select {
+  min-width: 136px;
+}
+
+.revenue-stat-grid-admin {
+  gap: 14px;
+}
+
+.revenue-stat-card-admin {
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.revenue-stat-note {
+  color: #758293;
+  font-size: 0.78rem;
+}
+
+.revenue-grid-main-admin {
+  gap: 16px;
+}
+
+.revenue-table thead th {
+  font-size: 0.74rem;
+  letter-spacing: 0.06em;
+}
+
+.revenue-table tbody td {
+  font-size: 0.86rem;
+}
+
 .sparkline {
   display: flex;
   gap: 4px;
@@ -814,12 +857,27 @@
   width: 52px;
   height: 70px;
   border-radius: 12px;
+  position: relative;
+  overflow: hidden;
   display: grid;
   place-items: center;
+}
+
+.admin-posterFallback {
   color: #fff;
   font-weight: 600;
   font-size: 0.72rem;
   letter-spacing: 0.08em;
+  z-index: 1;
+}
+
+.admin-posterImage {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 2;
 }
 
 .admin-banner-thumb {
