@@ -73,6 +73,24 @@ export default function ThankYou() {
           </p>
         </div>
 
+        <div className="wf2-lifecycleGrid wf2-thankyouLifecycleGrid">
+          <div className="wf2-lifecycleCard">
+            <span>Payment</span>
+            <strong>Confirmed</strong>
+            <p>The gateway payment has been validated and attached to the booking.</p>
+          </div>
+          <div className="wf2-lifecycleCard">
+            <span>Ticket</span>
+            <strong>Ready</strong>
+            <p>The QR and download handoff are available below.</p>
+          </div>
+          <div className="wf2-lifecycleCard">
+            <span>Review</span>
+            <strong>Closed</strong>
+            <p>No manual approval is needed for this confirmed ticket.</p>
+          </div>
+        </div>
+
         <div className="wf2-thankyouRow">
           <section className="wf2-thankyouCard wf2-thankyouQrCard">
             <h3>Entry QR Code</h3>
