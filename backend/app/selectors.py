@@ -127,25 +127,33 @@ def sync_show_lifecycle_statuses(now: Optional[datetime] = None) -> dict[str, in
 def list_available_shows(now: Optional[datetime] = None):
     now = ensure_utc_datetime(now or timezone.now())
     cutoff = now + timedelta(minutes=BOOKING_CLOSE_BEFORE_START_MINUTES)
-    return Show.objects.filter(_show_start_after(cutoff)).exclude(status__iexact=SHOW_STATUS_COMPLETED)
+    return Show.objects.filter(
+        _show_start_after(cutoff),
+        movie__is_approved=True,
+    ).exclude(status__iexact=SHOW_STATUS_COMPLETED)
 
 
 def list_booking_closed_shows(now: Optional[datetime] = None):
     now = ensure_utc_datetime(now or timezone.now())
     cutoff = now + timedelta(minutes=BOOKING_CLOSE_BEFORE_START_MINUTES)
-    return Show.objects.filter(_show_start_before_or_at(cutoff)).filter(_show_start_after(now)).exclude(
-        status__iexact=SHOW_STATUS_COMPLETED
-    )
+    return Show.objects.filter(
+        _show_start_before_or_at(cutoff),
+        _show_start_after(now),
+        movie__is_approved=True,
+    ).exclude(status__iexact=SHOW_STATUS_COMPLETED)
 
 
 def list_running_shows(now: Optional[datetime] = None):
     now = ensure_utc_datetime(now or timezone.now())
-    return Show.objects.filter(_show_start_before_or_at(now)).exclude(_show_end_before_or_at(now))
+    return Show.objects.filter(
+        _show_start_before_or_at(now),
+        movie__is_approved=True,
+    ).exclude(_show_end_before_or_at(now))
 
 
 def list_completed_shows(now: Optional[datetime] = None):
     now = ensure_utc_datetime(now or timezone.now())
-    return Show.objects.filter(_show_end_before_or_at(now))
+    return Show.objects.filter(_show_end_before_or_at(now), movie__is_approved=True)
 
 
 def normalize_city(value: Optional[Any]) -> str:
@@ -305,23 +313,32 @@ def list_show_times_for_vendor_movie_date(
     return queryset.values_list("start_time", flat=True).distinct().order_by("start_time")
 
 
-def list_movies():
-    """Return all movies with genres prefetched."""
-    return Movie.objects.prefetch_related("genres").all().order_by("-created_at")
+def list_movies(include_unapproved: bool = False):
+    """Return movies with genres prefetched."""
+    queryset = Movie.objects.prefetch_related("genres")
+    if not include_unapproved:
+        queryset = queryset.filter(is_approved=True)
+    return queryset.all().order_by("-created_at")
 
 
-def get_movie(movie_id: int) -> Optional[Movie]:
+def get_movie(movie_id: int, include_unapproved: bool = False) -> Optional[Movie]:
     """Return a movie by ID or None."""
     try:
-        return Movie.objects.get(pk=movie_id)
+        queryset = Movie.objects.all()
+        if not include_unapproved:
+            queryset = queryset.filter(is_approved=True)
+        return queryset.get(pk=movie_id)
     except Movie.DoesNotExist:
         return None
 
 
-def get_movie_by_slug(slug: str) -> Optional[Movie]:
+def get_movie_by_slug(slug: str, include_unapproved: bool = False) -> Optional[Movie]:
     """Return a movie by slug or None."""
     try:
-        return Movie.objects.get(slug=slug)
+        queryset = Movie.objects.all()
+        if not include_unapproved:
+            queryset = queryset.filter(is_approved=True)
+        return queryset.get(slug=slug)
     except Movie.DoesNotExist:
         return None
 
@@ -330,30 +347,42 @@ def list_trailers_payload(request: Optional[Any] = None) -> list[dict[str, Any]]
     """Build payload data for movies that have trailers."""
     payload: list[dict[str, Any]] = []
     for movie in list_movies():
-        if not movie.trailer_url:
+        trailer_urls = [
+            str(item or "").strip()
+            for item in (movie.trailer_urls or [])
+            if str(item or "").strip()
+        ]
+        if movie.trailer_url and movie.trailer_url not in trailer_urls:
+            trailer_urls.insert(0, movie.trailer_url)
+        if not trailer_urls:
             continue
-        youtube_id = extract_youtube_id(movie.trailer_url)
 
-        thumbnail_url = None
-        if youtube_id:
-            thumbnail_url = YOUTUBE_THUMBNAIL_TEMPLATE.format(youtube_id=youtube_id)
-        if not thumbnail_url:
-            thumbnail_url = build_media_url(request, getattr(movie, "banner_image", None))
-        if not thumbnail_url:
-            thumbnail_url = build_media_url(request, getattr(movie, "poster_image", None))
-        if not thumbnail_url and movie.poster_url:
-            thumbnail_url = movie.poster_url
+        for index, trailer_url in enumerate(trailer_urls):
+            youtube_id = extract_youtube_id(trailer_url)
 
-        payload.append(
-            {
-                "id": movie.id,
-                "title": movie.title,
-                "youtube_url": movie.trailer_url,
-                "youtube_id": youtube_id,
-                "thumbnail_url": thumbnail_url,
-                "duration_label": movie.duration or "",
-            }
-        )
+            thumbnail_url = None
+            if youtube_id:
+                thumbnail_url = YOUTUBE_THUMBNAIL_TEMPLATE.format(youtube_id=youtube_id)
+            if not thumbnail_url:
+                thumbnail_url = build_media_url(request, getattr(movie, "banner_image", None))
+            if not thumbnail_url:
+                thumbnail_url = build_media_url(request, getattr(movie, "poster_image", None))
+            if not thumbnail_url and movie.poster_url:
+                thumbnail_url = movie.poster_url
+
+            payload.append(
+                {
+                    "id": f"{movie.id}-{index + 1}",
+                    "movie_id": movie.id,
+                    "title": movie.title,
+                    "youtube_url": trailer_url,
+                    "youtube_id": youtube_id,
+                    "thumbnail_url": thumbnail_url,
+                    "duration_label": movie.duration or "",
+                    "trailer_index": index + 1,
+                    "trailer_count": len(trailer_urls),
+                }
+            )
     return payload
 
 
@@ -367,6 +396,17 @@ def compute_listing_status(movie: Movie) -> Optional[str]:
     if any(str(status).lower().startswith("coming") for status in statuses):
         return LISTING_STATUS_COMING
     return None
+
+
+def _build_movie_audit_payload(movie: Movie) -> dict[str, Any]:
+    """Build moderation metadata for backoffice movie responses."""
+    return {
+        "approvalStatus": getattr(movie, "approval_status", None),
+        "approvalReason": getattr(movie, "approval_reason", None),
+        "approvalMetadata": getattr(movie, "approval_metadata", {}) or {},
+        "approvedAt": movie.approved_at.isoformat() if getattr(movie, "approved_at", None) else None,
+        "approvedBy": getattr(movie.approved_by, "id", None) if getattr(movie, "approved_by", None) else None,
+    }
 
 
 def build_movie_payload(movie: Movie, listing_status: Optional[str] = None, request: Optional[Any] = None) -> dict[str, Any]:
@@ -386,6 +426,13 @@ def build_movie_payload(movie: Movie, listing_status: Optional[str] = None, requ
 
     short_desc = movie.short_description or movie.description or ""
     long_desc = movie.long_description or movie.description or ""
+    trailer_urls = [
+        str(item or "").strip()
+        for item in (movie.trailer_urls or [])
+        if str(item or "").strip()
+    ]
+    if movie.trailer_url and movie.trailer_url not in trailer_urls:
+        trailer_urls.insert(0, movie.trailer_url)
 
     return {
         "id": movie.id,
@@ -403,15 +450,46 @@ def build_movie_payload(movie: Movie, listing_status: Optional[str] = None, requ
         "posterImage": poster_image_url,
         "bannerImage": banner_url,
         "posterUrl": movie.poster_url,
-        "trailerUrl": movie.trailer_url,
+        "trailerUrl": trailer_urls[0] if trailer_urls else movie.trailer_url,
+        "trailerUrls": trailer_urls,
         "status": movie.status,
         "listingStatus": listing_status or movie.status,
         "averageRating": float(movie.average_rating or 0),
         "reviewCount": movie.review_count or 0,
         "isActive": movie.is_active,
+        "isApproved": movie.is_approved,
         "createdAt": movie.created_at.isoformat() if movie.created_at else None,
         "updatedAt": movie.updated_at.isoformat() if movie.updated_at else None,
     }
+
+
+def build_movie_backoffice_payload(
+    movie: Movie,
+    listing_status: Optional[str] = None,
+    request: Optional[Any] = None,
+) -> dict[str, Any]:
+    """Build the vendor/admin payload for a movie with moderation metadata."""
+    payload = build_movie_payload(movie, listing_status=listing_status, request=request)
+    payload.update(_build_movie_audit_payload(movie))
+    return payload
+
+
+def build_movie_vendor_payload(
+    movie: Movie,
+    listing_status: Optional[str] = None,
+    request: Optional[Any] = None,
+) -> dict[str, Any]:
+    """Build the vendor-facing payload for a movie."""
+    return build_movie_backoffice_payload(movie, listing_status=listing_status, request=request)
+
+
+def build_movie_admin_payload(
+    movie: Movie,
+    listing_status: Optional[str] = None,
+    request: Optional[Any] = None,
+) -> dict[str, Any]:
+    """Build the admin-facing payload for a movie."""
+    return build_movie_backoffice_payload(movie, listing_status=listing_status, request=request)
 
 
 def build_movie_select_payload(movie: Movie) -> dict[str, Any]:
@@ -426,7 +504,7 @@ def list_movies_payload(
     city: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """Return movie payloads with listing status for each movie."""
-    queryset = list_movies()
+    queryset = list_movies(include_unapproved=include_all)
     if not include_all:
         # Customer catalog should include any movie that has at least one show,
         # even if the movie-level active flag is off.
@@ -436,10 +514,16 @@ def list_movies_payload(
     if normalized_city:
         queryset = queryset.filter(shows__vendor__city__iexact=normalized_city).distinct()
 
+    if include_all and request is not None and is_admin_request(request):
+        payload_builder = build_movie_admin_payload
+    elif include_all and request is not None and is_vendor_request(request):
+        payload_builder = build_movie_vendor_payload
+    else:
+        payload_builder = build_movie_payload
     payload: list[dict[str, Any]] = []
     for movie in queryset:
         listing = compute_listing_status(movie)
-        payload.append(build_movie_payload(movie, listing, request=request))
+        payload.append(payload_builder(movie, listing, request=request))
     return payload
 
 
@@ -457,9 +541,16 @@ def list_movie_reviews(movie: Movie):
     ).order_by("-created_at")
 
 
-def build_movie_detail_payload(movie: Movie, request: Optional[Any] = None) -> dict[str, Any]:
+def build_movie_detail_payload(
+    movie: Movie,
+    request: Optional[Any] = None,
+    *,
+    include_audit: bool = False,
+) -> dict[str, Any]:
     """Build the movie detail payload including credits and reviews."""
     base = build_movie_payload(movie, listing_status=None, request=request)
+    if include_audit:
+        base.update(_build_movie_audit_payload(movie))
     credits = list_movie_credits(movie)
 
     cast: list[dict[str, Any]] = []
