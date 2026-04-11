@@ -33,6 +33,9 @@ from .models import (
     Order,
     OrderItem,
     TicketValidationScan,
+    PlatformRevenueConfig,
+    AdminWallet,
+    AdminWalletTransaction,
 )
 
 SMALL_IMAGE_HEIGHT = 32
@@ -257,6 +260,63 @@ class CouponAdmin(admin.ModelAdmin):
     search_fields = ("code",)
     list_filter = ("discount_type", "is_active")
     ordering = ("-created_at",)
+
+
+@admin.register(PlatformRevenueConfig)
+class PlatformRevenueConfigAdmin(admin.ModelAdmin):
+    list_display = ("id", "commission_percent", "is_active", "updated_by", "updated_at")
+    list_filter = ("is_active",)
+    readonly_fields = ("key", "created_at", "updated_at")
+
+
+@admin.register(AdminWallet)
+class AdminWalletAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "key",
+        "balance",
+        "total_commission_earned",
+        "total_commission_reversed",
+        "updated_at",
+    )
+    readonly_fields = (
+        "key",
+        "balance",
+        "total_commission_earned",
+        "total_commission_reversed",
+        "created_at",
+        "updated_at",
+    )
+
+
+@admin.register(AdminWalletTransaction)
+class AdminWalletTransactionAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "transaction_type",
+        "status",
+        "amount",
+        "vendor",
+        "booking",
+        "created_at",
+    )
+    list_filter = ("transaction_type", "status")
+    search_fields = ("description", "vendor__name")
+    readonly_fields = (
+        "wallet",
+        "booking",
+        "payment",
+        "refund",
+        "vendor",
+        "transaction_type",
+        "status",
+        "amount",
+        "gross_amount",
+        "commission_percent",
+        "description",
+        "metadata",
+        "created_at",
+    )
 
 
 @admin.register(LoyaltyProgramConfig)
