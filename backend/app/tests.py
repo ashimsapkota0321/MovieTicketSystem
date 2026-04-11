@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import tempfile
 import zipfile
@@ -14,8 +15,10 @@ from urllib.parse import urlencode
 from unittest import mock
 
 from django.core.cache import cache
+from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
+from django.http import QueryDict
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from PIL import Image
@@ -43,6 +46,7 @@ from .models import (
     Reward,
     RewardRedemption,
     Referral,
+    Refund,
     ReferralWallet,
     ReferralTransaction,
     Review,
@@ -54,19 +58,26 @@ from .models import (
     SubscriptionTransaction,
     Ticket,
     TicketValidationScan,
+    Transaction,
     User,
+    UserWallet,
+    UserWalletTransaction,
     UserLoyaltyWallet,
     UserSubscription,
     Vendor,
     VendorStaff,
+    Wallet,
 )
 from .permissions import issue_access_token
+from .permissions import resolve_customer
 from .serializers import BannerCreateUpdateSerializer, MovieAdminWriteSerializer
+from .views.auth import logout, refresh
 from .views.ticket_validation import (
     SCAN_CODE_ALREADY_USED,
     SCAN_CODE_EXPIRED_TOKEN,
     SCAN_CODE_INVALID_TOKEN,
     SCAN_CODE_LOOKUP_INVALID,
+    SCAN_CODE_PAYMENT_INCOMPLETE,
     SCAN_CODE_RATE_LIMITED,
     SCAN_CODE_OUTSIDE_VALID_TIME_WINDOW,
     SCAN_CODE_VALID,
@@ -79,7 +90,18 @@ from .views.ticket_validation import (
     vendor_ticket_validation_monitor_export_job_detail,
     vendor_ticket_validation_monitor_export_job_download,
 )
-from .views.booking import _confirm_booking_after_payment, _pending_payment_method
+from .views.booking import (
+    _build_signature,
+    _confirm_booking_after_payment,
+    _esewa_product_code,
+    _pending_payment_method,
+    esewa_verify,
+    user_wallet_booking_pay,
+    user_wallet_topup_esewa_initiate,
+    user_wallet_topup_esewa_verify,
+)
+from .views.home import home_now_showing_slides
+from .views.user_access import user_wallet
 from .viewsets import ReviewViewSet
 
 
@@ -88,6 +110,368 @@ def build_test_image(name: str = "test.png") -> SimpleUploadedFile:
     buffer = BytesIO()
     Image.new("RGB", (1, 1), color=(255, 0, 0)).save(buffer, format="PNG")
     return SimpleUploadedFile(name, buffer.getvalue(), content_type="image/png")
+
+
+class StatusNormalizationTests(TestCase):
+    """Canonical booking/payment/refund/ticket state normalization."""
+
+    def test_booking_normalization(self) -> None:
+        self.assertEqual(
+            Booking.normalize_booking_status("Cancelled"),
+            Booking.Status.CANCELLED,
+        )
+        self.assertEqual(
+            Booking.normalize_booking_status("pending"),
+            Booking.Status.PENDING,
+        )
+
+
+class LifecycleTransitionGuardTests(TestCase):
+    """Status transitions and gateway idempotency guards."""
+
+    def setUp(self) -> None:
+        self.vendor = Vendor.objects.create(
+            name="Lifecycle Vendor",
+            email="lifecycle.vendor@meroticket.local",
+            phone_number="9810000200",
+            username="lifecycle-vendor",
+            theatre="Lifecycle Theatre",
+            city="Kathmandu",
+            is_active=True,
+            status="Active",
+        )
+        self.vendor.set_password("password")
+        self.vendor.save()
+
+        self.user = User.objects.create(
+            phone_number="9810000201",
+            email="lifecycle.user@meroticket.local",
+            username="lifecycle-user",
+            dob=date(1995, 5, 5),
+            first_name="Lifecycle",
+            last_name="User",
+            password="password",
+        )
+        self.user.set_password("password")
+        self.user.save()
+
+        self.movie = Movie.objects.create(
+            title="Lifecycle Movie",
+            status=Movie.STATUS_NOW_SHOWING,
+            is_active=True,
+        )
+
+        start_at = timezone.now() + timedelta(hours=4)
+        self.show = Show.objects.create(
+            vendor=self.vendor,
+            movie=self.movie,
+            hall="Hall L",
+            show_date=start_at.date(),
+            start_time=start_at.time().replace(second=0, microsecond=0),
+            end_time=(start_at + timedelta(hours=2)).time().replace(second=0, microsecond=0),
+            status=Show.STATUS_UPCOMING,
+            listing_status="Now Showing",
+            price=Decimal("300.00"),
+        )
+        _, self.showtime = services._get_or_create_showtime_for_context(self.show, self.show.hall)
+
+    def test_booking_status_cannot_regress(self) -> None:
+        booking = Booking.objects.create(
+            user=self.user,
+            showtime=self.showtime,
+            booking_status=Booking.Status.PENDING,
+            total_amount=Decimal("300.00"),
+        )
+
+        booking.booking_status = Booking.Status.CONFIRMED
+        booking.save(update_fields=["booking_status"])
+
+        booking.booking_status = Booking.Status.PENDING
+        with self.assertRaises(ValidationError):
+            booking.save(update_fields=["booking_status"])
+
+    def test_payment_transaction_uuid_is_idempotent(self) -> None:
+        booking = Booking.objects.create(
+            user=self.user,
+            showtime=self.showtime,
+            booking_status=Booking.Status.CONFIRMED,
+            total_amount=Decimal("300.00"),
+        )
+
+        Payment.objects.create(
+            booking=booking,
+            payment_method="ESEWA",
+            transaction_uuid="gateway-123",
+            payment_status=Payment.Status.SUCCESS,
+            amount=Decimal("300.00"),
+        )
+
+        with self.assertRaises(ValidationError):
+            Payment.objects.create(
+                booking=booking,
+                payment_method="ESEWA",
+                transaction_uuid="gateway-123",
+                payment_status=Payment.Status.SUCCESS,
+                amount=Decimal("300.00"),
+            )
+
+    def test_refund_status_cannot_regress(self) -> None:
+        booking = Booking.objects.create(
+            user=self.user,
+            showtime=self.showtime,
+            booking_status=Booking.Status.CONFIRMED,
+            total_amount=Decimal("300.00"),
+        )
+        payment = Payment.objects.create(
+            booking=booking,
+            payment_method="ESEWA",
+            transaction_uuid="gateway-456",
+            payment_status=Payment.Status.SUCCESS,
+            amount=Decimal("300.00"),
+        )
+        refund = Refund.objects.create(
+            payment=payment,
+            refund_amount=Decimal("300.00"),
+            refund_status=Refund.Status.PENDING,
+        )
+
+        refund.refund_status = Refund.Status.COMPLETED
+        refund.save(update_fields=["refund_status"])
+
+        refund.refund_status = Refund.Status.PENDING
+        with self.assertRaises(ValidationError):
+            refund.save(update_fields=["refund_status"])
+
+    def test_ticket_payment_status_cannot_regress(self) -> None:
+        ticket = Ticket.objects.create(
+            reference="LC-0001",
+            payment_status=Ticket.PaymentStatus.PENDING,
+            payload={"booking_id": 1},
+        )
+
+        ticket.payment_status = Ticket.PaymentStatus.PAID
+        ticket.save(update_fields=["payment_status"])
+
+        ticket.payment_status = Ticket.PaymentStatus.PENDING
+        with self.assertRaises(ValidationError):
+            ticket.save(update_fields=["payment_status"])
+
+    def test_withdrawal_transaction_status_cannot_regress(self) -> None:
+        wallet = Wallet.objects.create(vendor=self.vendor)
+        withdrawal = Transaction.objects.create(
+            wallet=wallet,
+            vendor=self.vendor,
+            transaction_type=Transaction.TYPE_WITHDRAWAL_REQUEST,
+            amount=Decimal("150.00"),
+            status=Transaction.STATUS_PENDING,
+        )
+
+        withdrawal.status = Transaction.STATUS_COMPLETED
+        withdrawal.save(update_fields=["status"])
+
+        withdrawal.status = Transaction.STATUS_PENDING
+        with self.assertRaises(ValidationError):
+            withdrawal.save(update_fields=["status"])
+
+
+class AuthSessionTests(TestCase):
+    """Session-backed auth login, refresh, and logout coverage."""
+
+    def setUp(self) -> None:
+        self.factory = APIRequestFactory()
+        self.user = User.objects.create(
+            phone_number="9800000099",
+            email="auth-user@meroticket.local",
+            username="auth-user",
+            dob=date(1994, 4, 4),
+            first_name="Auth",
+            last_name="User",
+            password="password",
+        )
+        self.user.set_password("password")
+        self.user.save()
+
+    def _login(self) -> dict[str, Any]:
+        request = type(
+            "Request",
+            (),
+            {
+                "data": {
+                    "email_or_phone": self.user.email,
+                    "password": "password",
+                },
+            },
+        )()
+        payload, status_code = services.login_user(request)
+        self.assertEqual(status_code, status.HTTP_200_OK)
+        self.assertTrue(payload.get("access_token"))
+        self.assertTrue(payload.get("refresh_token"))
+        self.assertTrue(payload.get("session_id"))
+        return payload
+
+    def test_login_issues_session_backed_tokens(self) -> None:
+        payload = self._login()
+
+        request = self.factory.get("/auth/me/")
+        request.META["HTTP_AUTHORIZATION"] = f"Bearer {payload['access_token']}"
+
+        customer = resolve_customer(request)
+        self.assertIsNotNone(customer)
+        self.assertEqual(customer.id, self.user.id)
+
+    def test_logout_revokes_access_token(self) -> None:
+        payload = self._login()
+
+        request = self.factory.post("/auth/logout/", {}, format="json")
+        request.META["HTTP_AUTHORIZATION"] = f"Bearer {payload['access_token']}"
+        response = logout(request)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        revoked_request = self.factory.get("/auth/me/")
+        revoked_request.META["HTTP_AUTHORIZATION"] = f"Bearer {payload['access_token']}"
+        self.assertIsNone(resolve_customer(revoked_request))
+
+    def test_refresh_rotates_refresh_token(self) -> None:
+        payload = self._login()
+
+        request = self.factory.post(
+            "/auth/refresh/",
+            {"refresh_token": payload["refresh_token"]},
+            format="json",
+        )
+        response = refresh(request)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertNotEqual(response.data.get("refresh_token"), payload["refresh_token"])
+        self.assertTrue(response.data.get("access_token"))
+
+        stale_request = self.factory.post(
+            "/auth/refresh/",
+            {"refresh_token": payload["refresh_token"]},
+            format="json",
+        )
+        stale_response = refresh(stale_request)
+        self.assertEqual(stale_response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_payment_normalization(self) -> None:
+        self.assertEqual(
+            Payment.normalize_payment_status("Success"),
+            Payment.Status.SUCCESS,
+        )
+        self.assertEqual(
+            Payment.normalize_payment_status("PAID"),
+            Payment.Status.SUCCESS,
+        )
+        self.assertEqual(
+            Payment.normalize_payment_status("Partially Refunded"),
+            Payment.Status.PARTIALLY_REFUNDED,
+        )
+
+    def test_refund_normalization(self) -> None:
+        self.assertEqual(
+            Refund.normalize_refund_status("Refunded"),
+            Refund.Status.COMPLETED,
+        )
+        self.assertEqual(
+            Refund.normalize_refund_status("pending"),
+            Refund.Status.PENDING,
+        )
+
+    def test_ticket_payment_normalization(self) -> None:
+        self.assertEqual(
+            Ticket.normalize_payment_status("success"),
+            Ticket.PaymentStatus.PAID,
+        )
+        self.assertEqual(
+            Ticket.normalize_payment_status("FAILED"),
+            Ticket.PaymentStatus.FAILED,
+        )
+
+
+class VendorWalletLedgerIntegrityTests(TestCase):
+    """Vendor wallet balances should be derived from ledger entries without zero clamping."""
+
+    def setUp(self) -> None:
+        self.vendor = Vendor.objects.create(
+            name="Ledger Vendor",
+            email="ledger.vendor@meroticket.local",
+            phone_number="9800011111",
+            username="ledger-vendor",
+            theatre="Ledger Theatre",
+            city="Kathmandu",
+            is_active=True,
+            status="Active",
+        )
+        self.vendor.set_password("password")
+        self.vendor.save()
+
+        self.user = User.objects.create(
+            phone_number="9800011112",
+            email="ledger.user@meroticket.local",
+            username="ledger-user",
+            dob=date(1995, 1, 1),
+            first_name="Ledger",
+            last_name="User",
+            password="password",
+        )
+        self.user.set_password("password")
+        self.user.save()
+
+        self.movie = Movie.objects.create(
+            title="Ledger Movie",
+            status=Movie.STATUS_NOW_SHOWING,
+            is_active=True,
+        )
+        start_at = timezone.now() + timedelta(hours=2)
+        self.show = Show.objects.create(
+            vendor=self.vendor,
+            movie=self.movie,
+            hall="Hall L",
+            show_date=start_at.date(),
+            start_time=start_at.time().replace(second=0, microsecond=0),
+            end_time=(start_at + timedelta(hours=2)).time().replace(second=0, microsecond=0),
+            status=Show.STATUS_UPCOMING,
+            listing_status="Now Showing",
+            price=Decimal("100.00"),
+        )
+        _, self.showtime = services._get_or_create_showtime_for_context(self.show, self.show.hall)
+
+        self.booking = Booking.objects.create(
+            user=self.user,
+            showtime=self.showtime,
+            booking_status=Booking.Status.CONFIRMED,
+            total_amount=Decimal("100.00"),
+        )
+
+    def test_vendor_reversal_allows_negative_obligation_after_settlement(self) -> None:
+        services._record_vendor_booking_earning(self.booking, gross_amount=Decimal("100.00"))
+
+        wallet = services._wallet_for_vendor(self.vendor)
+        Transaction.objects.create(
+            wallet=wallet,
+            vendor=self.vendor,
+            transaction_type=Transaction.TYPE_WITHDRAWAL_APPROVED,
+            amount=Decimal("90.00"),
+            commission_amount=Decimal("0.00"),
+            gross_amount=Decimal("90.00"),
+            status=Transaction.STATUS_COMPLETED,
+            description="Simulated settlement payout",
+        )
+        services._recalculate_vendor_wallet_snapshot(wallet)
+
+        services._reverse_vendor_booking_earning(self.booking, reason="Refunded booking")
+
+        wallet.refresh_from_db()
+        self.assertEqual(wallet.balance, Decimal("-90.00"))
+        self.assertEqual(wallet.total_earnings, Decimal("0.00"))
+        self.assertEqual(wallet.total_commission, Decimal("0.00"))
+        self.assertEqual(wallet.total_withdrawn, Decimal("90.00"))
+        self.assertTrue(
+            Transaction.objects.filter(
+                booking=self.booking,
+                transaction_type=Transaction.TYPE_BOOKING_REVERSAL,
+                status=Transaction.STATUS_COMPLETED,
+            ).exists()
+        )
 
 
 class RequestIdLoggingMiddlewareTests(TestCase):
@@ -272,6 +656,38 @@ class MovieCreditsAndReviewsTests(TestCase):
         self.assertTrue(MovieCredit.objects.filter(movie=movie, role_type=MovieCredit.ROLE_CAST).exists())
         self.assertTrue(MovieCredit.objects.filter(movie=movie, role_type=MovieCredit.ROLE_CREW).exists())
 
+    def test_movie_admin_serializer_accepts_querydict_credits_payload(self) -> None:
+        payload = QueryDict("", mutable=True)
+        payload.update({"title": "Credits QueryDict Movie"})
+        payload.update(
+            {
+                "credits": json.dumps(
+                    [
+                        {
+                            "role_type": "CAST",
+                            "character_name": "Hero",
+                            "position": 1,
+                            "person": {"full_name": "Actor Query"},
+                        },
+                        {
+                            "role_type": "CREW",
+                            "job_title": "Director",
+                            "position": 2,
+                            "person": {"full_name": "Director Query"},
+                        },
+                    ]
+                )
+            }
+        )
+
+        serializer = MovieAdminWriteSerializer(data=payload)
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        movie = serializer.save()
+        self.assertEqual(movie.credits.count(), 2)
+        self.assertTrue(MovieCredit.objects.filter(movie=movie, role_type=MovieCredit.ROLE_CAST).exists())
+        self.assertTrue(MovieCredit.objects.filter(movie=movie, role_type=MovieCredit.ROLE_CREW).exists())
+
     def test_movie_admin_serializer_accepts_cast_and_crew_payload(self) -> None:
         serializer = MovieAdminWriteSerializer(
             data={
@@ -364,6 +780,63 @@ class MovieCreditsAndReviewsTests(TestCase):
         self.assertTrue(updated_movie.poster_image)
         self.assertEqual(updated_movie.poster_image.name, original_poster_name)
 
+    @mock.patch("app.services.get_payload", return_value={"title": "Vendor Pending Movie"})
+    @mock.patch("app.services.resolve_vendor", return_value=object())
+    @mock.patch("app.services.resolve_admin", return_value=None)
+    def test_vendor_movie_creation_starts_pending(self, mocked_admin, mocked_vendor, mocked_payload) -> None:
+        request = type("Request", (), {"FILES": {}})()
+
+        payload, status_code = services.create_movie(request)
+
+        self.assertEqual(status_code, status.HTTP_201_CREATED)
+        movie = Movie.objects.get(pk=payload["movie"]["id"])
+        self.assertFalse(movie.is_approved)
+
+    def test_public_movie_lists_hide_unapproved_titles(self) -> None:
+        approved_movie = Movie.objects.create(
+            title="Approved Movie",
+            status=Movie.STATUS_NOW_SHOWING,
+            is_active=True,
+            is_approved=True,
+        )
+        pending_movie = Movie.objects.create(
+            title="Pending Movie",
+            status=Movie.STATUS_NOW_SHOWING,
+            is_active=True,
+            is_approved=False,
+        )
+
+        public_movies = selectors.list_movies()
+        admin_movies = selectors.list_movies(include_unapproved=True)
+
+        public_ids = {movie.id for movie in public_movies}
+        admin_ids = {movie.id for movie in admin_movies}
+        self.assertIn(approved_movie.id, public_ids)
+        self.assertNotIn(pending_movie.id, public_ids)
+        self.assertIn(pending_movie.id, admin_ids)
+
+    def test_home_now_showing_excludes_unapproved_movies(self) -> None:
+        approved_movie = Movie.objects.create(
+            title="Homepage Approved",
+            status=Movie.STATUS_NOW_SHOWING,
+            is_active=True,
+            is_approved=True,
+        )
+        Movie.objects.create(
+            title="Homepage Pending",
+            status=Movie.STATUS_NOW_SHOWING,
+            is_active=True,
+            is_approved=False,
+        )
+
+        request = APIRequestFactory().get("/home/now-showing/")
+        response = home_now_showing_slides(request)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        slide_ids = {item["id"] for item in response.data["slides"]}
+        self.assertIn(approved_movie.id, slide_ids)
+        self.assertEqual(len(slide_ids), 1)
+
     def test_movie_detail_payload_includes_cast_crew_and_approved_reviews(self) -> None:
         movie = Movie.objects.create(title="Movie Detail Data")
         cast_person = Person.objects.create(full_name="Cast Member")
@@ -438,6 +911,7 @@ class ForgotPasswordOtpEmailTests(TestCase):
         )
         self.assertEqual(mocked_send_mail.call_count, 1)
 
+    @override_settings(DEBUG=False)
     @mock.patch("app.services.send_mail")
     def test_request_password_otp_returns_error_when_email_fails(self, mocked_send_mail) -> None:
         mocked_send_mail.side_effect = Exception("SMTP unavailable")
@@ -450,7 +924,24 @@ class ForgotPasswordOtpEmailTests(TestCase):
             OTPVerification.objects.filter(email__iexact=self.user.email).exists()
         )
 
+    @override_settings(DEBUG=True)
+    @mock.patch("app.services.send_mail")
+    def test_request_password_otp_debug_falls_back_to_console_when_email_fails(
+        self,
+        mocked_send_mail,
+    ) -> None:
+        mocked_send_mail.side_effect = Exception("SMTP unavailable")
+
+        payload, status_code = services.request_password_otp(self.user.email)
+
+        self.assertEqual(status_code, status.HTTP_200_OK)
+        self.assertIn("OTP printed in backend console", str(payload.get("message") or ""))
+        self.assertTrue(
+            OTPVerification.objects.filter(email__iexact=self.user.email).exists()
+        )
+
     @override_settings(
+        DEBUG=False,
         RESEND_API_KEY="re_test_123",
         RESEND_FROM_EMAIL="Mero Ticket <onboarding@resend.dev>",
     )
@@ -716,6 +1207,20 @@ class AdminBookingEmailNotificationTests(TestCase):
         self.assertEqual(payment.payment_status, "Refunded")
         self.assertEqual(payment.refunds.count(), 1)
 
+        wallet = UserWallet.objects.get(user=self.customer)
+        self.assertEqual(wallet.balance, Decimal("200.00"))
+        self.assertEqual(wallet.total_credited, Decimal("200.00"))
+
+        wallet_tx = UserWalletTransaction.objects.filter(
+            user=self.customer,
+            booking=booking,
+            transaction_type=UserWalletTransaction.TYPE_REFUND,
+            status=UserWalletTransaction.STATUS_COMPLETED,
+        ).first()
+        self.assertIsNotNone(wallet_tx)
+        self.assertEqual(wallet_tx.amount, Decimal("200.00"))
+        self.assertEqual(wallet_tx.provider, "SYSTEM")
+
         notification = (
             Notification.objects.filter(
                 recipient_role=Notification.ROLE_CUSTOMER,
@@ -733,6 +1238,289 @@ class AdminBookingEmailNotificationTests(TestCase):
                 job_type=BackgroundJob.TYPE_NOTIFICATION_EMAIL,
                 status=BackgroundJob.STATUS_PENDING,
             ).exists()
+        )
+
+
+class CustomerRefundRequestNotificationTests(TestCase):
+    """Ensure customer refund requests create vendor notifications."""
+
+    def setUp(self) -> None:
+        self.vendor = Vendor.objects.create(
+            name="Refund Request Vendor",
+            email="refund.request.vendor@meroticket.local",
+            phone_number="9812345200",
+            username="refund-request-vendor",
+            theatre="Refund Theatre",
+            city="Kathmandu",
+            is_active=True,
+            status="Active",
+        )
+        self.vendor.set_password("password")
+        self.vendor.save()
+
+        self.customer = User.objects.create(
+            phone_number="9812345201",
+            email="refund.request.customer@meroticket.local",
+            username="refund-request-customer",
+            dob=date(1995, 5, 5),
+            first_name="Refund",
+            last_name="Customer",
+            password="password",
+        )
+        self.customer.set_password("password")
+        self.customer.save()
+
+        self.movie = Movie.objects.create(
+            title="Refund Request Movie",
+            status=Movie.STATUS_NOW_SHOWING,
+            is_active=True,
+        )
+
+        start_at = timezone.now() + timedelta(hours=5)
+        self.show = Show.objects.create(
+            vendor=self.vendor,
+            movie=self.movie,
+            hall="Hall R",
+            show_date=start_at.date(),
+            start_time=start_at.time().replace(second=0, microsecond=0),
+            end_time=(start_at + timedelta(hours=2)).time().replace(second=0, microsecond=0),
+            status=Show.STATUS_UPCOMING,
+            listing_status="Now Showing",
+            price=Decimal("450.00"),
+        )
+        _, self.showtime = services._get_or_create_showtime_for_context(self.show, self.show.hall)
+
+        self.booking = Booking.objects.create(
+            user=self.customer,
+            showtime=self.showtime,
+            booking_status=services.BOOKING_STATUS_CONFIRMED,
+            total_amount=Decimal("450.00"),
+        )
+        Payment.objects.create(
+            booking=self.booking,
+            payment_method="Cash",
+            payment_status="Success",
+            amount=Decimal("450.00"),
+        )
+
+    def test_customer_cancel_booking_notifies_vendor_for_refund_request(self) -> None:
+        request = type(
+            "Request",
+            (),
+            {
+                "user": self.customer,
+                "data": {"reason": "Need to cancel due to emergency"},
+            },
+        )()
+
+        payload, status_code = services.customer_cancel_booking(request, self.booking)
+
+        self.assertEqual(status_code, status.HTTP_202_ACCEPTED, payload)
+        self.assertIn("request_id", payload)
+
+        vendor_notification = Notification.objects.filter(
+            recipient_role=Notification.ROLE_VENDOR,
+            recipient_id=self.vendor.id,
+            event_type=Notification.EVENT_BOOKING_CANCEL_REQUEST,
+            metadata__booking_id=self.booking.id,
+        ).order_by("-id").first()
+        self.assertIsNotNone(vendor_notification)
+        self.assertEqual(vendor_notification.channel, Notification.CHANNEL_BOTH)
+        self.assertEqual(
+            str((vendor_notification.metadata or {}).get("request_status") or ""),
+            "PENDING",
+        )
+
+    def test_customer_cancel_booking_reopens_read_pending_vendor_notification(self) -> None:
+        first_request = type(
+            "Request",
+            (),
+            {
+                "user": self.customer,
+                "data": {"reason": "First refund request"},
+            },
+        )()
+        services.customer_cancel_booking(first_request, self.booking)
+
+        vendor_notification = Notification.objects.filter(
+            recipient_role=Notification.ROLE_VENDOR,
+            recipient_id=self.vendor.id,
+            event_type=Notification.EVENT_BOOKING_CANCEL_REQUEST,
+            metadata__booking_id=self.booking.id,
+        ).order_by("-id").first()
+        self.assertIsNotNone(vendor_notification)
+
+        vendor_notification.is_read = True
+        vendor_notification.read_at = timezone.now()
+        vendor_notification.save(update_fields=["is_read", "read_at"])
+
+        second_request = type(
+            "Request",
+            (),
+            {
+                "user": self.customer,
+                "data": {"reason": "Second reminder for refund"},
+            },
+        )()
+        payload, status_code = services.customer_cancel_booking(second_request, self.booking)
+
+        self.assertEqual(status_code, status.HTTP_200_OK, payload)
+        self.assertIn("pending vendor approval", str(payload.get("message") or "").lower())
+
+        vendor_notification.refresh_from_db()
+        self.assertFalse(vendor_notification.is_read)
+        self.assertIsNone(vendor_notification.read_at)
+        self.assertEqual(
+            str((vendor_notification.metadata or {}).get("requested_reason") or ""),
+            "Second reminder for refund",
+        )
+        self.assertTrue(bool((vendor_notification.metadata or {}).get("reminded_at")))
+
+        self.assertEqual(
+            Notification.objects.filter(
+                recipient_role=Notification.ROLE_VENDOR,
+                recipient_id=self.vendor.id,
+                event_type=Notification.EVENT_BOOKING_CANCEL_REQUEST,
+                metadata__booking_id=self.booking.id,
+            ).count(),
+            1,
+        )
+
+    def test_customer_cancel_booking_rejects_within_one_hour(self) -> None:
+        start_at = timezone.now() + timedelta(minutes=30)
+        short_show = Show.objects.create(
+            vendor=self.vendor,
+            movie=self.movie,
+            hall="Hall Short",
+            show_date=start_at.date(),
+            start_time=start_at.time().replace(second=0, microsecond=0),
+            end_time=(start_at + timedelta(hours=2)).time().replace(second=0, microsecond=0),
+            status=Show.STATUS_UPCOMING,
+            listing_status="Now Showing",
+            price=Decimal("450.00"),
+        )
+        _, short_showtime = services._get_or_create_showtime_for_context(short_show, short_show.hall)
+        short_booking = Booking.objects.create(
+            user=self.customer,
+            showtime=short_showtime,
+            booking_status=services.BOOKING_STATUS_CONFIRMED,
+            total_amount=Decimal("450.00"),
+        )
+
+        request = type(
+            "Request",
+            (),
+            {
+                "user": self.customer,
+                "data": {"reason": "Too late to travel"},
+            },
+        )()
+
+        payload, status_code = services.customer_cancel_booking(request, short_booking)
+
+        self.assertEqual(status_code, status.HTTP_400_BAD_REQUEST, payload)
+        self.assertIn("1 hour", str(payload.get("message") or ""))
+        self.assertFalse(
+            Notification.objects.filter(
+                recipient_role=Notification.ROLE_VENDOR,
+                recipient_id=self.vendor.id,
+                event_type=Notification.EVENT_BOOKING_CANCEL_REQUEST,
+                metadata__booking_id=short_booking.id,
+            ).exists()
+        )
+
+    def test_vendor_cancel_booking_can_reject_pending_request(self) -> None:
+        request = type(
+            "Request",
+            (),
+            {
+                "user": self.customer,
+                "data": {"reason": "Need to cancel due to emergency"},
+            },
+        )()
+        services.customer_cancel_booking(request, self.booking)
+
+        vendor_request = type(
+            "Request",
+            (),
+            {
+                "user": self.vendor,
+                "data": {"action": "REJECT", "reason": "Policy does not allow this case"},
+            },
+        )()
+
+        payload, status_code = services.vendor_cancel_booking(vendor_request, self.booking)
+
+        self.assertEqual(status_code, status.HTTP_200_OK, payload)
+        self.assertEqual(payload.get("message"), "Cancellation request rejected.")
+        self.booking.refresh_from_db()
+        self.assertEqual(self.booking.booking_status, services.BOOKING_STATUS_CONFIRMED)
+
+        vendor_notification = Notification.objects.filter(
+            recipient_role=Notification.ROLE_VENDOR,
+            recipient_id=self.vendor.id,
+            event_type=Notification.EVENT_BOOKING_CANCEL_REQUEST,
+            metadata__booking_id=self.booking.id,
+        ).order_by("-id").first()
+        self.assertIsNotNone(vendor_notification)
+        self.assertEqual(
+            str((vendor_notification.metadata or {}).get("request_status") or ""),
+            "REJECTED",
+        )
+
+        customer_notification = Notification.objects.filter(
+            recipient_role=Notification.ROLE_CUSTOMER,
+            recipient_id=self.customer.id,
+            event_type=Notification.EVENT_BOOKING_CANCEL_REQUEST,
+            metadata__booking_id=self.booking.id,
+        ).order_by("-id").first()
+        self.assertIsNotNone(customer_notification)
+        self.assertEqual(
+            str((customer_notification.metadata or {}).get("request_status") or ""),
+            "REJECTED",
+        )
+
+    def test_vendor_cancel_booking_can_approve_pending_request_and_process_refund(self) -> None:
+        request = type(
+            "Request",
+            (),
+            {
+                "user": self.customer,
+                "data": {"reason": "Need to cancel due to emergency"},
+            },
+        )()
+        services.customer_cancel_booking(request, self.booking)
+
+        vendor_request = type(
+            "Request",
+            (),
+            {
+                "user": self.vendor,
+                "data": {"action": "APPROVE", "reason": "Approved by vendor"},
+            },
+        )()
+
+        payload, status_code = services.vendor_cancel_booking(vendor_request, self.booking)
+
+        self.assertEqual(status_code, status.HTTP_200_OK, payload)
+        self.assertIn("Booking cancelled", str(payload.get("message") or ""))
+        self.booking.refresh_from_db()
+        self.assertEqual(self.booking.booking_status, services.BOOKING_STATUS_CANCELLED)
+
+        payment = Payment.objects.filter(booking=self.booking).order_by("-id").first()
+        self.assertIsNotNone(payment)
+        self.assertEqual(payment.payment_status, services.PAYMENT_STATUS_REFUNDED)
+
+        vendor_notification = Notification.objects.filter(
+            recipient_role=Notification.ROLE_VENDOR,
+            recipient_id=self.vendor.id,
+            event_type=Notification.EVENT_BOOKING_CANCEL_REQUEST,
+            metadata__booking_id=self.booking.id,
+        ).order_by("-id").first()
+        self.assertIsNotNone(vendor_notification)
+        self.assertEqual(
+            str((vendor_notification.metadata or {}).get("request_status") or ""),
+            "APPROVED",
         )
 
 
@@ -1058,14 +1846,14 @@ class ShowLifecycleVisibilityTests(TestCase):
             price=Decimal("250.00"),
         )
 
-    def test_booking_closes_when_show_starts_in_ten_minutes(self) -> None:
+    def test_booking_closes_when_show_starts_in_thirty_minutes(self) -> None:
         fixed_now = timezone.make_aware(
             datetime(2026, 1, 20, 10, 0),
             timezone.get_current_timezone(),
         )
         show = self._create_show(
             hall="Hall A",
-            start_at=fixed_now + timedelta(minutes=10),
+            start_at=fixed_now + timedelta(minutes=30),
         )
 
         with mock.patch("app.selectors.timezone.now", return_value=fixed_now), mock.patch(
@@ -1074,7 +1862,7 @@ class ShowLifecycleVisibilityTests(TestCase):
             payload, status_code = services._ensure_show_is_bookable(show)
 
         self.assertEqual(status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("10 minutes", str((payload or {}).get("message") or ""))
+        self.assertIn("30 minutes", str((payload or {}).get("message") or ""))
 
     def test_public_hides_ongoing_while_admin_vendor_can_view_it(self) -> None:
         fixed_now = timezone.make_aware(
@@ -1404,13 +2192,6 @@ class BookingPaymentIdempotencyTests(TestCase):
             seat=self.seat,
             seat_price=Decimal("250.00"),
         )
-        Payment.objects.create(
-            booking=self.pending_booking,
-            payment_method=_pending_payment_method(self.transaction_uuid),
-            payment_status="Pending",
-            amount=Decimal("250.00"),
-        )
-
         self.order_payload = {
             "ticketTotal": 250,
             "booking": {
@@ -1424,6 +2205,14 @@ class BookingPaymentIdempotencyTests(TestCase):
                 "user_id": self.customer.id,
             },
         }
+        Payment.objects.create(
+            booking=self.pending_booking,
+            payment_method=_pending_payment_method(self.transaction_uuid),
+            transaction_uuid=self.transaction_uuid,
+            metadata={"order": self.order_payload, "transaction_uuid": self.transaction_uuid},
+            payment_status="Pending",
+            amount=Decimal("250.00"),
+        )
 
     def test_confirm_booking_after_payment_is_idempotent_for_same_transaction(self) -> None:
         request = self.factory.get("/api/payment/esewa/verify/")
@@ -1476,6 +2265,494 @@ class BookingPaymentIdempotencyTests(TestCase):
             ).count(),
             1,
         )
+
+    def test_confirm_booking_leaves_manual_review_bookings_pending(self) -> None:
+        request = self.factory.get("/api/payment/esewa/verify/")
+
+        with mock.patch(
+            "app.services.assess_booking_fraud_risk",
+            return_value={
+                "score": 95,
+                "level": Booking.FRAUD_LEVEL_CRITICAL,
+                "signals": [{"code": "manual_review", "title": "Manual review required", "weight": 95}],
+                "requires_manual_review": True,
+            },
+        ):
+            payload, error, status_code = _confirm_booking_after_payment(
+                request,
+                transaction_uuid=self.transaction_uuid,
+                paid_total_amount="250",
+                order=self.order_payload,
+                decoded_payload={"status": "COMPLETE"},
+                status_check_payload={"status": "COMPLETE"},
+            )
+
+        self.assertIsNone(payload)
+        self.assertIsNotNone(error)
+        self.assertEqual(status_code, status.HTTP_409_CONFLICT)
+        self.assertTrue(bool((error or {}).get("requires_manual_review")))
+
+        reviewed_booking_id = int((error or {}).get("booking_id") or 0)
+        self.assertGreater(reviewed_booking_id, 0)
+        reviewed_booking = Booking.objects.get(pk=reviewed_booking_id)
+        self.assertEqual(reviewed_booking.booking_status, services.BOOKING_STATUS_PENDING)
+        self.assertEqual(Ticket.objects.filter(payload__payment__transaction_uuid=self.transaction_uuid).count(), 0)
+
+    def test_esewa_verify_recovers_booking_context_without_cache(self) -> None:
+        cache.clear()
+
+        callback_payload = {
+            "status": "COMPLETE",
+            "total_amount": "250",
+            "transaction_uuid": self.transaction_uuid,
+            "product_code": _esewa_product_code(),
+            "signed_field_names": "total_amount,transaction_uuid,product_code",
+        }
+        callback_payload["signature"] = _build_signature(
+            "total_amount=250,transaction_uuid=idem-tx-001,product_code=" + _esewa_product_code()
+        )
+        encoded_data = base64.b64encode(
+            json.dumps(callback_payload).encode("utf-8")
+        ).decode("utf-8")
+
+        with mock.patch(
+            "app.views.booking._esewa_status_check",
+            return_value={"status": "COMPLETE", "total_amount": "250", "product_code": _esewa_product_code()},
+        ):
+            request = self.factory.post(
+                "/api/payment/esewa/verify/",
+                {"data": encoded_data},
+                format="json",
+            )
+            response = esewa_verify(request)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertTrue(response.data.get("confirmed"))
+        self.assertEqual(
+            Ticket.objects.filter(payload__payment__transaction_uuid=self.transaction_uuid).count(),
+            1,
+        )
+
+
+class PaymentQrInitiationSafetyTests(TestCase):
+    """Ensure QR initiation does not persist paid-looking ticket records."""
+
+    def test_create_payment_qr_does_not_create_ticket_before_payment_verification(self) -> None:
+        order = {
+            "movie": {
+                "title": "Initiation Safety Movie",
+                "seat": "Seat No: A1",
+                "venue": "Safety Hall, 2026-05-01, 07:30 PM",
+            },
+            "ticketTotal": 450,
+            "foodTotal": 0,
+            "total": 450,
+            "items": [],
+        }
+
+        request = type(
+            "Request",
+            (),
+            {
+                "data": {"order": order},
+                "build_absolute_uri": staticmethod(lambda path="": f"http://testserver{path}"),
+            },
+        )()
+
+        payload, status_code = services.create_payment_qr(request)
+
+        self.assertEqual(status_code, status.HTTP_200_OK)
+        self.assertEqual(Ticket.objects.count(), 0)
+        self.assertEqual(payload.get("payment_status"), "PENDING")
+        self.assertIsNone(payload.get("ticket_id"))
+        self.assertIsNone(payload.get("token"))
+        self.assertIsNone(payload.get("download_url"))
+        self.assertIsNone(payload.get("details_url"))
+        self.assertTrue(str(payload.get("reference") or "").strip())
+        self.assertTrue(str(payload.get("message") or "").lower().startswith("payment initiated"))
+
+
+class UserWalletTopupEsewaTests(TestCase):
+    """Customer wallet top-up eSewa initiate and verify behavior."""
+
+    def setUp(self) -> None:
+        self.factory = APIRequestFactory()
+        self.customer = User.objects.create(
+            phone_number="9815555501",
+            email="wallet.topup@meroticket.local",
+            username="wallet-topup-user",
+            dob=date(1997, 3, 3),
+            first_name="Wallet",
+            last_name="Topup",
+            password="password",
+        )
+        self.customer.set_password("password")
+        self.customer.save()
+
+    def _auth_headers(self, user: User) -> dict[str, str]:
+        token = issue_access_token("customer", user.id)
+        return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+
+    def test_esewa_verify_credits_user_wallet_once(self) -> None:
+        initiate_request = self.factory.post(
+            "/api/user/wallet/topup/esewa/initiate/",
+            {"amount": "500"},
+            format="json",
+            **self._auth_headers(self.customer),
+        )
+        initiate_response = user_wallet_topup_esewa_initiate(initiate_request)
+
+        self.assertEqual(initiate_response.status_code, status.HTTP_200_OK)
+        initiate_payload = dict(initiate_response.data)
+        transaction_uuid = str(initiate_payload.get("transaction_uuid") or "")
+        total_amount = str(initiate_payload.get("total_amount") or "")
+        product_code = str(initiate_payload.get("product_code") or _esewa_product_code())
+        signed_field_names = str(initiate_payload.get("signed_field_names") or "")
+
+        signature_message = (
+            f"total_amount={total_amount},"
+            f"transaction_uuid={transaction_uuid},"
+            f"product_code={product_code}"
+        )
+        callback_payload = {
+            "status": "COMPLETE",
+            "total_amount": total_amount,
+            "transaction_uuid": transaction_uuid,
+            "product_code": product_code,
+            "signed_field_names": signed_field_names,
+            "signature": _build_signature(signature_message),
+        }
+        encoded_data = base64.b64encode(
+            json.dumps(callback_payload).encode("utf-8")
+        ).decode("utf-8")
+
+        status_check_payload = {
+            "status": "COMPLETE",
+            "total_amount": total_amount,
+            "product_code": product_code,
+        }
+        with mock.patch("app.views.booking._esewa_status_check", return_value=status_check_payload):
+            verify_request = self.factory.post(
+                "/api/user/wallet/topup/esewa/verify/",
+                {"data": encoded_data},
+                format="json",
+                **self._auth_headers(self.customer),
+            )
+            first_verify = user_wallet_topup_esewa_verify(verify_request)
+
+        self.assertEqual(first_verify.status_code, status.HTTP_200_OK, first_verify.data)
+        self.assertTrue(first_verify.data.get("credited"))
+        self.assertFalse(first_verify.data.get("already_processed"))
+
+        wallet = UserWallet.objects.get(user=self.customer)
+        self.assertEqual(wallet.balance, Decimal("500.00"))
+        self.assertEqual(wallet.total_credited, Decimal("500.00"))
+
+        with mock.patch("app.views.booking._esewa_status_check", return_value=status_check_payload):
+            verify_request = self.factory.post(
+                "/api/user/wallet/topup/esewa/verify/",
+                {"data": encoded_data},
+                format="json",
+                **self._auth_headers(self.customer),
+            )
+            second_verify = user_wallet_topup_esewa_verify(verify_request)
+
+        self.assertEqual(second_verify.status_code, status.HTTP_200_OK, second_verify.data)
+        self.assertTrue(second_verify.data.get("credited"))
+        self.assertTrue(second_verify.data.get("already_processed"))
+
+        wallet.refresh_from_db()
+        self.assertEqual(wallet.balance, Decimal("500.00"))
+        self.assertEqual(
+            UserWalletTransaction.objects.filter(
+                user=self.customer,
+                transaction_type=UserWalletTransaction.TYPE_TOPUP,
+                status=UserWalletTransaction.STATUS_COMPLETED,
+                reference_id=transaction_uuid,
+            ).count(),
+            1,
+        )
+
+    def test_esewa_verify_recovers_wallet_topup_without_cache(self) -> None:
+        initiate_request = self.factory.post(
+            "/api/user/wallet/topup/esewa/initiate/",
+            {"amount": "500"},
+            format="json",
+            **self._auth_headers(self.customer),
+        )
+        initiate_response = user_wallet_topup_esewa_initiate(initiate_request)
+
+        initiate_payload = dict(initiate_response.data)
+        transaction_uuid = str(initiate_payload.get("transaction_uuid") or "")
+        total_amount = str(initiate_payload.get("total_amount") or "")
+        product_code = str(initiate_payload.get("product_code") or _esewa_product_code())
+        signed_field_names = str(initiate_payload.get("signed_field_names") or "")
+
+        callback_payload = {
+            "status": "COMPLETE",
+            "total_amount": total_amount,
+            "transaction_uuid": transaction_uuid,
+            "product_code": product_code,
+            "signed_field_names": signed_field_names,
+        }
+        callback_payload["signature"] = _build_signature(
+            f"total_amount={total_amount},transaction_uuid={transaction_uuid},product_code={product_code}"
+        )
+        encoded_data = base64.b64encode(
+            json.dumps(callback_payload).encode("utf-8")
+        ).decode("utf-8")
+
+        cache.clear()
+        status_check_payload = {
+            "status": "COMPLETE",
+            "total_amount": total_amount,
+            "product_code": product_code,
+        }
+        with mock.patch("app.views.booking._esewa_status_check", return_value=status_check_payload):
+            verify_request = self.factory.post(
+                "/api/user/wallet/topup/esewa/verify/",
+                {"data": encoded_data},
+                format="json",
+                **self._auth_headers(self.customer),
+            )
+            verify_response = user_wallet_topup_esewa_verify(verify_request)
+
+        self.assertEqual(verify_response.status_code, status.HTTP_200_OK, verify_response.data)
+        self.assertTrue(verify_response.data.get("credited"))
+        self.assertTrue(verify_response.data.get("confirmed", True))
+
+        wallet = UserWallet.objects.get(user=self.customer)
+        self.assertEqual(wallet.balance, Decimal("500.00"))
+        self.assertEqual(
+            UserWalletTransaction.objects.filter(
+                user=self.customer,
+                transaction_type=UserWalletTransaction.TYPE_TOPUP,
+                status=UserWalletTransaction.STATUS_COMPLETED,
+                reference_id=transaction_uuid,
+            ).count(),
+            1,
+        )
+
+    def test_user_wallet_alias_returns_cash_wallet_payload(self) -> None:
+        wallet = UserWallet.objects.create(
+            user=self.customer,
+            balance=Decimal("220.00"),
+            total_credited=Decimal("300.00"),
+            total_debited=Decimal("80.00"),
+        )
+        UserWalletTransaction.objects.create(
+            wallet=wallet,
+            user=self.customer,
+            transaction_type=UserWalletTransaction.TYPE_TOPUP,
+            status=UserWalletTransaction.STATUS_COMPLETED,
+            amount=Decimal("300.00"),
+            reference_id="wallet-topup-001",
+            provider="ESEWA",
+            processed_at=timezone.now(),
+        )
+
+        request = self.factory.get(
+            "/api/user/wallet/",
+            **self._auth_headers(self.customer),
+        )
+        response = user_wallet(request)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertIn("cash_wallet", response.data)
+        self.assertIn("cash_wallet_recent_transactions", response.data)
+        self.assertEqual(response.data.get("cash_wallet", {}).get("balance"), 220.0)
+        self.assertEqual(len(response.data.get("cash_wallet_recent_transactions") or []), 1)
+
+
+class UserWalletBookingPaymentTests(TestCase):
+    """Customer booking payment with project cash wallet."""
+
+    def setUp(self) -> None:
+        self.factory = APIRequestFactory()
+
+        self.customer = User.objects.create(
+            phone_number="9815555601",
+            email="wallet.booking@meroticket.local",
+            username="wallet-booking-user",
+            dob=date(1995, 5, 5),
+            first_name="Wallet",
+            last_name="Booking",
+            password="password",
+        )
+        self.customer.set_password("password")
+        self.customer.save()
+
+        self.other_user = User.objects.create(
+            phone_number="9815555602",
+            email="wallet.booking.other@meroticket.local",
+            username="wallet-booking-other",
+            dob=date(1994, 4, 4),
+            first_name="Other",
+            last_name="User",
+            password="password",
+        )
+        self.other_user.set_password("password")
+        self.other_user.save()
+
+        self.vendor = Vendor.objects.create(
+            name="Wallet Booking Vendor",
+            email="wallet.booking.vendor@meroticket.local",
+            phone_number="9815555603",
+            username="wallet-booking-vendor",
+            theatre="Wallet Theatre",
+            city="Kathmandu",
+            is_active=True,
+            status="Active",
+        )
+        self.vendor.set_password("password")
+        self.vendor.save()
+
+        self.movie = Movie.objects.create(
+            title="Wallet Booking Movie",
+            status=Movie.STATUS_NOW_SHOWING,
+            is_active=True,
+        )
+        start_at = timezone.now() + timedelta(hours=4)
+        self.show = Show.objects.create(
+            vendor=self.vendor,
+            movie=self.movie,
+            hall="Hall W",
+            show_date=start_at.date(),
+            start_time=start_at.time().replace(second=0, microsecond=0),
+            end_time=(start_at + timedelta(hours=2)).time().replace(second=0, microsecond=0),
+            status=Show.STATUS_UPCOMING,
+            listing_status="Now Showing",
+            price=Decimal("250.00"),
+        )
+
+        self.screen, self.showtime = services._get_or_create_showtime_for_context(
+            self.show,
+            self.show.hall,
+        )
+        self.seat = Seat.objects.create(
+            screen=self.screen,
+            row_label="A",
+            seat_number="1",
+            seat_type="Normal",
+        )
+        SeatAvailability.objects.create(
+            seat=self.seat,
+            showtime=self.showtime,
+            seat_status=services.SEAT_STATUS_AVAILABLE,
+            locked_until=timezone.now() + timedelta(minutes=10),
+        )
+
+    def _auth_headers(self, user: User) -> dict[str, str]:
+        token = issue_access_token("customer", user.id)
+        return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+
+    def _build_order_payload(self, *, user_id: int, total_amount: str = "250") -> dict[str, Any]:
+        return {
+            "ticketTotal": 250,
+            "total": float(total_amount),
+            "movie": {
+                "title": self.movie.title,
+                "language": "Nepali",
+                "runtime": "2h",
+            },
+            "booking": {
+                "movie_id": self.movie.id,
+                "cinema_id": self.vendor.id,
+                "show_id": self.show.id,
+                "date": self.show.show_date.isoformat(),
+                "time": self.show.start_time.strftime("%H:%M"),
+                "hall": self.show.hall,
+                "selected_seats": ["A1"],
+                "user_id": user_id,
+            },
+        }
+
+    def test_wallet_payment_confirms_booking_and_debits_cash_wallet(self) -> None:
+        wallet = UserWallet.objects.create(
+            user=self.customer,
+            balance=Decimal("600.00"),
+            total_credited=Decimal("600.00"),
+            total_debited=Decimal("0.00"),
+        )
+
+        request = self.factory.post(
+            "/api/user/wallet/booking/pay/",
+            {"order": self._build_order_payload(user_id=self.customer.id)},
+            format="json",
+            **self._auth_headers(self.customer),
+        )
+        response = user_wallet_booking_pay(request)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(response.data.get("payment_method"), "USER_WALLET")
+        self.assertTrue(response.data.get("ticket"))
+
+        wallet.refresh_from_db()
+        self.assertEqual(wallet.balance, Decimal("350.00"))
+        self.assertEqual(wallet.total_debited, Decimal("250.00"))
+
+        booking = Booking.objects.get(user=self.customer, showtime=self.showtime)
+        self.assertEqual(booking.booking_status, services.BOOKING_STATUS_CONFIRMED)
+
+        payment = Payment.objects.get(booking=booking)
+        self.assertEqual(payment.payment_method, "USER_WALLET")
+        self.assertEqual(payment.payment_status, "Success")
+        self.assertEqual(payment.amount, Decimal("250.00"))
+
+        wallet_tx = UserWalletTransaction.objects.get(booking=booking)
+        self.assertEqual(wallet_tx.transaction_type, UserWalletTransaction.TYPE_DEBIT)
+        self.assertEqual(wallet_tx.status, UserWalletTransaction.STATUS_COMPLETED)
+        self.assertEqual(wallet_tx.amount, Decimal("250.00"))
+
+        self.assertEqual(Ticket.objects.count(), 1)
+
+    def test_wallet_payment_uses_authenticated_customer_not_payload_user(self) -> None:
+        UserWallet.objects.create(
+            user=self.customer,
+            balance=Decimal("600.00"),
+            total_credited=Decimal("600.00"),
+            total_debited=Decimal("0.00"),
+        )
+
+        request = self.factory.post(
+            "/api/user/wallet/booking/pay/",
+            {"order": self._build_order_payload(user_id=self.other_user.id)},
+            format="json",
+            **self._auth_headers(self.customer),
+        )
+        response = user_wallet_booking_pay(request)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        booking = Booking.objects.get(showtime=self.showtime)
+        self.assertEqual(booking.user_id, self.customer.id)
+
+    def test_wallet_payment_rejects_when_balance_is_insufficient_without_creating_booking(self) -> None:
+        wallet = UserWallet.objects.create(
+            user=self.customer,
+            balance=Decimal("100.00"),
+            total_credited=Decimal("100.00"),
+            total_debited=Decimal("0.00"),
+        )
+
+        request = self.factory.post(
+            "/api/user/wallet/booking/pay/",
+            {"order": self._build_order_payload(user_id=self.customer.id)},
+            format="json",
+            **self._auth_headers(self.customer),
+        )
+        response = user_wallet_booking_pay(request)
+
+        self.assertEqual(response.status_code, status.HTTP_402_PAYMENT_REQUIRED, response.data)
+        self.assertIn("Insufficient wallet balance", str(response.data.get("message") or ""))
+
+        wallet.refresh_from_db()
+        self.assertEqual(wallet.balance, Decimal("100.00"))
+        self.assertEqual(wallet.total_debited, Decimal("0.00"))
+
+        self.assertEqual(Booking.objects.count(), 0)
+        self.assertEqual(Payment.objects.count(), 0)
+        self.assertEqual(Ticket.objects.count(), 0)
+        self.assertEqual(UserWalletTransaction.objects.count(), 0)
 
 
 class VendorHallManagementTests(TestCase):
@@ -1657,6 +2934,30 @@ class LoyaltyLifecycleTests(TestCase):
         self.assertEqual(status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(error.get("required_points"), 100)
         self.assertEqual(error.get("available_points"), 40)
+
+    def test_apply_referral_bonus_rejects_own_referral_code(self) -> None:
+        services.ensure_user_referral_code(self.user)
+
+        request = type(
+            "Request",
+            (),
+            {
+                "user": self.user,
+                "data": {"referral_code": self.user.referral_code},
+            },
+        )()
+
+        payload, status_code = loyalty.apply_referral_bonus(request)
+
+        self.assertEqual(status_code, status.HTTP_400_BAD_REQUEST, payload)
+        self.assertEqual(payload.get("message"), "You cannot use your own referral code.")
+        self.assertFalse(
+            LoyaltyTransaction.objects.filter(
+                user=self.user,
+                reference_type=LoyaltyTransaction.REFERENCE_REFERRAL,
+                reference_id=self.user.referral_code,
+            ).exists()
+        )
 
     def test_consume_checkout_redemption_updates_wallet_booking_and_reward(self) -> None:
         wallet = UserLoyaltyWallet.objects.create(
@@ -1882,7 +3183,7 @@ class ReferralWalletLifecycleTests(TestCase):
         )
         _, self.showtime = services._get_or_create_showtime_for_context(self.show, self.show.hall)
 
-    def test_register_user_with_referral_code_creates_pending_referral(self) -> None:
+    def test_register_user_with_referral_code_rewards_referrer_immediately(self) -> None:
         request = type(
             "Request",
             (),
@@ -1914,7 +3215,20 @@ class ReferralWalletLifecycleTests(TestCase):
 
         referral = Referral.objects.get(referred_user=created_user)
         self.assertEqual(referral.referrer_id, self.referrer.id)
-        self.assertEqual(referral.status, Referral.STATUS_PENDING)
+        self.assertEqual(referral.status, Referral.STATUS_REWARDED)
+
+        signup_reward = services._referral_signup_reward_amount()
+        referrer_wallet = ReferralWallet.objects.get(user=self.referrer)
+        self.assertEqual(referrer_wallet.balance, signup_reward)
+        self.assertTrue(
+            ReferralTransaction.objects.filter(
+                referral=referral,
+                user=self.referrer,
+                reason=ReferralTransaction.REASON_REFERRER_REWARD,
+                transaction_type=ReferralTransaction.TYPE_CREDIT,
+                status=ReferralTransaction.STATUS_COMPLETED,
+            ).exists()
+        )
 
     def test_process_referral_reward_for_first_successful_booking(self) -> None:
         referral = Referral.objects.create(
@@ -3008,6 +4322,74 @@ class TicketValidationRaceSafetyTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data.get("code"), SCAN_CODE_OUTSIDE_VALID_TIME_WINDOW)
         self.assertEqual(response.data.get("scan", {}).get("status"), TicketValidationScan.STATUS_INVALID)
+
+    def test_scan_rejects_legacy_paid_alias_without_successful_payment_record(self) -> None:
+        legacy_ticket = Ticket.objects.create(
+            reference="LEGACY001",
+            user=self.customer,
+            show=self.show,
+            show_datetime=self.ticket.show_datetime,
+            payment_status=Ticket.PaymentStatus.PENDING,
+            is_used=False,
+            payload={
+                "movie": {
+                    "title": self.movie.title,
+                    "theater": self.show.hall,
+                    "show_time": self.show.start_time.strftime("%H:%M"),
+                    "show_date": self.show.show_date.isoformat(),
+                    "seat": "A2",
+                },
+                "payment": {"status": "SUCCESS"},
+                "booking": {"booking_id": 999999},
+            },
+        )
+
+        response = validate_ticket_scan(self._scan_request({"reference": legacy_ticket.reference}))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data.get("code"), SCAN_CODE_PAYMENT_INCOMPLETE)
+        self.assertEqual(response.data.get("scan", {}).get("status"), TicketValidationScan.STATUS_INVALID)
+
+    def test_scan_accepts_legacy_paid_alias_with_successful_payment_record(self) -> None:
+        _, showtime = services._get_or_create_showtime_for_context(self.show, self.show.hall)
+        booking = Booking.objects.create(
+            user=self.customer,
+            showtime=showtime,
+            booking_status=services.BOOKING_STATUS_CONFIRMED,
+            total_amount=Decimal("300.00"),
+        )
+        Payment.objects.create(
+            booking=booking,
+            payment_method="ESEWA:legacy-paid-ok",
+            payment_status="Success",
+            amount=Decimal("300.00"),
+        )
+
+        legacy_ticket = Ticket.objects.create(
+            reference="LEGACY002",
+            user=self.customer,
+            show=self.show,
+            show_datetime=self.ticket.show_datetime,
+            payment_status=Ticket.PaymentStatus.PENDING,
+            is_used=False,
+            payload={
+                "movie": {
+                    "title": self.movie.title,
+                    "theater": self.show.hall,
+                    "show_time": self.show.start_time.strftime("%H:%M"),
+                    "show_date": self.show.show_date.isoformat(),
+                    "seat": "A3",
+                },
+                "payment": {"status": "SUCCESS"},
+                "booking": {"booking_id": booking.id},
+            },
+        )
+
+        response = validate_ticket_scan(self._scan_request({"reference": legacy_ticket.reference}))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data.get("code"), SCAN_CODE_VALID)
+        self.assertEqual(response.data.get("scan", {}).get("status"), TicketValidationScan.STATUS_VALID)
 
     def test_invalid_scan_request_is_audited_with_failure_reason(self) -> None:
         response = validate_ticket_scan(self._scan_request({}))
