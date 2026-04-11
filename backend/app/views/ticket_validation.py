@@ -22,7 +22,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from .. import services
-from ..models import Show, Ticket, TicketValidationScan, VendorStaff
+from ..models import Payment, Show, Ticket, TicketValidationScan, VendorStaff
 from ..permissions import resolve_vendor, resolve_vendor_staff, vendor_required
 from ..utils import combine_date_time_utc, ensure_utc_datetime, parse_date, parse_time
 
@@ -313,12 +313,31 @@ def _resolve_ticket_show_datetime(ticket: Ticket) -> datetime | None:
 
 def _is_ticket_paid(ticket: Ticket) -> bool:
     status_value = str(ticket.payment_status or "").strip().upper()
-    if not status_value:
-        payload = ticket.payload if isinstance(ticket.payload, dict) else {}
-        payment_payload = payload.get("payment") if isinstance(payload.get("payment"), dict) else {}
-        status_value = str(payment_payload.get("status") or "").strip().upper()
+    payload = ticket.payload if isinstance(ticket.payload, dict) else {}
+    payment_payload = payload.get("payment") if isinstance(payload.get("payment"), dict) else {}
+    payload_status = str(payment_payload.get("status") or "").strip().upper()
 
-    return status_value in {"PAID", "SUCCESS", "COMPLETED", "CONFIRMED"}
+    # Only PAID is accepted directly. Legacy aliases require an actual successful booking payment.
+    if status_value == Ticket.PaymentStatus.PAID or payload_status == Ticket.PaymentStatus.PAID:
+        return True
+
+    legacy_paid_aliases = {"SUCCESS", "COMPLETED", "CONFIRMED"}
+    if status_value not in legacy_paid_aliases and payload_status not in legacy_paid_aliases:
+        return False
+
+    booking_payload = payload.get("booking") if isinstance(payload.get("booking"), dict) else {}
+    booking_id = _coerce_positive_int(
+        booking_payload.get("booking_id")
+        or booking_payload.get("bookingId")
+        or booking_payload.get("id")
+    )
+    if not booking_id:
+        return False
+
+    return Payment.objects.filter(
+        booking_id=booking_id,
+        payment_status__iexact=Payment.Status.SUCCESS,
+    ).exists()
 
 
 def _build_show_label(
