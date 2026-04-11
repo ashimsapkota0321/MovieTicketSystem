@@ -57,6 +57,12 @@ export default function LoyaltyDashboard() {
       return;
     }
 
+    const ownCode = String(dashboard?.referral?.code || "").trim().toUpperCase();
+    if (ownCode && code === ownCode) {
+      setError("You cannot use your own referral code.");
+      return;
+    }
+
     setError("");
     setNotice("");
     setClaiming(true);
