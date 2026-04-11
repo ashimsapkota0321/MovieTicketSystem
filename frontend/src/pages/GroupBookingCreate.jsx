@@ -136,17 +136,15 @@ export default function GroupBookingCreate() {
     <div className="gb-page">
       <div className="gb-shell">
         <header className="gb-header">
-          <h1>Create Group Booking</h1>
-          <p>
-            Start a shared booking, invite friends, and split payment like real-world apps.
-          </p>
+          <h1>Group Booking</h1>
+          <p>Create a session, share the invite code, and split payment.</p>
         </header>
 
         <section className="gb-card">
-          <h2>Session Setup</h2>
+          <h2>Create Session</h2>
           <form className="gb-form" onSubmit={handleCreate}>
             <label>
-              Show ID (optional if full context provided)
+              Show ID (optional)
               <input
                 type="number"
                 min="1"
@@ -222,7 +220,7 @@ export default function GroupBookingCreate() {
                   onChange={(event) => updateField("split_mode", event.target.value)}
                 >
                   <option value="EQUAL">Equal Split</option>
-                  <option value="MANUAL">Manual Split (Host Override)</option>
+                  <option value="MANUAL">Manual Split (host decides)</option>
                   <option value="SEAT_BASED">Seat-Based Split</option>
                 </select>
               </label>
@@ -242,7 +240,7 @@ export default function GroupBookingCreate() {
             {error ? <p className="gb-error">{error}</p> : null}
 
             <button type="submit" className="gb-btn gb-btn-primary" disabled={!canSubmit || submitting}>
-              {submitting ? "Creating..." : "Create Group Session"}
+              {submitting ? "Creating..." : "Create Session"}
             </button>
           </form>
         </section>
@@ -271,7 +269,7 @@ export default function GroupBookingCreate() {
 
         <section className="gb-card">
           <div className="gb-card-head">
-            <h2>Your Recent Group Sessions</h2>
+            <h2>Recent Sessions</h2>
             <button type="button" className="gb-btn" onClick={loadSessions} disabled={loadingSessions}>
               {loadingSessions ? "Refreshing..." : "Refresh"}
             </button>
