@@ -110,14 +110,13 @@ WSGI_APPLICATION = 'backend.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
-# Default to SQLite for local/dev reliability.
-# Set USE_MYSQL=1 explicitly when MySQL is available and intended.
+# MySQL database configuration (values loaded from environment variables).
 
 DATABASES = {
         'default': {
             'ENGINE': os.environ.get('DB_ENGINE', 'django.db.backends.mysql'),
             'NAME': os.environ.get('DB_NAME', 'moviebooking'),
-            'USER': os.environ.get('DB_USER', 'ashim'),
+            'USER': os.environ.get('DB_USER', 'root'),
             'PASSWORD': os.environ.get('DB_PASSWORD', 'root123'),
             'HOST': os.environ.get('DB_HOST', '127.0.0.1'),
             'PORT': os.environ.get('DB_PORT', '3306'),
