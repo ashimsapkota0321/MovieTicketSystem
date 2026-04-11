@@ -256,6 +256,7 @@ export default function VendorStaffAccounts() {
           <table className="vendor-table">
             <thead>
               <tr>
+                <th>ID</th>
                 <th>Name</th>
                 <th>Email</th>
                 <th>Username</th>
@@ -267,17 +268,17 @@ export default function VendorStaffAccounts() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={6}>Loading staff accounts...</td>
+                  <td colSpan={7}>Loading staff accounts...</td>
                 </tr>
               ) : filteredStaff.length ? (
                 filteredStaff.map((item) => (
                   <tr key={item.id}>
+                    <td>{item.id}</td>
                     <td>
                       <div className="d-flex align-items-center gap-2">
                         <span className="vendor-staff-avatar">{getInitials(item.full_name || item.email)}</span>
                         <div>
                           <div className="fw-semibold">{item.full_name || "-"}</div>
-                          <small className="text-muted">ID: #{item.id}</small>
                         </div>
                       </div>
                     </td>
@@ -302,7 +303,7 @@ export default function VendorStaffAccounts() {
                 ))
               ) : (
                 <tr>
-                  <td colSpan={6}>No staff accounts found.</td>
+                  <td colSpan={7}>No staff accounts found.</td>
                 </tr>
               )}
             </tbody>
