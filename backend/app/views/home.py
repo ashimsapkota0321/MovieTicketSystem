@@ -30,7 +30,11 @@ def home_slides(request: Any):
 def home_now_showing_slides(request: Any):
     """Return now showing movie slides for the homepage hero."""
     movies = (
-        Movie.objects.filter(status=Movie.STATUS_NOW_SHOWING, is_active=True)
+        Movie.objects.filter(
+            status=Movie.STATUS_NOW_SHOWING,
+            is_active=True,
+            is_approved=True,
+        )
         .order_by("-updated_at", "-created_at")
     )
     serializer = NowShowingHeroMovieSerializer(
