@@ -943,6 +943,10 @@ def apply_referral_bonus(request: Any) -> tuple[dict[str, Any], int]:
     if not referral_code:
         return {"message": "referral_code is required."}, status.HTTP_400_BAD_REQUEST
 
+    own_referral_code = str(getattr(customer, "referral_code", "") or "").strip().upper()
+    if own_referral_code and referral_code == own_referral_code:
+        return {"message": "You cannot use your own referral code."}, status.HTTP_400_BAD_REQUEST
+
     config = get_program_config()
     bonus_points = int(config.referral_bonus_points or 0)
     if bonus_points <= 0:
