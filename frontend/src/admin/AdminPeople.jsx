@@ -155,6 +155,7 @@ export default function AdminPeople() {
           <table className="table admin-table">
             <thead>
               <tr>
+                <th>ID</th>
                 <th>Name</th>
                 <th>Nationality</th>
                 <th>Instagram</th>
@@ -166,9 +167,10 @@ export default function AdminPeople() {
             <tbody>
               {filteredPeople.map((person) => (
                 <tr key={person.id}>
+                  <td>{person.id}</td>
                   <td>
                     <div className="fw-semibold">{person.full_name || person.fullName}</div>
-                    <small className="text-muted">{person.slug || person.id}</small>
+                    <small className="text-muted">{person.slug || "-"}</small>
                   </td>
                   <td>{person.nationality || "-"}</td>
                   <td>{person.instagram ? "Yes" : "-"}</td>
@@ -209,7 +211,7 @@ export default function AdminPeople() {
               ))}
               {filteredPeople.length === 0 ? (
                 <tr>
-                  <td colSpan="6">No people added yet.</td>
+                  <td colSpan="7">No people added yet.</td>
                 </tr>
               ) : null}
             </tbody>
