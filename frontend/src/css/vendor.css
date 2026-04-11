@@ -219,8 +219,8 @@
   position: sticky;
   top: 0;
   height: 100vh;
-  background: #000000;
-  border-right: 1px solid #000000;
+  background: #ffffff;
+  border-right: 1px solid var(--vendor-border);
   padding: 24px 18px;
   display: flex;
   flex-direction: column;
@@ -232,18 +232,18 @@
 .vendor-sidebar .vendor-nav-link,
 .vendor-sidebar .vendor-email,
 .vendor-sidebar .vendor-user {
-  color: #ffffff;
+  color: var(--vendor-text);
 }
 
 .vendor-sidebar .vendor-nav-link:hover,
 .vendor-sidebar .vendor-nav-link.active {
-  color: #ffffff;
-  background: rgba(255, 255, 255, 0.12);
+  color: var(--vendor-text);
+  background: rgba(16, 185, 129, 0.1);
 }
 
 .vendor-sidebar .vendor-sidebar-footer {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(17, 24, 39, 0.04);
+  border-color: var(--vendor-border);
 }
 
 .vendor-brand {
@@ -763,6 +763,59 @@
   margin: 4px 0 0;
   color: var(--vendor-muted);
   font-size: 0.85rem;
+}
+
+.revenue-dashboard {
+  gap: 18px;
+}
+
+.revenue-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.revenue-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.revenue-actions .form-select {
+  min-width: 138px;
+}
+
+.revenue-stat-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.revenue-stat-card {
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.vendor-stat-note {
+  font-size: 0.78rem;
+  color: #6f7a88;
+}
+
+.revenue-grid-main {
+  grid-template-columns: 1.15fr 0.85fr;
+  gap: 16px;
+}
+
+.revenue-table thead th {
+  font-size: 0.74rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.revenue-table tbody td {
+  font-size: 0.86rem;
 }
 
 .vendor-qrScanner {
@@ -1312,6 +1365,80 @@
 .vendor-table td {
   padding: 12px 0;
   border-top: 1px solid var(--vendor-border);
+}
+
+.vendor-food-itemCell {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.vendor-food-thumb {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--vendor-border);
+  background: #f3f4f6;
+  display: grid;
+  place-items: center;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--vendor-muted);
+  flex-shrink: 0;
+}
+
+.vendor-food-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.vendor-food-dietBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  border: 1px solid transparent;
+}
+
+.vendor-food-dietDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.vendor-food-dietBadge.veg {
+  color: #15803d;
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(22, 163, 74, 0.35);
+}
+
+.vendor-food-dietBadge.nonveg {
+  color: #dc2626;
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(220, 38, 38, 0.35);
+}
+
+.vendor-food-modalPreview {
+  width: 120px;
+  height: 90px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--vendor-border);
+  background: #f3f4f6;
+}
+
+.vendor-food-modalPreview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .vendor-table .vendor-icon-btn {
