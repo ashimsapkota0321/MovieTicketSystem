@@ -14,7 +14,10 @@ from app.models import BackgroundJob
 class Command(BaseCommand):
     """Process queued notification and analytics export jobs."""
 
-    help = "Process queued background jobs (notification emails and analytics report exports)."
+    help = (
+        "Process queued background jobs "
+        "(emails, gateway status checks, rollups, settlements, and analytics exports)."
+    )
 
     def add_arguments(self, parser) -> None:
         parser.add_argument(
@@ -39,7 +42,11 @@ class Command(BaseCommand):
             action="append",
             choices=[
                 BackgroundJob.TYPE_NOTIFICATION_EMAIL,
+                BackgroundJob.TYPE_NOTIFICATION_EMAIL_RETRY,
                 BackgroundJob.TYPE_ANALYTICS_MONITOR_EXPORT,
+                BackgroundJob.TYPE_GATEWAY_STATUS_CHECK,
+                BackgroundJob.TYPE_FINANCIAL_SUMMARY_ROLLUP,
+                BackgroundJob.TYPE_WITHDRAWAL_SETTLEMENT,
             ],
             help="Optional job type filter (can be passed multiple times).",
         )
