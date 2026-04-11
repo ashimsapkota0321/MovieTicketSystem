@@ -5,10 +5,11 @@ import "../css/orderConfirm.css";
 import gharjwai from "../images/gharjwai.jpg";
 import {
   applyBookingCoupon,
-  createTestBookingSuccess,
   fetchActiveSubscription,
   fetchLoyaltyRewards,
   fetchReferralDashboard,
+  fetchUserWallet,
+  payBookingWithUserWallet,
   previewLoyaltyCheckout,
   previewSubscriptionCheckout,
   previewReferralWalletCheckout,
@@ -130,8 +131,12 @@ export default function OrderConfirm() {
   const orderTotal = ticketPayable + foodTotal;
   const formatPrice = (value) => `Npr ${value}`;
   const [isPaying, setIsPaying] = useState(false);
-  const [isCreatingTestBooking, setIsCreatingTestBooking] = useState(false);
-  const [testBookingError, setTestBookingError] = useState("");
+  const [isPayingWithWallet, setIsPayingWithWallet] = useState(false);
+  const [loadingCashWallet, setLoadingCashWallet] = useState(false);
+  const [cashWallet, setCashWallet] = useState(null);
+  const [paymentError, setPaymentError] = useState("");
+  const cashWalletBalance = Number(cashWallet?.balance || 0);
+  const walletCanCoverTotal = cashWalletBalance >= orderTotal;
   const skipResumeNoticeOnUnmountRef = useRef(false);
   const loyaltyVendorId = Number(order?.bookingContext?.cinemaId || order?.movie?.cinemaId || 0) || null;
 
@@ -142,27 +147,32 @@ export default function OrderConfirm() {
       setLoadingLoyalty(true);
       setLoadingReferralWallet(true);
       setLoadingSubscription(true);
+      setLoadingCashWallet(true);
       try {
-        const [loyaltyData, referralData, subscriptionData] = await Promise.all([
+        const [loyaltyData, referralData, subscriptionData, walletData] = await Promise.all([
           fetchLoyaltyRewards(loyaltyVendorId ? { vendor_id: loyaltyVendorId } : {}),
           fetchReferralDashboard(),
           fetchActiveSubscription(loyaltyVendorId ? { vendor_id: loyaltyVendorId } : {}),
+          fetchUserWallet(),
         ]);
         if (!active) return;
         setLoyaltyWallet(loyaltyData?.wallet || null);
         setAvailableRewards(Array.isArray(loyaltyData?.rewards) ? loyaltyData.rewards : []);
         setReferralWallet(referralData?.wallet || null);
         setActiveSubscription(subscriptionData?.subscription || null);
+        setCashWallet(walletData?.cash_wallet || null);
       } catch {
         if (!active) return;
         setLoyaltyWallet(null);
         setAvailableRewards([]);
         setReferralWallet(null);
         setActiveSubscription(null);
+        setCashWallet(null);
       } finally {
         if (active) setLoadingLoyalty(false);
         if (active) setLoadingReferralWallet(false);
         if (active) setLoadingSubscription(false);
+        if (active) setLoadingCashWallet(false);
       }
     };
 
@@ -197,7 +207,7 @@ export default function OrderConfirm() {
     };
   }, [order]);
 
-  const buildCheckoutOrder = () => {
+  const buildCheckoutOrder = (selectedPaymentMethod = "ESEWA") => {
     const priceLockToken =
       order?.pricing?.price_lock_token ||
       order?.pricing?.priceLockToken ||
@@ -215,6 +225,8 @@ export default function OrderConfirm() {
       items: order.items,
       foodTotal,
       total: orderTotal,
+      payment_method: selectedPaymentMethod,
+      paymentMethod: selectedPaymentMethod,
       reward_id: selectedRewardId ? Number(selectedRewardId) : null,
       loyalty_points_to_redeem: Number(pointsToRedeem || 0),
       loyalty_discount_amount: loyaltyDiscount,
@@ -257,6 +269,7 @@ export default function OrderConfirm() {
       pricing: order?.pricing || null,
       bookingContext: {
         ...(order.bookingContext || {}),
+        user_id: order?.bookingContext?.user_id || state?.user?.id || null,
         priceLockToken: priceLockToken,
         price_lock_token: priceLockToken,
       },
@@ -483,7 +496,8 @@ export default function OrderConfirm() {
   };
 
   const handlePayWithEsewa = async () => {
-    if (isPaying || isCreatingTestBooking || applyingCoupon || applyingLoyalty || previewingSubscription || previewingReferralWallet) return;
+    if (isPaying || isPayingWithWallet || applyingCoupon || applyingLoyalty || previewingSubscription || previewingReferralWallet) return;
+    setPaymentError("");
     if (useSubscription) {
       try {
         await applySubscriptionPreview();
@@ -501,7 +515,7 @@ export default function OrderConfirm() {
 
     setIsPaying(true);
     skipResumeNoticeOnUnmountRef.current = true;
-    const checkoutOrder = buildCheckoutOrder();
+    const checkoutOrder = buildCheckoutOrder("ESEWA");
     navigate("/esewa/checkout", {
       state: {
         amount: orderTotal,
@@ -510,20 +524,13 @@ export default function OrderConfirm() {
     });
   };
 
-  const handleTestBookingSuccess = async () => {
-    if (isPaying || isCreatingTestBooking || applyingCoupon || applyingLoyalty || previewingSubscription || previewingReferralWallet) return;
-    const selectedSeats = Array.isArray(order.selectedSeats) ? order.selectedSeats : [];
-    const context = order?.bookingContext || {};
-    const hasShowContext = Boolean(
-      context?.showId || (context?.movieId && context?.cinemaId && context?.date && context?.time)
-    );
-    if (!selectedSeats.length || !hasShowContext) {
-      setTestBookingError("Select a valid show and seats before test booking.");
+  const handlePayWithWallet = async () => {
+    if (isPaying || isPayingWithWallet || applyingCoupon || applyingLoyalty || previewingSubscription || previewingReferralWallet) return;
+    setPaymentError("");
+    if (!walletCanCoverTotal) {
+      setPaymentError("Insufficient wallet balance. Add money to your wallet or choose eSewa.");
       return;
     }
-
-    setTestBookingError("");
-    setIsCreatingTestBooking(true);
     try {
       if (useSubscription) {
         await applySubscriptionPreview();
@@ -531,27 +538,46 @@ export default function OrderConfirm() {
       if (useReferralWallet) {
         await applyReferralWalletPreview();
       }
+      setIsPayingWithWallet(true);
+      const checkoutOrder = buildCheckoutOrder("USER_WALLET");
+      const result = await payBookingWithUserWallet({
+        order: checkoutOrder,
+        amount: orderTotal,
+      });
+      const ticketPayload =
+        result?.ticket && typeof result.ticket === "object"
+          ? result.ticket
+          : {
+              reference: result?.reference || "",
+              qr_code: result?.qr_code || "",
+              ticket_image: result?.ticket_image || "",
+              download_url: result?.download_url || "",
+              details_url: result?.details_url || "",
+            };
+      if (result?.wallet && typeof result.wallet === "object") {
+        setCashWallet(result.wallet);
+      }
       skipResumeNoticeOnUnmountRef.current = true;
-      const checkoutOrder = buildCheckoutOrder();
-      const result = await createTestBookingSuccess({ order: checkoutOrder });
       navigate("/thank-you", {
         state: {
           order: checkoutOrder,
-          ticket: {
-            reference: result?.reference || "",
-            qr_code: result?.qr_code || "",
-            ticket_image: result?.ticket_image || "",
-            download_url: result?.download_url || "",
-            details_url: result?.details_url || "",
-          },
+          ticket: ticketPayload,
         },
       });
     } catch (error) {
-      setTestBookingError(error?.message || "Unable to create test booking.");
+      setPaymentError(error?.message || "Unable to complete wallet payment.");
     } finally {
-      setIsCreatingTestBooking(false);
+      setIsPayingWithWallet(false);
     }
   };
+
+  const isPaymentActionBusy =
+    isPaying ||
+    isPayingWithWallet ||
+    applyingCoupon ||
+    applyingLoyalty ||
+    previewingSubscription ||
+    previewingReferralWallet;
 
   return (
     <div className="wf2-orderPage">
@@ -897,6 +923,19 @@ export default function OrderConfirm() {
               </div>
             ) : null}
             <div className="wf2-orderSummaryRow">
+              <span>Mero Wallet</span>
+              <span>
+                {loadingCashWallet
+                  ? "Loading..."
+                  : `NPR ${cashWalletBalance.toLocaleString()}`}
+              </span>
+            </div>
+            {!walletCanCoverTotal ? (
+              <div className="text-danger small mb-2">
+                Insufficient wallet balance. Add money to your wallet or choose eSewa.
+              </div>
+            ) : null}
+            <div className="wf2-orderSummaryRow">
               <span>Food Subtotal</span>
               <span>{formatPrice(foodTotal)}</span>
             </div>
@@ -908,23 +947,25 @@ export default function OrderConfirm() {
               <span>Grand Total</span>
               <span>{formatPrice(orderTotal)}</span>
             </div>
-            <button
-              className="wf2-orderPayBtn"
-              type="button"
-              onClick={handlePayWithEsewa}
-              disabled={isPaying || isCreatingTestBooking || applyingCoupon || applyingLoyalty || previewingSubscription || previewingReferralWallet}
-            >
-              {isPaying ? "Redirecting..." : "Pay with eSewa"}
-            </button>
-            <button
-              className="wf2-orderGhostBtn"
-              type="button"
-              onClick={handleTestBookingSuccess}
-              disabled={isPaying || isCreatingTestBooking || applyingCoupon || applyingLoyalty || previewingSubscription || previewingReferralWallet}
-            >
-              {isCreatingTestBooking ? "Creating booking..." : "Test Booking Success"}
-            </button>
-            {testBookingError ? <div className="wf2-orderQrError">{testBookingError}</div> : null}
+            <div className="wf2-orderPaymentActions">
+              <button
+                className="wf2-orderPayBtn"
+                type="button"
+                onClick={handlePayWithEsewa}
+                disabled={isPaymentActionBusy}
+              >
+                {isPaying ? "Redirecting..." : "Pay with eSewa"}
+              </button>
+              <button
+                className="wf2-orderWalletPayBtn"
+                type="button"
+                onClick={handlePayWithWallet}
+                disabled={isPaymentActionBusy || loadingCashWallet || !walletCanCoverTotal}
+              >
+                {isPayingWithWallet ? "Processing payment..." : "Pay with Mero Wallet"}
+              </button>
+            </div>
+            {paymentError ? <div className="wf2-orderQrError">{paymentError}</div> : null}
           </section>
         </aside>
       </div>
