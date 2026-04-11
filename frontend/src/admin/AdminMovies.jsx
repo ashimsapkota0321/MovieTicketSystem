@@ -27,6 +27,7 @@ export default function AdminMovies() {
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("Status");
   const [languageFilter, setLanguageFilter] = useState("Language");
+  const [flowFilter, setFlowFilter] = useState("all");
   const [searchParams] = useSearchParams();
   const queryFromUrl = String(searchParams.get("q") || "");
 
@@ -57,8 +58,22 @@ export default function AdminMovies() {
       );
     }
 
+    if (flowFilter !== "all") {
+      list = list.filter((movie) => {
+        const isVendorSubmission = isVendorSubmissionMovie(movie);
+        return flowFilter === "published" ? !isVendorSubmission : isVendorSubmission;
+      });
+    }
+
     return list;
-  }, [movies, searchTerm, statusFilter, languageFilter]);
+  }, [movies, searchTerm, statusFilter, languageFilter, flowFilter]);
+
+  const moderationStats = useMemo(() => {
+    const published = movies.filter((movie) => !isVendorSubmissionMovie(movie)).length;
+    const submissions = movies.filter((movie) => isVendorSubmissionMovie(movie)).length;
+    const pending = movies.filter((movie) => String(movie?.approvalStatus || movie?.approval_status || "").trim().toUpperCase() === "PENDING").length;
+    return { published, submissions, pending };
+  }, [movies]);
 
   const totalPages = Math.max(1, Math.ceil(filteredMovies.length / PAGE_SIZE));
   const paginatedMovies = useMemo(() => {
@@ -158,6 +173,17 @@ export default function AdminMovies() {
       </AdminPageHeader>
 
       <section className="admin-card">
+        <div className="d-flex flex-wrap gap-2 mb-3">
+          <button type="button" className={`btn btn-sm ${flowFilter === "all" ? "btn-primary" : "btn-outline-light"}`} onClick={() => setFlowFilter("all")}>
+            All flows
+          </button>
+          <button type="button" className={`btn btn-sm ${flowFilter === "published" ? "btn-primary" : "btn-outline-light"}`} onClick={() => setFlowFilter("published")}>
+            Published catalog
+          </button>
+          <button type="button" className={`btn btn-sm ${flowFilter === "submitted" ? "btn-primary" : "btn-outline-light"}`} onClick={() => setFlowFilter("submitted")}>
+            Vendor submissions
+          </button>
+        </div>
         <div className="d-flex flex-wrap gap-2 justify-content-between align-items-center mb-3">
           <div className="d-flex gap-2 flex-wrap admin-filter-row">
             <input
@@ -189,14 +215,19 @@ export default function AdminMovies() {
               <option>Hindi</option>
             </select>
           </div>
-          <div className="text-muted small">Showing {filteredMovies.length} movies</div>
+          <div className="text-muted small">
+            Showing {filteredMovies.length} movies | Published {moderationStats.published} | Vendor submissions {moderationStats.submissions} | Pending review {moderationStats.pending}
+          </div>
         </div>
         <div className="table-responsive">
           <table className="table admin-table">
             <thead>
               <tr>
                 <th>Poster</th>
+                <th>ID</th>
                 <th>Title</th>
+                <th>Flow</th>
+                <th>Approval</th>
                 <th>Duration</th>
                 <th>Genre</th>
                 <th>Language</th>
@@ -207,20 +238,41 @@ export default function AdminMovies() {
               </tr>
             </thead>
             <tbody>
-              {paginatedMovies.map((movie) => (
-                <tr key={movie.id}>
-                  <td>
-                    <div className="admin-poster" style={{ background: movie.posterTone || pickPosterTone() }}>
-                      {String(movie.title || "")
-                        .split(" ")
-                        .filter(Boolean)
-                        .map((word) => word[0])
-                        .join("")}
-                    </div>
-                  </td>
+              {paginatedMovies.map((movie) => {
+                const posterUrl = resolveMoviePoster(movie);
+                const posterInitials = getMovieInitials(movie.title);
+                return (
+                  <tr key={movie.id}>
+                    <td>
+                      <div className="admin-poster" style={{ background: movie.posterTone || pickPosterTone() }}>
+                        <span className="admin-posterFallback">{posterInitials}</span>
+                        {posterUrl ? (
+                          <img
+                            className="admin-posterImage"
+                            src={posterUrl}
+                            alt={`${movie.title || "Movie"} poster`}
+                            loading="lazy"
+                            onError={(event) => {
+                              event.currentTarget.style.display = "none";
+                            }}
+                          />
+                        ) : null}
+                      </div>
+                    </td>
+                    <td>{movie.id}</td>
                   <td>
                     <div className="fw-semibold">{movie.title}</div>
-                    <small className="text-muted">{movie.id}</small>
+                    {movie.approvalReason ? <div className="text-muted small">{movie.approvalReason}</div> : null}
+                  </td>
+                  <td>
+                    <span className={`badge-soft ${isVendorSubmissionMovie(movie) ? "warning" : "success"}`}>
+                      {isVendorSubmissionMovie(movie) ? "Vendor submission" : "Published catalog"}
+                    </span>
+                  </td>
+                  <td>
+                    <span className={`badge-soft ${approvalTone(movie.approvalStatus)}`}>
+                      {formatApprovalLabel(movie.approvalStatus, movie.isApproved)}
+                    </span>
                   </td>
                   <td>{movie.duration}</td>
                   <td>{movie.genre}</td>
@@ -260,11 +312,12 @@ export default function AdminMovies() {
                       </button>
                     </div>
                   </td>
-                </tr>
-              ))}
+                  </tr>
+                );
+              })}
               {filteredMovies.length === 0 ? (
                 <tr>
-                  <td colSpan="9">No movies added yet.</td>
+                  <td colSpan="12">No movies added yet.</td>
                 </tr>
               ) : null}
             </tbody>
@@ -365,7 +418,7 @@ function buildEmptyMovie() {
     synopsis: "",
     posterFile: null,
     posterPreview: "",
-    trailerUrl: "",
+    trailerUrlsText: "",
     cast: [],
     crew: [],
   };
@@ -378,6 +431,15 @@ function buildFormFromMovie(movie) {
   const crew = Array.isArray(movie?.crew)
     ? movie.crew.map((credit, index) => toCreditForm(credit, index, "CREW"))
     : [];
+  const trailerUrls = Array.isArray(movie?.trailerUrls)
+    ? movie.trailerUrls
+    : Array.isArray(movie?.trailer_urls)
+      ? movie.trailer_urls
+      : [movie?.trailerUrl || movie?.trailer_url || ""];
+  const normalizedTrailerUrls = trailerUrls
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+
   return {
     title: movie?.title || "",
     duration: movie?.duration || "",
@@ -389,7 +451,7 @@ function buildFormFromMovie(movie) {
     synopsis: movie?.description || movie?.synopsis || "",
     posterFile: null,
     posterPreview: movie?.posterImage || movie?.poster_image || movie?.posterUrl || movie?.poster_url || "",
-    trailerUrl: movie?.trailerUrl || movie?.trailer_url || "",
+    trailerUrlsText: normalizedTrailerUrls.join("\n"),
     cast,
     crew,
   };
@@ -405,7 +467,12 @@ function buildMovieFormData(form) {
   payload.append("release_date", form.releaseDate || "");
   payload.append("status", form.status || "COMING_SOON");
   payload.append("description", form.synopsis?.trim() || "");
-  payload.append("trailer_url", form.trailerUrl?.trim() || "");
+  const trailerUrls = String(form.trailerUrlsText || "")
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  payload.append("trailer_urls", JSON.stringify(trailerUrls));
+  payload.append("trailer_url", trailerUrls[0] || "");
   let photoCounter = 0;
   const appendPersonPhoto = (credit) => {
     if (!credit?.photoFile) return undefined;
@@ -507,6 +574,28 @@ function formatStatusLabel(status) {
   return status || "Unknown";
 }
 
+function isVendorSubmissionMovie(movie) {
+  const source = String(movie?.approvalMetadata?.source || movie?.approval_metadata?.source || "").toLowerCase();
+  const approvalStatus = String(movie?.approvalStatus || movie?.approval_status || "").trim().toUpperCase();
+  return source === "vendor_submission" || approvalStatus === "PENDING" || approvalStatus === "REJECTED";
+}
+
+function formatApprovalLabel(status, isApproved) {
+  const approvalStatus = String(status || "").trim().toUpperCase();
+  if (approvalStatus === "APPROVED") return "Approved";
+  if (approvalStatus === "REJECTED") return "Rejected";
+  if (approvalStatus === "PENDING") return "Pending review";
+  return isApproved ? "Approved" : "Unknown";
+}
+
+function approvalTone(status) {
+  const approvalStatus = String(status || "").trim().toUpperCase();
+  if (approvalStatus === "APPROVED") return "success";
+  if (approvalStatus === "REJECTED") return "danger";
+  if (approvalStatus === "PENDING") return "warning";
+  return "info";
+}
+
 function statusTone(status) {
   if (status === "NOW_SHOWING") return "success";
   if (status === "COMING_SOON") return "info";
@@ -523,4 +612,26 @@ function pickPosterTone() {
     "linear-gradient(135deg, #60a5fa, #1d4ed8)",
   ];
   return tones[Math.floor(Math.random() * tones.length)];
+}
+
+function resolveMoviePoster(movie) {
+  return (
+    movie?.posterImage ||
+    movie?.poster_image ||
+    movie?.posterUrl ||
+    movie?.poster_url ||
+    movie?.poster ||
+    ""
+  );
+}
+
+function getMovieInitials(value) {
+  const initials = String(value || "")
+    .split(" ")
+    .filter(Boolean)
+    .map((word) => word[0])
+    .join("")
+    .slice(0, 3)
+    .toUpperCase();
+  return initials || "MOV";
 }
