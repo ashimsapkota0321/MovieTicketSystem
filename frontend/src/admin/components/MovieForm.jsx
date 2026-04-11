@@ -145,11 +145,13 @@ export default function MovieForm({ value, onChange, onEditPerson, loading = fal
         ) : null}
       </div>
       <div className="col-md-6">
-        <label className="form-label">Trailer URL</label>
-        <input
+        <label className="form-label">Trailer URLs (one per line)</label>
+        <textarea
           className="form-control"
-          value={value.trailerUrl}
-          onChange={(event) => updateField("trailerUrl", event.target.value)}
+          rows="4"
+          placeholder={"https://www.youtube.com/watch?v=...\nhttps://youtu.be/..."}
+          value={value.trailerUrlsText}
+          onChange={(event) => updateField("trailerUrlsText", event.target.value)}
           disabled={loading}
         />
       </div>
