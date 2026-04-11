@@ -7,6 +7,7 @@ import {
   CalendarDays,
   CalendarRange,
   Ticket,
+  ShieldAlert,
   Percent,
   BarChart3,
   Clapperboard,
@@ -21,6 +22,7 @@ import logo from "../images/logo.png";
 const navItems = [
   { label: "Dashboard", icon: LayoutGrid, to: "/admin/dashboard" },
   { label: "Manage Movies", icon: Film, to: "/admin/movies" },
+  { label: "Review Desk", icon: ShieldAlert, to: "/admin/reviews" },
   { label: "Manage Vendors", icon: Clapperboard, to: "/admin/vendors" },
   { label: "Manage Users", icon: Users, to: "/admin/users" },
   { label: "Manage Shows", icon: CalendarDays, to: "/admin/shows" },
