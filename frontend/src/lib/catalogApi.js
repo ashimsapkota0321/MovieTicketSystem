@@ -446,7 +446,31 @@ export async function verifyEsewaPayment(payloadOrData) {
   return data || {};
 }
 
-export async function createTestBookingSuccess(payload = {}) {
+export async function initiateUserWalletTopupEsewa(payloadOrAmount) {
+  const payload =
+    payloadOrAmount && typeof payloadOrAmount === "object"
+      ? payloadOrAmount
+      : { amount: payloadOrAmount };
+  const data = await request("/api/user/wallet/topup/esewa/initiate/", {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
+export async function verifyUserWalletTopupEsewa(payloadOrData) {
+  const payload =
+    payloadOrData && typeof payloadOrData === "object"
+      ? payloadOrData
+      : { data: payloadOrData };
+  const data = await request("/api/user/wallet/topup/esewa/verify/", {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
+export async function payBookingWithUserWallet(payload = {}) {
   const normalizedPayload =
     payload && typeof payload === "object" && !Array.isArray(payload)
       ? payload
@@ -455,7 +479,7 @@ export async function createTestBookingSuccess(payload = {}) {
     normalizedPayload.order && typeof normalizedPayload.order === "object"
       ? normalizedPayload
       : { order: normalizedPayload };
-  const data = await request("/api/payment/qr/", {
+  const data = await request("/api/user/wallet/booking/pay/", {
     method: "POST",
     body: JSON.stringify(requestPayload),
   });
@@ -1162,6 +1186,23 @@ export async function fetchCinemas(params = {}) {
   return data?.vendors || [];
 }
 
+function buildFoodItemFormData(payload = {}) {
+  const formData = new FormData();
+  Object.entries(payload || {}).forEach(([key, value]) => {
+    if (value === undefined || value === null) return;
+    if (value instanceof File) {
+      formData.append(key, value);
+      return;
+    }
+    if (typeof value === "boolean") {
+      formData.append(key, value ? "true" : "false");
+      return;
+    }
+    formData.append(key, String(value));
+  });
+  return formData;
+}
+
 export async function fetchFoodItemsByVendor(params = {}) {
   const query = new URLSearchParams(params).toString();
   const data = await request(`/api/food-items/${query ? `?${query}` : ""}`);
@@ -1174,18 +1215,20 @@ export async function fetchVendorFoodItems() {
 }
 
 export async function createVendorFoodItem(payload) {
-  const data = await request("/api/vendor/food-items/", {
+  const data = await requestForm("/api/vendor/food-items/", buildFoodItemFormData(payload), {
     method: "POST",
-    body: JSON.stringify(payload),
   });
   return data?.item || data;
 }
 
 export async function updateVendorFoodItem(itemId, payload) {
-  const data = await request(`/api/vendor/food-items/${itemId}/`, {
+  const data = await requestForm(
+    `/api/vendor/food-items/${itemId}/`,
+    buildFoodItemFormData(payload),
+    {
     method: "PATCH",
-    body: JSON.stringify(payload),
-  });
+    }
+  );
   return data?.item || data;
 }
 
@@ -1294,6 +1337,88 @@ export async function fetchVendorAnalytics() {
   return data;
 }
 
+export async function fetchVendorRevenueAnalytics(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const data = await request(`/api/vendor/revenue/analytics/${query ? `?${query}` : ""}`);
+  return data || {};
+}
+
+export async function fetchVendorRevenueTransactions(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const data = await request(`/api/vendor/revenue/transactions/${query ? `?${query}` : ""}`);
+  return data?.transactions || [];
+}
+
+export async function fetchVendorRevenueReport(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const data = await request(`/api/vendor/revenue/reports/${query ? `?${query}` : ""}`);
+  return data || {};
+}
+
+export async function fetchVendorWalletBalance() {
+  const data = await request("/api/vendor/wallet/");
+  return data || {};
+}
+
+export async function fetchVendorWalletTransactions(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const data = await request(`/api/vendor/wallet/transactions/${query ? `?${query}` : ""}`);
+  return data?.transactions || [];
+}
+
+export async function fetchAdminRevenueConfig() {
+  const data = await request("/api/admin/revenue/config/");
+  return data || {};
+}
+
+export async function updateAdminRevenueConfig(payload = {}) {
+  const data = await request("/api/admin/revenue/config/", {
+    method: "PATCH",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
+export async function fetchAdminRevenueAnalytics(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const data = await request(`/api/admin/revenue/analytics/${query ? `?${query}` : ""}`);
+  return data || {};
+}
+
+export async function fetchAdminRevenueTransactions(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const data = await request(`/api/admin/revenue/transactions/${query ? `?${query}` : ""}`);
+  return data?.transactions || [];
+}
+
+export async function fetchAdminRevenueReport(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const data = await request(`/api/admin/revenue/reports/${query ? `?${query}` : ""}`);
+  return data || {};
+}
+
+export async function fetchAdminWithdrawalRequests(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const data = await request(`/api/admin/withdrawals/${query ? `?${query}` : ""}`);
+  return data?.withdrawals || [];
+}
+
+export async function approveAdminWithdrawalRequest(transactionId, payload = {}) {
+  const data = await request(`/api/admin/withdrawals/${transactionId}/approve/`, {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
+export async function rejectAdminWithdrawalRequest(transactionId, payload = {}) {
+  const data = await request(`/api/admin/withdrawals/${transactionId}/reject/`, {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
 export async function fetchVendorBookings() {
   const data = await request("/api/vendor/bookings/");
   return data?.bookings || [];
@@ -1397,7 +1522,7 @@ export async function downloadVendorTicketValidationMonitorExportJob(jobId) {
   );
 
   const disposition = response.headers.get("Content-Disposition") || "";
-  const filenameMatch = disposition.match(/filename="?([^\"]+)"?/i);
+  const filenameMatch = disposition.match(/filename="?([^"]+)"?/i);
   const filename = filenameMatch?.[1] || "ticket_validation_monitor.csv";
   const blob = await response.blob();
   return { blob, filename, requestId };
