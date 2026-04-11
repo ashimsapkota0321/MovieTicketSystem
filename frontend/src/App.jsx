@@ -17,6 +17,9 @@ import TicketDownload from "./pages/TicketDownload";
 import EsewaCheckout from "./pages/EsewaCheckout";
 import PaymentSuccess from "./pages/PaymentSuccess";
 import PaymentFailure from "./pages/PaymentFailure";
+import WalletTopupEsewaCheckout from "./pages/WalletTopupEsewaCheckout";
+import WalletTopupSuccess from "./pages/WalletTopupSuccess";
+import WalletTopupFailure from "./pages/WalletTopupFailure";
 import Layout from "./components/Layout";
 import Profile from "./pages/Profile";
 import BookingHistory from "./pages/BookingHistory";
@@ -38,6 +41,7 @@ import AdminVendors from "./admin/AdminVendors";
 import AdminUsers from "./admin/AdminUsers";
 import AdminShows from "./admin/AdminShows";
 import AdminSchedule from "./admin/AdminSchedule";
+import AdminReviews from "./admin/AdminReviews";
 import AdminBookings from "./admin/AdminBookings";
 import AdminReports from "./admin/AdminReports";
 import AdminProfile from "./admin/AdminProfile";
@@ -135,6 +139,30 @@ function App() {
         <Route path="/esewa/checkout" element={<Layout><EsewaCheckout /></Layout>} />
         <Route path="/payment-success" element={<Layout><PaymentSuccess /></Layout>} />
         <Route path="/payment-failure" element={<Layout><PaymentFailure /></Layout>} />
+        <Route
+          path="/wallet/topup/esewa/checkout"
+          element={
+            <RequireCustomer>
+              <Layout><WalletTopupEsewaCheckout /></Layout>
+            </RequireCustomer>
+          }
+        />
+        <Route
+          path="/wallet/topup/success"
+          element={
+            <RequireCustomer>
+              <Layout><WalletTopupSuccess /></Layout>
+            </RequireCustomer>
+          }
+        />
+        <Route
+          path="/wallet/topup/failure"
+          element={
+            <RequireCustomer>
+              <Layout><WalletTopupFailure /></Layout>
+            </RequireCustomer>
+          }
+        />
         <Route
           path="/booking"
           element={
@@ -237,6 +265,7 @@ function App() {
           <Route path="users" element={<AdminUsers />} />
           <Route path="shows" element={<AdminShows />} />
           <Route path="schedule" element={<AdminSchedule />} />
+          <Route path="reviews" element={<AdminReviews />} />
           <Route path="bookings" element={<AdminBookings />} />
           <Route path="coupons" element={<AdminCoupons />} />
           <Route path="loyalty" element={<AdminLoyaltyControl />} />
