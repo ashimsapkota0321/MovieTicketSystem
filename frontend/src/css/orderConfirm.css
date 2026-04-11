@@ -215,18 +215,29 @@
   border-top: 1px solid rgba(255, 255, 255, 0.18);
 }
 
+.wf2-orderPaymentActions {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.wf2-orderPaymentActions .wf2-orderPayBtn,
+.wf2-orderPaymentActions .wf2-orderWalletPayBtn {
+  margin-top: 0;
+}
+
 .wf2-orderPayBtn {
   width: 100%;
   margin-top: 16px;
   border: none;
   border-radius: 14px;
   padding: 14px 16px;
-  background: linear-gradient(135deg, #f59e0b, #f6d35e);
+  background: #f4b430;
   color: #2b1d04;
   font-size: 17px;
   font-weight: 800;
   cursor: pointer;
-  transition: transform 0.2s ease, filter 0.2s ease;
+  transition: transform 0.2s ease, background 0.2s ease;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -235,7 +246,7 @@
 
 .wf2-orderPayBtn:hover {
   transform: translateY(-1px);
-  filter: brightness(1.05);
+  background: #e3a528;
 }
 
 .wf2-orderPayBtn:disabled {
@@ -245,18 +256,47 @@
   transform: none;
 }
 
+.wf2-orderWalletPayBtn {
+  width: 100%;
+  border: 1px solid #1f7e67;
+  border-radius: 14px;
+  padding: 14px 16px;
+  background: #249a7e;
+  color: #eafdf7;
+  font-size: 17px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform 0.2s ease, background 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.wf2-orderWalletPayBtn:hover {
+  transform: translateY(-1px);
+  background: #20866d;
+}
+
+.wf2-orderWalletPayBtn:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+  filter: grayscale(0.2);
+  transform: none;
+}
+
 .wf2-orderDownloadBtn {
   width: 100%;
   margin-top: 16px;
   border: none;
   border-radius: 14px;
   padding: 14px 16px;
-  background: linear-gradient(180deg, #f6d35e 0%, #f59e0b 100%);
+  background: #f4b430;
   color: #2b1d04;
   font-size: 17px;
   font-weight: 800;
   cursor: pointer;
-  transition: transform 0.2s ease, filter 0.2s ease;
+  transition: transform 0.2s ease, background 0.2s ease;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -265,7 +305,7 @@
 
 .wf2-orderDownloadBtn:hover {
   transform: translateY(-1px);
-  filter: brightness(1.05);
+  background: #e3a528;
 }
 
 .wf2-orderDownloadBtn:disabled {
@@ -595,6 +635,125 @@
   margin-top: 10px;
 }
 
+.wf2-lifecycleShell {
+  display: grid;
+  gap: 18px;
+}
+
+.wf2-lifecycleHero {
+  display: grid;
+  gap: 8px;
+}
+
+.wf2-lifecycleHero h2 {
+  margin: 0;
+  font-size: clamp(26px, 3.4vw, 36px);
+  font-weight: 800;
+  color: #f2f4fb;
+}
+
+.wf2-lifecycleHero p {
+  margin: 0;
+  color: rgba(226, 234, 252, 0.84);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.wf2-lifecycleGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.wf2-thankyouLifecycleGrid {
+  margin-top: 8px;
+}
+
+.wf2-lifecycleCard {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 14px 16px;
+  display: grid;
+  gap: 6px;
+}
+
+.wf2-lifecycleCard span {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(183, 199, 227, 0.88);
+}
+
+.wf2-lifecycleCard strong {
+  font-size: 20px;
+  color: #f2f4fb;
+}
+
+.wf2-lifecycleCard p {
+  margin: 0;
+  color: rgba(226, 234, 252, 0.82);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.wf2-lifecycleAlert {
+  border-radius: 14px;
+  border: 1px solid rgba(59, 130, 246, 0.45);
+  background: rgba(30, 41, 59, 0.55);
+  color: rgba(226, 234, 252, 0.95);
+  padding: 12px 14px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.wf2-lifecycleAlertSuccess {
+  border-color: rgba(34, 197, 94, 0.55);
+  background: rgba(20, 83, 45, 0.28);
+  color: rgba(220, 252, 231, 0.96);
+}
+
+.wf2-lifecycleAlertWarning {
+  border-color: rgba(245, 158, 11, 0.56);
+  background: rgba(120, 53, 15, 0.28);
+  color: rgba(254, 243, 199, 0.96);
+}
+
+.wf2-lifecycleAlertDanger {
+  border-color: rgba(239, 68, 68, 0.55);
+  background: rgba(127, 29, 29, 0.3);
+  color: rgba(254, 226, 226, 0.96);
+}
+
+.wf2-lifecycleDetails {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 12px 14px;
+}
+
+.wf2-lifecycleDetails summary {
+  cursor: pointer;
+  color: rgba(226, 234, 252, 0.92);
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.wf2-lifecycleDetails pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: rgba(226, 234, 252, 0.82);
+  font-size: 12px;
+}
+
+.wf2-lifecycleActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .wf2-thankyouPage {
   padding: 48px var(--page-pad) 90px;
   font-family: var(--font-hero);
@@ -616,94 +775,102 @@
 }
 
 .wf2-thankyouHero {
-  text-align: center;
-  display: grid;
-  gap: 10px;
-}
 
-.wf2-thankyouCheck {
-  width: 48px;
-  height: 48px;
-  border-radius: 999px;
-  background: rgba(16, 185, 129, 0.12);
-  color: #16a34a;
-  display: grid;
-  place-items: center;
-  margin: 0 auto;
-}
+  @media (max-width: 1024px) {
+    .wf2-orderLayout {
+      grid-template-columns: 1fr;
+    }
 
-.wf2-thankyouTitle {
-  font-size: clamp(42px, 8vw, 82px);
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  margin: 0;
-  color: #f2f4fb;
-}
+    .wf2-etkShell {
+      grid-template-columns: 1fr;
+    }
 
-.wf2-thankyouSubtext {
-  margin: 0 auto;
-  max-width: 520px;
-  color: rgba(226, 234, 252, 0.85);
-  font-size: 15px;
-}
+    .wf2-etkSide {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      align-items: start;
+    }
 
-.wf2-thankyouRow {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
-}
+    .wf2-etkQrWrap {
+      grid-column: 1 / -1;
+    }
 
-.wf2-thankyouCard {
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  padding: 20px;
-  display: grid;
-  gap: 12px;
-}
+    .wf2-lifecycleGrid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
 
-.wf2-thankyouQrCard {
-  text-align: center;
-}
+  @media (max-width: 640px) {
+    .wf2-orderMovieRow {
+      grid-template-columns: 72px 1fr;
+    }
+    .wf2-orderPriceTag {
+      grid-column: 2;
+      justify-self: end;
+    }
+    .wf2-orderItemRow {
+      grid-template-columns: 1fr auto;
+    }
+    .wf2-orderItemPrice {
+      grid-column: 2;
+    }
+    .wf2-thankyouRow {
+      grid-template-columns: 1fr;
+    }
+    .wf2-thankyouBtnPrimary,
+    .wf2-thankyouBtnGhost {
+      width: 100%;
+    }
 
-.wf2-thankyouCard h3 {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 800;
-  color: #f2f4fb;
-}
+    .wf2-ticketCard {
+      grid-template-columns: 1fr;
+    }
 
-.wf2-thankyouCard p {
-  margin: 0;
-  font-size: 13px;
-  color: rgba(226, 234, 252, 0.8);
-}
+    .wf2-ticketRight {
+      border-left: none;
+      border-top: 2px dashed #e5e7eb;
+    }
 
-.wf2-thankyouQr {
-  width: min(210px, 100%);
-  margin: 0 auto;
-  border-radius: 12px;
-  background: #ffffff;
-  padding: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-}
+    .wf2-etkMain {
+      padding: 16px;
+    }
 
-.wf2-thankyouQrPlaceholder {
-  padding: 18px;
-  border-radius: 12px;
-  border: 1px dashed rgba(255, 255, 255, 0.2);
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(226, 234, 252, 0.85);
-  font-size: 13px;
-  text-align: center;
-}
+    .wf2-etkHead {
+      grid-template-columns: 1fr;
+      align-items: start;
+    }
 
-.wf2-thankyouRef {
-  width: fit-content;
-  margin: 0 auto;
-  padding: 6px 12px;
-  border-radius: 999px;
+    .wf2-etkType {
+      width: fit-content;
+    }
+
+    .wf2-etkHighlightRow {
+      grid-template-columns: 1fr;
+    }
+
+    .wf2-etkGrid {
+      grid-template-columns: 1fr;
+    }
+
+    .wf2-etkFooter {
+      grid-template-columns: 1fr;
+    }
+
+    .wf2-etkContact {
+      text-align: left;
+    }
+
+    .wf2-etkSide {
+      grid-template-columns: 1fr;
+    }
+
+    .wf2-etkQrWrap {
+      grid-column: auto;
+    }
+
+    .wf2-lifecycleGrid {
+      grid-template-columns: 1fr;
+    }
+  }
   background: rgba(255, 255, 255, 0.08);
   border: 1px dashed rgba(255, 255, 255, 0.2);
   font-size: 12px;
