@@ -19,20 +19,30 @@ from django.core.cache import cache
 from django.db import transaction
 from django.http import HttpResponse
 from django.shortcuts import redirect
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from .. import selectors, services
-from ..models import Booking, BookingDropoffEvent, BookingSeat, Payment, Seat, SeatAvailability, Show, Ticket
-from ..permissions import ROLE_CUSTOMER, role_required
-from ..utils import coalesce, parse_bool, parse_date
-
-
-ESEWA_SIGNED_FIELD_NAMES = "total_amount,transaction_uuid,product_code"
+from ..models import (
+    Booking,
+    BookingDropoffEvent,
+    BookingSeat,
+    Payment,
+    Show,
+    Ticket,
+    UserWallet,
+    UserWalletTransaction,
+)
+from ..permissions import ROLE_CUSTOMER, resolve_customer, role_required
+from ..utils import coalesce, parse_bool
 ESEWA_PENDING_CACHE_PREFIX = "mt:esewa:pending:"
 ESEWA_PAYMENT_METHOD_PREFIX = "ESEWA:"
+USER_WALLET_ESEWA_PENDING_CACHE_PREFIX = "mt:esewa:user-wallet:pending:"
+USER_WALLET_PAYMENT_METHOD = "USER_WALLET"
+ESEWA_SIGNED_FIELD_NAMES = "total_amount,transaction_uuid,product_code"
 
 
 def _esewa_product_code() -> str:
@@ -200,15 +210,145 @@ def _store_pending_transaction(
     )
 
 
+def _pending_booking_payload_from_payment(payment: Payment) -> dict[str, Any]:
+    metadata = payment.metadata if isinstance(payment.metadata, dict) else {}
+    order = metadata.get("order") if isinstance(metadata.get("order"), dict) else None
+    transaction_uuid = str(payment.transaction_uuid or "").strip() or _transaction_uuid_from_payment_method(
+        payment.payment_method
+    )
+    return {
+        "transaction_uuid": transaction_uuid,
+        "order": order,
+        "total_amount": _format_amount(payment.amount or Decimal("0")),
+        "booking_id": payment.booking_id,
+        "initiated_at": payment.payment_date.isoformat() if payment.payment_date else None,
+        "source": "database",
+    }
+
+
 def _get_pending_transaction(transaction_uuid: str) -> Optional[dict[str, Any]]:
     """Load pending checkout payload for a transaction UUID."""
     cached = cache.get(_pending_cache_key(transaction_uuid))
-    return cached if isinstance(cached, dict) else None
+    if isinstance(cached, dict):
+        return cached
+
+    payment = (
+        Payment.objects.filter(transaction_uuid=transaction_uuid)
+        .select_related("booking")
+        .order_by("-id")
+        .first()
+    )
+    if payment:
+        return _pending_booking_payload_from_payment(payment)
+
+    payment = (
+        Payment.objects.filter(
+            payment_method=f"{ESEWA_PAYMENT_METHOD_PREFIX}{transaction_uuid}"[:30]
+        )
+        .select_related("booking")
+        .order_by("-id")
+        .first()
+    )
+    if payment:
+        return _pending_booking_payload_from_payment(payment)
+
+    return None
 
 
 def _clear_pending_transaction(transaction_uuid: str) -> None:
     """Delete pending checkout payload for a transaction UUID."""
     cache.delete(_pending_cache_key(transaction_uuid))
+
+
+def _quantize_money(value: Any) -> Decimal:
+    parsed = _coerce_decimal(value)
+    if parsed is None:
+        parsed = Decimal("0")
+    return parsed.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _serialize_user_wallet(wallet: UserWallet) -> dict[str, Any]:
+    return {
+        "user_id": wallet.user_id,
+        "balance": float(_quantize_money(wallet.balance)),
+        "total_credited": float(_quantize_money(wallet.total_credited)),
+        "total_debited": float(_quantize_money(wallet.total_debited)),
+        "updated_at": wallet.updated_at.isoformat() if wallet.updated_at else None,
+    }
+
+
+def _serialize_user_wallet_transaction(tx: UserWalletTransaction) -> dict[str, Any]:
+    return {
+        "id": tx.id,
+        "transaction_type": tx.transaction_type,
+        "status": tx.status,
+        "amount": float(_quantize_money(tx.amount)),
+        "reference_id": tx.reference_id,
+        "provider": tx.provider,
+        "created_at": tx.created_at.isoformat() if tx.created_at else None,
+        "processed_at": tx.processed_at.isoformat() if tx.processed_at else None,
+        "metadata": tx.metadata if isinstance(tx.metadata, dict) else {},
+    }
+
+
+def _user_wallet_pending_cache_key(transaction_uuid: str) -> str:
+    return f"{USER_WALLET_ESEWA_PENDING_CACHE_PREFIX}{transaction_uuid}"
+
+
+def _store_user_wallet_pending_topup(
+    *,
+    transaction_uuid: str,
+    user_id: int,
+    amount_text: str,
+    success_url: str,
+    failure_url: str,
+) -> None:
+    cache.set(
+        _user_wallet_pending_cache_key(transaction_uuid),
+        {
+            "transaction_uuid": transaction_uuid,
+            "user_id": int(user_id),
+            "total_amount": amount_text,
+            "success_url": success_url,
+            "failure_url": failure_url,
+            "initiated_at": timezone.now().isoformat(),
+        },
+        timeout=_esewa_pending_ttl_seconds(),
+    )
+
+
+def _get_user_wallet_pending_topup(transaction_uuid: str) -> Optional[dict[str, Any]]:
+    cached = cache.get(_user_wallet_pending_cache_key(transaction_uuid))
+    if isinstance(cached, dict):
+        return cached
+
+    pending_tx = (
+        UserWalletTransaction.objects.select_related("wallet")
+        .filter(
+            reference_id=transaction_uuid,
+            transaction_type=UserWalletTransaction.TYPE_TOPUP,
+        )
+        .order_by("-id")
+        .first()
+    )
+    if not pending_tx:
+        return None
+
+    return {
+        "transaction_uuid": pending_tx.reference_id,
+        "user_id": pending_tx.user_id,
+        "total_amount": _format_amount(pending_tx.amount or Decimal("0")),
+        "success_url": None,
+        "failure_url": None,
+        "initiated_at": pending_tx.created_at.isoformat() if pending_tx.created_at else None,
+        "wallet_transaction_id": pending_tx.id,
+        "source": "database",
+        "status": pending_tx.status,
+    }
+
+
+def _clear_user_wallet_pending_topup(transaction_uuid: str) -> None:
+    cache.delete(_user_wallet_pending_cache_key(transaction_uuid))
 
 
 def _normalize_order_payload(order: Any) -> Optional[dict[str, Any]]:
@@ -319,6 +459,27 @@ def _build_frontend_callback_redirect(
     return target
 
 
+def _build_user_wallet_frontend_callback_redirect(
+    *,
+    transaction_uuid: str,
+    data_value: str,
+    is_failure: bool,
+) -> str:
+    pending = _get_user_wallet_pending_topup(transaction_uuid) if transaction_uuid else None
+    default_path = "/wallet/topup/failure" if is_failure else "/wallet/topup/success"
+    fallback = _default_callback_url(default_path)
+    target = str(
+        (pending or {}).get("failure_url" if is_failure else "success_url")
+        or fallback
+    ).strip() or fallback
+
+    if data_value:
+        target = _append_query_param(target, "data", data_value)
+    if transaction_uuid:
+        target = _append_query_param(target, "transaction_uuid", transaction_uuid)
+    return target
+
+
 def _find_ticket_by_transaction_uuid(transaction_uuid: str) -> Optional[Ticket]:
     """Return a previously created ticket for the given transaction UUID."""
     if not transaction_uuid:
@@ -335,7 +496,7 @@ def _find_ticket_by_transaction_uuid(transaction_uuid: str) -> Optional[Ticket]:
         payment = (
             Payment.objects.filter(
                 payment_method=f"{ESEWA_PAYMENT_METHOD_PREFIX}{transaction_uuid}"[:30],
-                payment_status="Success",
+                payment_status=Payment.Status.SUCCESS,
             )
             .order_by("-id")
             .first()
@@ -464,7 +625,7 @@ def _lock_transaction_payment(transaction_uuid: str) -> Optional[Payment]:
     return (
         Payment.objects.select_for_update()
         .select_related("booking")
-        .filter(payment_method=payment_method)
+        .filter(Q(transaction_uuid=transaction_uuid) | Q(payment_method=payment_method))
         .order_by("-id")
         .first()
     )
@@ -482,7 +643,7 @@ def _cancel_pending_booking_for_transaction(
     payment_method = _pending_payment_method(transaction_uuid)
     pending_payments = list(
         Payment.objects.select_related("booking")
-        .filter(payment_method=payment_method)
+        .filter(Q(transaction_uuid=transaction_uuid) | Q(payment_method=payment_method))
         .order_by("-id")
     )
     seen_booking_ids: set[int] = set()
@@ -505,7 +666,9 @@ def _cancel_pending_booking_for_transaction(
             if keep_booking:
                 locked_booking.booking_status = services.BOOKING_STATUS_CANCELLED
                 locked_booking.save(update_fields=["booking_status"])
-                Payment.objects.filter(booking=locked_booking).update(payment_status="Failed")
+                Payment.objects.filter(booking=locked_booking).update(
+                    payment_status=Payment.Status.FAILED
+                )
             else:
                 locked_booking.delete()
 
@@ -525,8 +688,8 @@ def _find_pending_payment_and_booking_for_transaction(
             "booking__showtime__movie",
         )
         .filter(
-            payment_method=payment_method,
-            payment_status__iexact="Pending",
+            Q(transaction_uuid=transaction_uuid) | Q(payment_method=payment_method),
+            payment_status__iexact=Payment.Status.PENDING,
         )
         .order_by("-id")
         .first()
@@ -550,7 +713,7 @@ def _clear_user_pending_payment_bookings(
             user_id=user_id,
             showtime_id=showtime_id,
             booking_status__iexact=services.BOOKING_STATUS_PENDING,
-            payments__payment_status__iexact="Pending",
+            payments__payment_status__iexact=Payment.Status.PENDING,
             payments__payment_method__startswith=ESEWA_PAYMENT_METHOD_PREFIX,
         )
         .values_list("id", flat=True)
@@ -569,8 +732,8 @@ def _clear_user_pending_payment_bookings(
         locked_booking.save(update_fields=["booking_status"])
         Payment.objects.filter(
             booking=locked_booking,
-            payment_status__iexact="Pending",
-        ).update(payment_status="Failed")
+            payment_status__iexact=Payment.Status.PENDING,
+        ).update(payment_status=Payment.Status.FAILED)
 
 
 def _create_pending_booking_record(
@@ -716,12 +879,22 @@ def _create_pending_booking_record(
                     seat_price=seat_price,
                 )
 
-            Payment.objects.create(
+            payment = Payment.objects.create(
                 booking=booking,
                 payment_method=_pending_payment_method(transaction_uuid),
-                payment_status="Pending",
+                transaction_uuid=transaction_uuid,
+                payment_status=Payment.Status.PENDING,
                 amount=total_amount,
             )
+            payment.metadata = {
+                "order": order if isinstance(order, dict) else None,
+                "transaction_uuid": transaction_uuid,
+                "total_amount": _format_amount(total_amount),
+                "booking_id": booking.id,
+                "status": Payment.Status.PENDING,
+                "initiated_at": timezone.now().isoformat(),
+            }
+            payment.save(update_fields=["transaction_uuid", "metadata"])
         return booking, None, status.HTTP_200_OK
     except _PendingBookingError as exc:
         return None, exc.payload, exc.status_code
@@ -746,7 +919,7 @@ def _confirm_booking_after_payment(
         if existing_ticket:
             return _build_ticket_response(request, existing_ticket), None, status.HTTP_200_OK
 
-        if locked_payment and str(locked_payment.payment_status or "").strip().lower() == "success":
+        if locked_payment and str(locked_payment.payment_status or "").strip().upper() == Payment.Status.SUCCESS:
             existing_for_booking = None
             if locked_payment.booking_id:
                 existing_for_booking = (
@@ -779,33 +952,103 @@ def _confirm_booking_after_payment(
             )
         if booking_instance:
             linked_show = _linked_show_for_booking(booking_instance)
+            manual_review_required = bool((booking_payload or {}).get("requires_manual_review"))
             payment_amount = _coerce_decimal(paid_total_amount) or _coerce_decimal(
                 booking_instance.total_amount
             ) or Decimal("0")
+            payment_record = None
 
             if locked_payment:
+                payment_metadata = (
+                    locked_payment.metadata
+                    if isinstance(locked_payment.metadata, dict)
+                    else {}
+                )
+                payment_metadata.update(
+                    {
+                        "provider": "ESEWA",
+                        "transaction_uuid": transaction_uuid,
+                        "decoded": decoded_payload,
+                        "status_check": status_check_payload,
+                        "verified_at": timezone.now().isoformat(),
+                        "gateway_transaction_code": (
+                            str(
+                                decoded_payload.get("transaction_code")
+                                or status_check_payload.get("transaction_code")
+                                or ""
+                            ).strip()
+                            or None
+                        ),
+                    }
+                )
                 locked_payment.booking = booking_instance
                 locked_payment.payment_method = payment_method
-                locked_payment.payment_status = "Success"
+                locked_payment.payment_status = Payment.Status.SUCCESS
                 locked_payment.amount = payment_amount
+                locked_payment.transaction_uuid = transaction_uuid
+                locked_payment.metadata = payment_metadata
                 locked_payment.save(
                     update_fields=[
                         "booking",
                         "payment_method",
                         "payment_status",
                         "amount",
+                        "transaction_uuid",
+                        "metadata",
                     ]
                 )
+                payment_record = locked_payment
             elif not Payment.objects.filter(
                 booking=booking_instance,
                 payment_method=payment_method,
-                payment_status="Success",
+                payment_status=Payment.Status.SUCCESS,
             ).exists():
-                Payment.objects.create(
+                payment_record = Payment.objects.create(
                     booking=booking_instance,
                     payment_method=payment_method,
-                    payment_status="Success",
+                    payment_status=Payment.Status.SUCCESS,
                     amount=payment_amount,
+                    transaction_uuid=transaction_uuid,
+                    metadata={
+                        "provider": "ESEWA",
+                        "transaction_uuid": transaction_uuid,
+                        "decoded": decoded_payload,
+                        "status_check": status_check_payload,
+                        "verified_at": timezone.now().isoformat(),
+                        "gateway_transaction_code": (
+                            str(
+                                decoded_payload.get("transaction_code")
+                                or status_check_payload.get("transaction_code")
+                                or ""
+                            ).strip()
+                            or None
+                        ),
+                    },
+                )
+
+            if payment_record and not manual_review_required:
+                services._record_vendor_booking_earning(
+                    booking_instance,
+                    gross_amount=payment_amount,
+                    payment=payment_record,
+                )
+
+            if manual_review_required:
+                if str(booking_instance.booking_status or "").strip().upper() != Booking.Status.PENDING:
+                    booking_instance.booking_status = Booking.Status.PENDING
+                    booking_instance.save(update_fields=["booking_status"])
+                _clear_pending_transaction(transaction_uuid)
+                return (
+                    None,
+                    {
+                        "message": "Payment verified, but the booking requires manual review before confirmation.",
+                        "requires_manual_review": True,
+                        "fraud_score": booking_payload.get("fraud_score"),
+                        "fraud_level": booking_payload.get("fraud_level"),
+                        "fraud_signals": booking_payload.get("fraud_signals") or [],
+                        "booking_id": booking_instance.id,
+                    },
+                    status.HTTP_409_CONFLICT,
                 )
 
         reference = uuid.uuid4().hex[:10].upper()
@@ -827,7 +1070,7 @@ def _confirm_booking_after_payment(
         ticket_security_fields = services.build_ticket_security_fields(
             booking=booking_instance,
             show=linked_show,
-            payment_status="PAID",
+            payment_status=Ticket.PaymentStatus.PAID,
         )
         ticket = Ticket.objects.create(
             reference=reference,
@@ -877,6 +1120,7 @@ def booking_movies(request: Any):
         movies = selectors.list_movies_for_vendor(cinema_id, city=city)
     else:
         movies = selectors.list_movies_with_shows(city=city)
+
     payload = [selectors.build_movie_select_payload(movie) for movie in movies]
     return Response({"movies": payload}, status=status.HTTP_200_OK)
 
@@ -1036,6 +1280,198 @@ def create_payment_qr(request: Any):
     """Create a payment QR code and ticket details."""
     payload, status_code = services.create_payment_qr(request)
     return Response(payload, status=status_code)
+
+
+@api_view(["POST"])
+@role_required(ROLE_CUSTOMER)
+def user_wallet_booking_pay(request: Any):
+    """Create booking and ticket by charging the authenticated customer's cash wallet."""
+    customer = resolve_customer(request)
+    if customer is None:
+        return Response(
+            {"message": "Customer access required."},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    payload = request.data if isinstance(request.data, dict) else {}
+    raw_order = payload.get("order")
+    order = _normalize_order_payload(raw_order) if raw_order else None
+    if not isinstance(order, dict) or not order:
+        return Response(
+            {"message": "Order data is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Wallet checkout must always use the authenticated customer identity.
+    normalized_order = dict(order)
+    normalized_order["user_id"] = customer.id
+
+    booking_payload_obj = normalized_order.get("booking")
+    booking_payload = dict(booking_payload_obj) if isinstance(booking_payload_obj, dict) else {}
+    booking_payload["user_id"] = customer.id
+    normalized_order["booking"] = booking_payload
+
+    booking_context_obj = normalized_order.get("bookingContext")
+    if isinstance(booking_context_obj, dict):
+        booking_context = dict(booking_context_obj)
+        booking_context["user_id"] = customer.id
+        normalized_order["bookingContext"] = booking_context
+
+    amount_value = coalesce(payload, "amount")
+    if amount_value in (None, ""):
+        amount_value = coalesce(normalized_order, "total", "grandTotal", "orderTotal")
+    requested_total_amount = _coerce_decimal(amount_value)
+
+    booking_payload: Optional[dict[str, Any]] = None
+    booking_instance: Optional[Booking] = None
+    linked_show: Optional[Show] = None
+    wallet: Optional[UserWallet] = None
+    wallet_transaction: Optional[UserWalletTransaction] = None
+    ticket: Optional[Ticket] = None
+    amount_paid = Decimal("0")
+
+    with transaction.atomic():
+        booking_payload, booking_error, booking_status = services._create_booking_from_order(
+            normalized_order,
+            request=request,
+        )
+        if booking_error:
+            transaction.set_rollback(True)
+            return Response(booking_error, status=booking_status)
+
+        booking_id = _coerce_int((booking_payload or {}).get("booking_id"))
+        if not booking_id:
+            transaction.set_rollback(True)
+            return Response(
+                {"message": "Unable to complete wallet payment for this order."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        booking_instance = (
+            Booking.objects.select_for_update()
+            .select_related("showtime__screen", "showtime__movie")
+            .filter(pk=booking_id)
+            .first()
+        )
+        if not booking_instance or int(booking_instance.user_id) != int(customer.id):
+            transaction.set_rollback(True)
+            return Response(
+                {"message": "Booking user mismatch. Please retry checkout."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        linked_show = _linked_show_for_booking(booking_instance)
+
+        booking_total = _coerce_decimal(booking_instance.total_amount) or Decimal("0")
+        amount_paid = requested_total_amount if requested_total_amount is not None else booking_total
+        if amount_paid < booking_total:
+            amount_paid = booking_total
+        amount_paid = _quantize_money(amount_paid)
+
+        wallet = UserWallet.objects.select_for_update().filter(user=customer).first()
+        if wallet is None:
+            wallet = UserWallet.objects.create(user=customer)
+        wallet = services.recalculate_user_wallet_snapshot(wallet)
+
+        wallet_balance = _quantize_money(wallet.balance)
+        if amount_paid > wallet_balance:
+            shortfall = _quantize_money(amount_paid - wallet_balance)
+            transaction.set_rollback(True)
+            return Response(
+                {
+                    "message": "Insufficient wallet balance. Please top up or use eSewa.",
+                    "required_amount": float(amount_paid),
+                    "available_balance": float(wallet_balance),
+                    "shortfall": float(shortfall),
+                },
+                status=status.HTTP_402_PAYMENT_REQUIRED,
+            )
+
+        wallet_reference = (
+            f"WALLET-BOOKING-{booking_instance.id}-{_build_transaction_uuid()}"
+        )
+        wallet_transaction = UserWalletTransaction.objects.create(
+            wallet=wallet,
+            user=customer,
+            booking=booking_instance,
+            transaction_type=UserWalletTransaction.TYPE_DEBIT,
+            status=UserWalletTransaction.STATUS_COMPLETED,
+            amount=amount_paid,
+            reference_id=wallet_reference,
+            provider="WALLET",
+            processed_at=timezone.now(),
+            metadata={
+                "context": "BOOKING_CHECKOUT",
+                "order_total": float(_quantize_money(amount_paid)),
+            },
+        )
+        wallet = services.recalculate_user_wallet_snapshot(wallet)
+
+        payment = Payment.objects.create(
+            booking=booking_instance,
+            payment_method=USER_WALLET_PAYMENT_METHOD,
+            payment_status=Payment.Status.SUCCESS,
+            amount=amount_paid,
+        )
+        services._record_vendor_booking_earning(
+            booking_instance,
+            gross_amount=amount_paid,
+            payment=payment,
+        )
+
+        reference = uuid.uuid4().hex[:10].upper()
+        ticket_payload = services._build_ticket_payload(normalized_order, reference, request)
+        ticket_payload["order"] = normalized_order
+        if booking_payload:
+            ticket_payload["booking"] = booking_payload
+        ticket_payload["payment"] = {
+            "provider": USER_WALLET_PAYMENT_METHOD,
+            "transaction_uuid": wallet_reference,
+            "total_amount": _format_amount(amount_paid),
+            "status": "COMPLETE",
+            "verified_at": timezone.now().isoformat(),
+        }
+
+        ticket_security_fields = services.build_ticket_security_fields(
+            booking=booking_instance,
+            show=linked_show,
+            payment_status=Ticket.PaymentStatus.PAID,
+        )
+        ticket = Ticket.objects.create(
+            reference=reference,
+            payload=ticket_payload,
+            **ticket_security_fields,
+        )
+
+    if booking_instance and linked_show:
+        try:
+            services._notify_payment_success(booking_instance, linked_show)
+        except Exception:
+            # Do not fail checkout if notification fails after payment is committed.
+            pass
+
+    if ticket is None or wallet is None or wallet_transaction is None:
+        return Response(
+            {"message": "Unable to complete wallet payment. Please retry."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    ticket_response = _build_ticket_response(
+        request,
+        ticket,
+        booking_payload=booking_payload,
+    )
+    return Response(
+        {
+            "message": "Wallet payment successful. Booking confirmed.",
+            "payment_method": USER_WALLET_PAYMENT_METHOD,
+            "amount_paid": float(_quantize_money(amount_paid)),
+            "wallet": _serialize_user_wallet(wallet),
+            "wallet_transaction": _serialize_user_wallet_transaction(wallet_transaction),
+            **ticket_response,
+        },
+        status=status.HTTP_200_OK,
+    )
 
 
 @api_view(["POST"])
@@ -1365,6 +1801,15 @@ def esewa_verify(request: Any):
             status=status.HTTP_200_OK,
         )
 
+    if total_amount_for_status:
+        services.enqueue_gateway_status_check_job(
+            transaction_uuid=transaction_uuid,
+            total_amount=total_amount_for_status,
+            provider="ESEWA",
+            context="BOOKING_PAYMENT",
+            metadata={"flow": "esewa_verify"},
+        )
+
     pending_payment, pending_booking = _find_pending_payment_and_booking_for_transaction(
         transaction_uuid
     )
@@ -1421,6 +1866,468 @@ def esewa_verify(request: Any):
             "pending_order_available": bool(pending and pending.get("order")),
             "signature_message": signature_message,
             "order": pending.get("order") if pending else None,
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["POST"])
+@role_required(ROLE_CUSTOMER)
+def user_wallet_topup_esewa_initiate(request: Any):
+    """Create eSewa signed payload for customer wallet top-up."""
+    customer = resolve_customer(request)
+    if customer is None:
+        return Response(
+            {"message": "Customer access required."},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    payload = request.data if isinstance(request.data, dict) else {}
+    amount_value = coalesce(payload, "amount", "topup_amount", "topupAmount", default="")
+    amount = _coerce_decimal(amount_value)
+    if amount is None or amount <= 0:
+        return Response(
+            {"message": "Valid amount is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    amount = _quantize_money(amount)
+    tax_amount = Decimal("0")
+    product_service_charge = Decimal("0")
+    product_delivery_charge = Decimal("0")
+    total_amount = amount + tax_amount + product_service_charge + product_delivery_charge
+
+    transaction_uuid = _build_transaction_uuid()
+    total_amount_text = _format_amount(total_amount)
+    tax_amount_text = _format_amount(tax_amount)
+    service_charge_text = _format_amount(product_service_charge)
+    delivery_charge_text = _format_amount(product_delivery_charge)
+
+    message = (
+        f"total_amount={total_amount_text},"
+        f"transaction_uuid={transaction_uuid},"
+        f"product_code={_esewa_product_code()}"
+    )
+    signature = _build_signature(message)
+
+    frontend_success_url = _sanitize_callback_url(
+        payload.get("success_url"),
+        "/wallet/topup/success",
+    )
+    frontend_failure_url = _sanitize_callback_url(
+        payload.get("failure_url"),
+        "/wallet/topup/failure",
+    )
+    frontend_success_url = _append_query_param(frontend_success_url, "flow", "wallet_topup")
+    frontend_failure_url = _append_query_param(frontend_failure_url, "flow", "wallet_topup")
+    frontend_failure_url = _append_query_param(
+        frontend_failure_url,
+        "transaction_uuid",
+        transaction_uuid,
+    )
+
+    success_url = _backend_callback_url(
+        request,
+        "/api/user/wallet/topup/esewa/callback/success/",
+    )
+    failure_url = _backend_callback_url(
+        request,
+        "/api/user/wallet/topup/esewa/callback/failure/",
+    )
+    failure_url = _append_query_param(failure_url, "transaction_uuid", transaction_uuid)
+
+    _store_user_wallet_pending_topup(
+        transaction_uuid=transaction_uuid,
+        user_id=customer.id,
+        amount_text=total_amount_text,
+        success_url=frontend_success_url,
+        failure_url=frontend_failure_url,
+    )
+
+    wallet, _ = UserWallet.objects.get_or_create(user=customer)
+    pending_wallet_tx = (
+        UserWalletTransaction.objects.filter(
+            reference_id=transaction_uuid,
+            transaction_type=UserWalletTransaction.TYPE_TOPUP,
+        )
+        .order_by("-id")
+        .first()
+    )
+    if pending_wallet_tx is None:
+        UserWalletTransaction.objects.create(
+            wallet=wallet,
+            user=customer,
+            transaction_type=UserWalletTransaction.TYPE_TOPUP,
+            status=UserWalletTransaction.STATUS_PENDING,
+            amount=total_amount,
+            reference_id=transaction_uuid,
+            provider="ESEWA",
+            metadata={
+                "status": UserWalletTransaction.STATUS_PENDING,
+                "transaction_uuid": transaction_uuid,
+                "total_amount": total_amount_text,
+                "success_url": frontend_success_url,
+                "failure_url": frontend_failure_url,
+                "initiated_at": timezone.now().isoformat(),
+            },
+        )
+
+    return Response(
+        {
+            "amount": _format_amount(amount),
+            "tax_amount": tax_amount_text,
+            "total_amount": total_amount_text,
+            "transaction_uuid": transaction_uuid,
+            "product_code": _esewa_product_code(),
+            "product_service_charge": service_charge_text,
+            "product_delivery_charge": delivery_charge_text,
+            "signed_field_names": ESEWA_SIGNED_FIELD_NAMES,
+            "signature": signature,
+            "message": message,
+            "form_url": _esewa_form_url(),
+            "success_url": success_url,
+            "failure_url": failure_url,
+            "frontend_success_url": frontend_success_url,
+            "frontend_failure_url": frontend_failure_url,
+            "expires_in_seconds": _esewa_pending_ttl_seconds(),
+            "context": "USER_WALLET_TOPUP",
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["GET"])
+def user_wallet_topup_esewa_callback_success(request: Any):
+    """Receive eSewa success callback and redirect to wallet top-up frontend page."""
+    data_value = str(coalesce(request.query_params, "data", default="") or "").strip()
+    transaction_uuid = str(
+        coalesce(request.query_params, "transaction_uuid", "transactionUuid", default="") or ""
+    ).strip()
+
+    if data_value and not transaction_uuid:
+        try:
+            decoded = _decode_esewa_data(data_value)
+            transaction_uuid = str(decoded.get("transaction_uuid") or transaction_uuid).strip()
+        except Exception:
+            pass
+
+    return redirect(
+        _build_user_wallet_frontend_callback_redirect(
+            transaction_uuid=transaction_uuid,
+            data_value=data_value,
+            is_failure=False,
+        )
+    )
+
+
+@api_view(["GET"])
+def user_wallet_topup_esewa_callback_failure(request: Any):
+    """Receive eSewa failure callback and redirect to wallet top-up frontend page."""
+    data_value = str(coalesce(request.query_params, "data", default="") or "").strip()
+    transaction_uuid = str(
+        coalesce(request.query_params, "transaction_uuid", "transactionUuid", default="") or ""
+    ).strip()
+
+    if data_value and not transaction_uuid:
+        try:
+            decoded = _decode_esewa_data(data_value)
+            transaction_uuid = str(decoded.get("transaction_uuid") or transaction_uuid).strip()
+        except Exception:
+            pass
+
+    return redirect(
+        _build_user_wallet_frontend_callback_redirect(
+            transaction_uuid=transaction_uuid,
+            data_value=data_value,
+            is_failure=True,
+        )
+    )
+
+
+@api_view(["POST"])
+@role_required(ROLE_CUSTOMER)
+def user_wallet_topup_esewa_verify(request: Any):
+    """Verify wallet top-up payment with eSewa and credit customer wallet exactly once."""
+    customer = resolve_customer(request)
+    if customer is None:
+        return Response(
+            {"message": "Customer access required."},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    payload = request.data if isinstance(request.data, dict) else {}
+    data_value = str(payload.get("data") or "").strip()
+    transaction_uuid = str(
+        coalesce(payload, "transaction_uuid", "transactionUuid", default="")
+    ).strip()
+    decoded: dict[str, Any] = {}
+
+    if data_value:
+        try:
+            decoded = _decode_esewa_data(data_value)
+        except Exception:
+            return Response(
+                {"message": "Unable to decode eSewa data."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        transaction_uuid = str(decoded.get("transaction_uuid") or transaction_uuid).strip()
+
+    if not transaction_uuid:
+        return Response(
+            {"message": "transaction_uuid is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    pending = _get_user_wallet_pending_topup(transaction_uuid)
+    if pending and int(pending.get("user_id") or 0) != int(customer.id):
+        return Response(
+            {"message": "This top-up does not belong to the authenticated user."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    expected_total = str((pending or {}).get("total_amount") or "").strip()
+
+    verified = False
+    expected_signature = ""
+    signature_message = ""
+    if decoded:
+        verified, expected_signature, signature_message = _verify_esewa_payload(decoded)
+
+    decoded_status = str(decoded.get("status") or "").upper()
+    decoded_total = str(decoded.get("total_amount") or "").strip()
+    decoded_product = str(decoded.get("product_code") or "").strip()
+    product_code_match = not decoded_product or decoded_product == _esewa_product_code()
+
+    total_amount_for_status = decoded_total or expected_total
+    status_check = _esewa_status_check(transaction_uuid, total_amount_for_status)
+    status_check_value = str(status_check.get("status") or "").upper()
+    status_check_total = str(status_check.get("total_amount") or "").strip()
+    status_check_product = str(status_check.get("product_code") or "").strip()
+    status_product_match = (
+        not status_check_product or status_check_product == _esewa_product_code()
+    )
+    status_amount_match = True
+    if expected_total and status_check_total:
+        expected_decimal = _coerce_decimal(expected_total)
+        status_decimal = _coerce_decimal(status_check_total)
+        status_amount_match = (
+            expected_decimal is not None
+            and status_decimal is not None
+            and expected_decimal == status_decimal
+        )
+
+    amount_match = True
+    if expected_total and decoded_total:
+        expected_decimal = _coerce_decimal(expected_total)
+        decoded_decimal = _coerce_decimal(decoded_total)
+        amount_match = (
+            expected_decimal is not None
+            and decoded_decimal is not None
+            and expected_decimal == decoded_decimal
+        )
+
+    callback_complete = decoded_status == "COMPLETE"
+    status_api_complete = (
+        status_check_value == "COMPLETE"
+        and status_product_match
+        and status_amount_match
+    )
+    is_complete = (
+        (callback_complete and verified and product_code_match and amount_match)
+        or status_api_complete
+    )
+
+    existing_tx = (
+        UserWalletTransaction.objects.select_related("wallet")
+        .filter(
+            user=customer,
+            transaction_type=UserWalletTransaction.TYPE_TOPUP,
+            reference_id=transaction_uuid,
+        )
+        .order_by("-id")
+        .first()
+    )
+    if existing_tx:
+        if existing_tx.status == UserWalletTransaction.STATUS_COMPLETED:
+            _clear_user_wallet_pending_topup(transaction_uuid)
+            wallet_snapshot = existing_tx.wallet
+            if wallet_snapshot is None:
+                wallet_snapshot, _ = UserWallet.objects.get_or_create(user=customer)
+            wallet_snapshot = services.recalculate_user_wallet_snapshot(wallet_snapshot)
+            return Response(
+                {
+                    "verified": bool(verified or status_api_complete),
+                    "status": decoded_status or status_check_value,
+                    "is_complete": True,
+                    "status_check": status_check,
+                    "status_check_complete": status_api_complete,
+                    "status_check_product_match": status_product_match,
+                    "status_check_amount_match": status_amount_match,
+                    "decoded": decoded,
+                    "expected_signature": expected_signature,
+                    "signature_message": signature_message,
+                    "message": "Wallet top-up already credited.",
+                    "credited": True,
+                    "already_processed": True,
+                    "wallet": _serialize_user_wallet(wallet_snapshot),
+                    "transaction": _serialize_user_wallet_transaction(existing_tx),
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        _clear_user_wallet_pending_topup(transaction_uuid)
+        wallet = existing_tx.wallet
+        if wallet is None:
+            wallet = UserWallet.objects.select_for_update().filter(user=customer).first()
+            if wallet is None:
+                wallet = UserWallet.objects.create(user=customer)
+
+    if not pending:
+        return Response(
+            {
+                "verified": bool(verified or status_api_complete),
+                "status": decoded_status or status_check_value,
+                "is_complete": bool(is_complete),
+                "status_check": status_check,
+                "status_check_complete": status_api_complete,
+                "status_check_product_match": status_product_match,
+                "status_check_amount_match": status_amount_match,
+                "decoded": decoded,
+                "message": "Top-up session missing or expired. Please initiate top-up again.",
+                "credited": False,
+            },
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    if not is_complete:
+        if total_amount_for_status:
+            services.enqueue_gateway_status_check_job(
+                transaction_uuid=transaction_uuid,
+                total_amount=total_amount_for_status,
+                provider="ESEWA",
+                context="USER_WALLET_TOPUP",
+                metadata={"flow": "wallet_topup_verify", "user_id": customer.id},
+            )
+        return Response(
+            {
+                "verified": bool(verified),
+                "status": decoded_status or status_check_value or "PENDING",
+                "is_complete": False,
+                "status_check": status_check,
+                "status_check_complete": status_api_complete,
+                "status_check_product_match": status_product_match,
+                "status_check_amount_match": status_amount_match,
+                "decoded": decoded,
+                "expected_signature": expected_signature,
+                "signature_message": signature_message,
+                "message": "Payment not completed. Wallet top-up is still pending.",
+                "credited": False,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    credited_amount = _coerce_decimal(decoded_total or expected_total)
+    if credited_amount is None or credited_amount <= 0:
+        return Response(
+            {"message": "Unable to determine top-up amount for verification."},
+            status=status.HTTP_409_CONFLICT,
+        )
+    credited_amount = _quantize_money(credited_amount)
+
+    already_processed = False
+    with transaction.atomic():
+        wallet = UserWallet.objects.select_for_update().filter(user=customer).first()
+        if wallet is None:
+            wallet = UserWallet.objects.create(user=customer)
+
+        existing_tx_locked = (
+            UserWalletTransaction.objects.select_for_update()
+            .select_related("wallet")
+            .filter(
+                user=customer,
+                transaction_type=UserWalletTransaction.TYPE_TOPUP,
+                reference_id=transaction_uuid,
+            )
+            .order_by("-id")
+            .first()
+        )
+        if existing_tx_locked:
+            wallet = existing_tx_locked.wallet or wallet
+            if existing_tx_locked.status == UserWalletTransaction.STATUS_COMPLETED:
+                credited_tx = existing_tx_locked
+                already_processed = True
+            else:
+                existing_tx_locked.wallet = wallet
+                existing_tx_locked.status = UserWalletTransaction.STATUS_COMPLETED
+                existing_tx_locked.amount = credited_amount
+                existing_tx_locked.provider = "ESEWA"
+                existing_tx_locked.processed_at = timezone.now()
+                existing_tx_locked.metadata = {
+                    **(existing_tx_locked.metadata if isinstance(existing_tx_locked.metadata, dict) else {}),
+                    "verified": bool(verified or status_api_complete),
+                    "decoded_status": decoded_status,
+                    "transaction_uuid": transaction_uuid,
+                    "decoded": decoded,
+                    "status_check": status_check,
+                    "gateway_transaction_code": (
+                        str(
+                            decoded.get("transaction_code")
+                            or status_check.get("transaction_code")
+                            or ""
+                        ).strip()
+                        or None
+                    ),
+                }
+                existing_tx_locked.save(
+                    update_fields=["wallet", "status", "amount", "provider", "processed_at", "metadata"]
+                )
+                credited_tx = existing_tx_locked
+        else:
+            credited_tx = UserWalletTransaction.objects.create(
+                wallet=wallet,
+                user=customer,
+                transaction_type=UserWalletTransaction.TYPE_TOPUP,
+                status=UserWalletTransaction.STATUS_COMPLETED,
+                amount=credited_amount,
+                reference_id=transaction_uuid,
+                provider="ESEWA",
+                processed_at=timezone.now(),
+                metadata={
+                    "verified": bool(verified or status_api_complete),
+                    "decoded_status": decoded_status,
+                    "transaction_uuid": transaction_uuid,
+                    "decoded": decoded,
+                    "status_check": status_check,
+                    "gateway_transaction_code": (
+                        str(
+                            decoded.get("transaction_code")
+                            or status_check.get("transaction_code")
+                            or ""
+                        ).strip()
+                        or None
+                    ),
+                },
+            )
+        wallet = services.recalculate_user_wallet_snapshot(wallet)
+
+    _clear_user_wallet_pending_topup(transaction_uuid)
+    return Response(
+        {
+            "verified": bool(verified or status_api_complete),
+            "status": decoded_status or status_check_value,
+            "is_complete": True,
+            "status_check": status_check,
+            "status_check_complete": status_api_complete,
+            "status_check_product_match": status_product_match,
+            "status_check_amount_match": status_amount_match,
+            "decoded": decoded,
+            "expected_signature": expected_signature,
+            "signature_message": signature_message,
+            "message": "Wallet top-up verified and credited.",
+            "credited": True,
+            "already_processed": already_processed,
+            "wallet": _serialize_user_wallet(wallet),
+            "transaction": _serialize_user_wallet_transaction(credited_tx),
         },
         status=status.HTTP_200_OK,
     )
