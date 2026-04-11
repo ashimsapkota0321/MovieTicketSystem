@@ -85,3 +85,7 @@ tmp/
 backend/app/migrations/__pycache__/
 !backend/app/management/
 backend/app/management/__pycache__/
+
+# Project media/static artifacts
+backend/media/
+backend/staticfiles/
