@@ -95,7 +95,7 @@ export default function Header() {
   const [locationOptions, setLocationOptions] = useState([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
-  const [activeSearchGenre, setActiveSearchGenre] = useState("all");
+  const [searchGenre, setSearchGenre] = useState("All");
   const [storedUser, setStoredUser] = useState(() => getStoredUser());
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -145,48 +145,38 @@ export default function Header() {
   }, [contextMovies, selectedMovieId]);
   const normalizedSearchTerm = searchTerm.trim().toLowerCase();
 
-  const searchResults = useMemo(() => {
+  const titleMatchedMovies = useMemo(() => {
     if (!normalizedSearchTerm) return [];
     return contextMovies
       .filter((movie) => {
         const title = String(movie?.title || movie?.name || "").toLowerCase();
-        const genre = toText(movie?.genre || movie?.genres || movie?.category || movie?.type).toLowerCase();
-        const language = toText(movie?.language || movie?.lang).toLowerCase();
-        return (
-          title.includes(normalizedSearchTerm) ||
-          genre.includes(normalizedSearchTerm) ||
-          language.includes(normalizedSearchTerm)
-        );
+        return title.includes(normalizedSearchTerm);
       })
-      .slice(0, 12);
+      .slice(0, 24);
   }, [contextMovies, normalizedSearchTerm]);
 
   const searchGenres = useMemo(() => {
-    const genreCount = new Map();
-    searchResults.forEach((movie) => {
-      const genreText = toText(movie?.genre || movie?.genres || movie?.category || movie?.type);
-      splitGenres(genreText).forEach((genre) => {
-        const key = genre.toLowerCase();
-        genreCount.set(key, {
-          label: genre,
-          count: (genreCount.get(key)?.count || 0) + 1,
-        });
+    if (!titleMatchedMovies.length) return ["All"];
+    const genreSet = new Set();
+    titleMatchedMovies.forEach((movie) => {
+      splitGenres(movie?.genre || movie?.genres || movie?.category).forEach((genre) => {
+        genreSet.add(genre);
       });
     });
-    return Array.from(genreCount.values())
-      .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
-      .slice(0, 8)
-      .map((genre) => genre.label);
-  }, [searchResults]);
+    return ["All", ...Array.from(genreSet).slice(0, 8)];
+  }, [titleMatchedMovies]);
 
-  const visibleSearchResults = useMemo(() => {
-    if (activeSearchGenre === "all") return searchResults;
-    const target = activeSearchGenre.toLowerCase();
-    return searchResults.filter((movie) => {
-      const genreText = toText(movie?.genre || movie?.genres || movie?.category || movie?.type);
-      return splitGenres(genreText).some((genre) => genre.toLowerCase() === target);
-    });
-  }, [searchResults, activeSearchGenre]);
+  const searchResults = useMemo(() => {
+    if (searchGenre === "All") return titleMatchedMovies.slice(0, 12);
+    const target = String(searchGenre || "").toLowerCase();
+    return titleMatchedMovies
+      .filter((movie) =>
+        splitGenres(movie?.genre || movie?.genres || movie?.category)
+          .map((item) => item.toLowerCase())
+          .includes(target)
+      )
+      .slice(0, 12);
+  }, [titleMatchedMovies, searchGenre]);
 
   const shouldShowSearchPanel = searchOpen && Boolean(normalizedSearchTerm);
   useEffect(() => {
@@ -242,6 +232,10 @@ export default function Header() {
   useEffect(() => {
     setSearchOpen(false);
   }, [path]);
+
+  useEffect(() => {
+    setSearchGenre("All");
+  }, [normalizedSearchTerm]);
 
   useEffect(() => {
     const disabledMap = {
@@ -681,21 +675,20 @@ export default function Header() {
               <Search size={18} />
               <input
                 type="text"
-                placeholder="Movie, Title, Genre..."
+                placeholder="Search movies..."
                 value={searchTerm}
                 onFocus={() => setSearchOpen(true)}
                 onChange={(event) => {
                   setSearchTerm(event.target.value);
                   setSearchOpen(true);
-                  setActiveSearchGenre("all");
                 }}
                 onKeyDown={(event) => {
                   if (event.key === "Escape") {
                     setSearchOpen(false);
                     return;
                   }
-                  if (event.key === "Enter" && visibleSearchResults[0]) {
-                    const movie = visibleSearchResults[0];
+                  if (event.key === "Enter" && searchResults[0]) {
+                    const movie = searchResults[0];
                     setSearchOpen(false);
                     navigate(
                       `/movie/${movie?._id || movie?.id || encodeURIComponent(movie?.title || movie?.name || "")}`,
@@ -708,40 +701,35 @@ export default function Header() {
             </div>
 
             {shouldShowSearchPanel ? (
-              <div className="wf2-searchPanel" role="dialog" aria-label="Search results">
-                <div className="wf2-searchPanelRow">
-                  <span className="wf2-searchPanelLabel">Search Titles Related To</span>
-                  <div className="wf2-searchGenreChips">
-                    <button
-                      type="button"
-                      className={`wf2-searchGenreChip ${activeSearchGenre === "all" ? "wf2-searchGenreChipActive" : ""}`}
-                      onClick={() => setActiveSearchGenre("all")}
-                    >
-                      All
-                    </button>
-                    {searchGenres.map((genre) => (
-                      <button
-                        key={genre}
-                        type="button"
-                        className={`wf2-searchGenreChip ${activeSearchGenre === genre ? "wf2-searchGenreChipActive" : ""}`}
-                        onClick={() => setActiveSearchGenre(genre)}
-                      >
-                        {genre}
-                      </button>
-                    ))}
+              <>
+                <div className="wf2-searchBackdrop" onClick={() => setSearchOpen(false)} />
+                <div className="wf2-searchPanel" role="dialog" aria-label="Search results">
+                  <div className="wf2-searchPanelRow">
+                    <div className="wf2-searchPanelLabel">Search Titles Related To</div>
+                    <div className="wf2-searchGenreChips">
+                      {searchGenres.map((genre) => (
+                        <button
+                          key={genre}
+                          type="button"
+                          className={`wf2-searchGenreChip ${searchGenre === genre ? "wf2-searchGenreChipActive" : ""}`}
+                          onClick={() => setSearchGenre(genre)}
+                        >
+                          {genre}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                </div>
 
                 <div className="wf2-searchResultHead">
                   <div className="wf2-searchResultTitle">Search Result</div>
                   <div className="wf2-searchResultCount">
-                    {visibleSearchResults.length} {visibleSearchResults.length === 1 ? "Movie" : "Movies"}
+                    {searchResults.length} {searchResults.length === 1 ? "Movie" : "Movies"}
                   </div>
                 </div>
 
-                {visibleSearchResults.length ? (
+                {searchResults.length ? (
                   <div className="wf2-searchResultGrid">
-                    {visibleSearchResults.map((movie) => {
+                    {searchResults.map((movie) => {
                       const title = movie?.title || movie?.name || "Untitled Movie";
                       const ratingLabel =
                         toText(
@@ -752,6 +740,7 @@ export default function Header() {
                         ) || "PG";
                       const metaLine = buildMetaLine(movie);
                       const isAdult = isAdultRating(ratingLabel);
+                      const statusLabel = String(movie?.status || movie?.listingStatus || "Now Showing");
                       return (
                         <button
                           key={movie?._id || movie?.id || title}
@@ -767,6 +756,7 @@ export default function Header() {
                         >
                           <div className="wf2-searchCardPoster">
                             <img src={getMoviePoster(movie)} alt={title} loading="lazy" decoding="async" />
+                            <div className="wf2-searchCardRibbon">{statusLabel}</div>
                             <div className={`wf2-searchRatingBadge ${isAdult ? "wf2-searchRatingBadgeAdult" : ""}`}>
                               {ratingLabel}
                             </div>
@@ -782,7 +772,8 @@ export default function Header() {
                 ) : (
                   <div className="wf2-searchEmpty">No matching movies found for "{searchTerm.trim()}".</div>
                 )}
-              </div>
+                </div>
+              </>
             ) : null}
           </div>
           <nav className="wf2-navPillsTop">
