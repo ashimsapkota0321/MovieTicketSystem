@@ -103,7 +103,15 @@ export default function TicketDownload() {
 
   const formatPrice = (value) => `Npr ${value}`;
 
-  const downloadUrl = ticket?.download_url || ticket?.ticket_image;
+  const downloadUrl = useMemo(() => {
+    const providedUrl = ticket?.download_url || ticket?.ticket_image;
+    if (providedUrl) return providedUrl;
+
+    const refFromQuery = new URLSearchParams(location.search).get("ref");
+    const reference = String(ticket?.reference || refFromQuery || "").trim();
+    if (!reference) return "";
+    return `${API_BASE_URL}/ticket/${encodeURIComponent(reference)}/download/`;
+  }, [location.search, ticket?.download_url, ticket?.reference, ticket?.ticket_image]);
 
   const triggerDownload = useCallback((href, filename) => {
     const link = document.createElement("a");
@@ -145,6 +153,7 @@ export default function TicketDownload() {
   }, [state?.autoDownload, handleDownload]);
 
   const ticketDetails = remoteDetails || {};
+  const reviewState = getTicketReviewState(ticket, ticketDetails);
   const venueParts = String(order.movie.venue || "")
     .split(",")
     .map((part) => part.trim())
@@ -195,6 +204,10 @@ export default function TicketDownload() {
             Your ticket is ready. Download it or save the QR for entry.
           </p>
         </div>
+      </div>
+
+      <div className={`wf2-lifecycleAlert ${reviewState.className}`}>
+        {reviewState.label}
       </div>
 
       <div className="wf2-orderLayout">
@@ -340,7 +353,7 @@ export default function TicketDownload() {
               className="wf2-orderDownloadBtn"
               type="button"
               onClick={handleDownload}
-              disabled={!downloadUrl}
+              disabled={!downloadUrl || reviewState.blockDownload}
             >
               <Download size={18} /> Download Ticket
             </button>
@@ -411,6 +424,51 @@ function formatTimeLabel(value) {
   const period = hour >= 12 ? "PM" : "AM";
   hour = hour % 12 || 12;
   return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")} ${period}`;
+}
+
+function getTicketReviewState(ticket, details) {
+  const approvalStatus = String(
+    ticket?.approvalStatus || ticket?.approval_status || details?.approvalStatus || details?.approval_status || ""
+  )
+    .trim()
+    .toUpperCase();
+  const reviewStatus = String(
+    ticket?.reviewStatus || ticket?.review_status || details?.reviewStatus || details?.review_status || ""
+  )
+    .trim()
+    .toUpperCase();
+  const paymentStatus = String(
+    ticket?.paymentStatus || ticket?.payment_status || details?.paymentStatus || details?.payment_status || ""
+  )
+    .trim()
+    .toUpperCase();
+
+  if (approvalStatus === "PENDING" || reviewStatus === "PENDING") {
+    return {
+      label: "Review pending. The ticket is not ready for download yet.",
+      className: "wf2-lifecycleAlertWarning",
+      blockDownload: true,
+    };
+  }
+  if (approvalStatus === "REJECTED" || reviewStatus === "REJECTED") {
+    return {
+      label: "Review rejected. Please wait for support to issue a new ticket.",
+      className: "wf2-lifecycleAlertDanger",
+      blockDownload: true,
+    };
+  }
+  if (paymentStatus === "PENDING") {
+    return {
+      label: "Payment pending. Download will unlock after confirmation.",
+      className: "wf2-lifecycleAlertWarning",
+      blockDownload: true,
+    };
+  }
+  return {
+    label: "Ticket is approved and ready for download.",
+    className: "wf2-lifecycleAlertSuccess",
+    blockDownload: false,
+  };
 }
 
 function extractLocationFromVenue(venue, cinemaName) {
