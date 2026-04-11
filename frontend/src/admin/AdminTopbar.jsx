@@ -198,9 +198,15 @@ function getAdminSearchTarget(term) {
     value.includes("booking") ||
     value.includes("ticket") ||
     value.includes("order") ||
-    value.includes("refund")
+    value.includes("refund") ||
+    value.includes("payout") ||
+    value.includes("withdraw") ||
+    value.includes("review") ||
+    value.includes("moderation")
   ) {
-    return "/admin/bookings";
+    return value.includes("payout") || value.includes("withdraw") || value.includes("review") || value.includes("moderation")
+      ? "/admin/reviews"
+      : "/admin/bookings";
   }
   return "/admin/movies";
 }
