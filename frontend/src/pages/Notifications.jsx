@@ -3,7 +3,6 @@ import { useNavigate } from "react-router-dom";
 import { fetchNotifications, markNotificationsRead } from "../lib/catalogApi";
 import { getAuthSession } from "../lib/authSession";
 import { API_BASE } from "../lib/apiBase";
-import api from "../api/api";
 import "../css/customerPages.css";
 
 const EVENT_LABELS = {
@@ -24,7 +23,6 @@ export default function Notifications() {
   const [loading, setLoading] = useState(true);
   const [markingAll, setMarkingAll] = useState(false);
   const [savingMap, setSavingMap] = useState({});
-  const [downloadingMap, setDownloadingMap] = useState({});
   const [error, setError] = useState("");
   const [unreadCount, setUnreadCount] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
@@ -136,72 +134,93 @@ export default function Notifications() {
     return `${API_BASE}/api/ticket/${encodeURIComponent(reference)}/download/`;
   };
 
-  const extractFilenameFromDisposition = (value, fallback) => {
-    const disposition = String(value || "");
-    const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
-    if (utf8Match?.[1]) {
-      try {
-        return decodeURIComponent(utf8Match[1]);
-      } catch {
-        return utf8Match[1];
-      }
+  const getNotificationDetailsUrl = (item) => {
+    const metadata = item?.metadata && typeof item.metadata === "object" ? item.metadata : {};
+    const detailsUrl = String(metadata.details_url || metadata.ticket_details_url || "").trim();
+    if (detailsUrl) return detailsUrl;
+
+    const downloadUrl = getNotificationDownloadUrl(item);
+    if (downloadUrl.includes("/download/")) {
+      return downloadUrl.replace("/download/", "/details/");
     }
-    const simpleMatch = disposition.match(/filename="?([^";]+)"?/i);
-    return simpleMatch?.[1] || fallback;
+
+    const reference = String(
+      metadata.ticket_reference || metadata.reference || metadata.ticket_ref || ""
+    ).trim();
+    if (!reference) return "";
+    return `${API_BASE}/api/ticket/${encodeURIComponent(reference)}/details/`;
+  };
+
+  const buildNotificationTicketContext = (item) => {
+    const metadata = item?.metadata && typeof item.metadata === "object" ? item.metadata : {};
+    const bookingDetail =
+      metadata.booking_detail && typeof metadata.booking_detail === "object"
+        ? metadata.booking_detail
+        : {};
+
+    const reference = String(
+      metadata.ticket_reference ||
+      metadata.reference ||
+      metadata.ticket_ref ||
+      bookingDetail.ticket_reference ||
+      ""
+    ).trim();
+
+    const downloadUrl = getNotificationDownloadUrl(item);
+    const detailsUrl = getNotificationDetailsUrl(item);
+    const qrCode = String(
+      metadata.qr_code ||
+      metadata.ticket_qr_code ||
+      bookingDetail.qr_code ||
+      ""
+    ).trim();
+
+    const showDate = formatDatePart(metadata.show_start_time);
+    const showTime = formatTimePart(metadata.show_start_time);
+    const venue = [toText(metadata.vendor_name), showDate, showTime]
+      .filter(Boolean)
+      .join(", ");
+
+    return {
+      ticket: {
+        reference,
+        download_url: downloadUrl,
+        details_url: detailsUrl,
+        qr_code: qrCode || undefined,
+      },
+      order: {
+        movie: {
+          title: toText(metadata.movie_title) || toText(bookingDetail.movie),
+          language: "",
+          runtime: "",
+          seat: toText(bookingDetail.seats) || toText(metadata.seats),
+          venue,
+        },
+        ticketTotal: Number(bookingDetail.total || metadata?.payment?.amount || 0) || 0,
+        items: [],
+        foodTotal: 0,
+        total: Number(bookingDetail.total || metadata?.payment?.amount || 0) || 0,
+      },
+    };
   };
 
   const handleTicketDownload = async (item) => {
-    const itemId = Number(item?.id || 0);
-    if (itemId && downloadingMap[itemId]) return;
-
-    const downloadUrl = getNotificationDownloadUrl(item);
-    if (!downloadUrl) {
+    const { ticket, order } = buildNotificationTicketContext(item);
+    if (!ticket?.reference && !ticket?.download_url && !ticket?.details_url) {
       setError("Ticket download is not available for this notification.");
       return;
     }
 
-    const metadata = item?.metadata && typeof item.metadata === "object" ? item.metadata : {};
-    const reference = String(
-      metadata.ticket_reference || metadata.reference || metadata.ticket_ref || "mero"
-    ).trim();
-    const defaultFilename = `ticket-${reference || "mero"}.png`;
-
     setError("");
-    if (itemId) {
-      setDownloadingMap((prev) => ({ ...prev, [itemId]: true }));
-    }
 
-    try {
-      const response = await api.get(downloadUrl, { responseType: "blob" });
-      const blob = response?.data;
-      if (!(blob instanceof Blob)) {
-        throw new Error("Invalid ticket file received.");
-      }
-
-      const filename = extractFilenameFromDisposition(
-        response?.headers?.["content-disposition"],
-        defaultFilename
-      );
-      const objectUrl = window.URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = objectUrl;
-      link.rel = "noopener";
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(objectUrl);
-    } catch (err) {
-      setError(err?.message || "Unable to download ticket right now.");
-    } finally {
-      if (itemId) {
-        setDownloadingMap((prev) => {
-          const next = { ...prev };
-          delete next[itemId];
-          return next;
-        });
-      }
-    }
+    const queryRef = ticket.reference ? `?ref=${encodeURIComponent(ticket.reference)}` : "";
+    navigate(`/ticket-download${queryRef}`, {
+      state: {
+        order,
+        ticket,
+        autoDownload: true,
+      },
+    });
   };
 
   const getNotificationResumeContext = (item) => {
@@ -390,10 +409,9 @@ export default function Notifications() {
                       <button
                         type="button"
                         className="wf2-notificationReadBtn wf2-notificationDownloadBtn"
-                        disabled={Boolean(downloadingMap[itemId])}
                         onClick={() => handleTicketDownload(item)}
                       >
-                        {downloadingMap[itemId] ? "Downloading..." : "Download ticket"}
+                        Download ticket
                       </button>
                     ) : null}
                     {!isRead ? (
@@ -428,6 +446,20 @@ function formatNotificationDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
   return date.toLocaleString();
+}
+
+function formatDatePart(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString();
+}
+
+function formatTimePart(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 function NotificationMetadata({ item }) {
