@@ -252,6 +252,7 @@ export default function AdminUsers() {
           <table className="table admin-table">
             <thead>
               <tr>
+                <th>ID</th>
                 <th>Name</th>
                 <th>Email</th>
                 <th>Phone</th>
@@ -264,9 +265,9 @@ export default function AdminUsers() {
             <tbody>
               {filteredUsers.map((user) => (
                 <tr key={user.id}>
+                  <td>{user.id}</td>
                   <td>
                     <div className="fw-semibold">{buildName(user)}</div>
-                    <small className="text-muted">{user.id}</small>
                   </td>
                   <td>{user.email || "-"}</td>
                   <td>{user.phone_number || "-"}</td>
@@ -322,7 +323,7 @@ export default function AdminUsers() {
               ))}
               {filteredUsers.length === 0 ? (
                 <tr>
-                  <td colSpan="7">No users found.</td>
+                  <td colSpan="8">No users found.</td>
                 </tr>
               ) : null}
             </tbody>
