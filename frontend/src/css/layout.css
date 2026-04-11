@@ -9,6 +9,7 @@
 main {
   position: relative;
   background: transparent;
+  display: flow-root;
 }
 
 main::before{
@@ -806,33 +807,44 @@ main > *{
 }
 
 .wf2-searchPanel{
-  position: absolute;
-  top: calc(100% + 12px);
-  left: 0;
-  width: min(760px, 80vw);
-  max-height: min(72vh, 720px);
+  position: fixed;
+  top: 150px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(1460px, 92vw);
+  max-height: calc(100vh - 180px);
   overflow-y: auto;
-  border-radius: 16px;
-  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.18);
   background:
-    radial-gradient(110% 85% at 20% 0%, rgba(59, 103, 198, 0.2), transparent 60%),
-    linear-gradient(180deg, rgba(26, 29, 43, 0.96), rgba(17, 19, 30, 0.97));
+    radial-gradient(120% 95% at 20% 0%, rgba(59, 103, 198, 0.12), transparent 62%),
+    linear-gradient(180deg, rgba(25, 28, 40, 0.95), rgba(13, 16, 27, 0.98));
   backdrop-filter: blur(10px);
-  box-shadow: 0 28px 60px rgba(0,0,0,0.5);
-  padding: 18px 18px 16px;
+  box-shadow: 0 34px 80px rgba(0,0,0,0.55);
+  padding: 18px 22px 20px;
+  z-index: 1300;
+}
+
+.wf2-searchBackdrop{
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 11, 16, 0.74);
+  backdrop-filter: blur(2px);
+  z-index: 1200;
 }
 
 .wf2-searchPanelRow{
   display: grid;
   gap: 10px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid rgba(255,255,255,0.1);
+  padding: 6px 0 14px;
+  border-bottom: 1px solid rgba(255,255,255,0.15);
 }
 
 .wf2-searchPanelLabel{
   color: rgba(234,240,255,0.92);
-  font-size: 14px;
-  font-weight: 700;
+  font-size: 32px;
+  line-height: 1;
+  font-weight: 800;
   letter-spacing: 0.02em;
 }
 
@@ -844,12 +856,12 @@ main > *{
 
 .wf2-searchGenreChip{
   border: 1px solid rgba(68, 203, 255, 0.65);
-  background: rgba(11, 20, 35, 0.45);
+  background: rgba(11, 20, 35, 0.32);
   color: rgba(229, 246, 255, 0.95);
   border-radius: 999px;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1;
-  padding: 8px 14px;
+  padding: 8px 24px;
   cursor: pointer;
   transition: all 0.2s ease;
 }
@@ -870,36 +882,37 @@ main > *{
   align-items: baseline;
   gap: 10px;
   margin-top: 14px;
-  margin-bottom: 10px;
+  margin-bottom: 16px;
 }
 
 .wf2-searchResultTitle{
-  font-size: 30px;
+  font-size: 40px;
   font-weight: 800;
   color: rgba(236, 243, 255, 0.97);
   letter-spacing: 0.01em;
 }
 
 .wf2-searchResultCount{
-  font-size: 14px;
+  font-size: 18px;
   font-weight: 600;
   color: rgba(203, 217, 240, 0.88);
 }
 
 .wf2-searchResultGrid{
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(4, minmax(200px, 1fr));
+  gap: 22px;
 }
 
 .wf2-searchCard{
-  border: 1px solid rgba(255,255,255,0.14);
-  background: rgba(22, 24, 35, 0.8);
-  border-radius: 14px;
-  padding: 10px;
+  border: 1px solid rgba(255,255,255,0.18);
+  background: rgba(22, 24, 35, 0.84);
+  border-radius: 16px;
+  padding: 0;
   cursor: pointer;
   text-align: left;
   transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+  overflow: hidden;
 }
 
 .wf2-searchCard:hover{
@@ -910,10 +923,24 @@ main > *{
 
 .wf2-searchCardPoster{
   position: relative;
-  border-radius: 10px;
+  border-radius: 0;
   overflow: hidden;
   background: rgba(0,0,0,0.3);
-  aspect-ratio: 2 / 3;
+  aspect-ratio: 3 / 4;
+}
+
+.wf2-searchCardRibbon{
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  border-radius: 10px;
+  background: rgba(31, 182, 216, 0.88);
+  color: #eaf9ff;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: capitalize;
 }
 
 .wf2-searchCardPoster img{
@@ -927,9 +954,9 @@ main > *{
   position: absolute;
   top: 8px;
   right: 8px;
-  padding: 4px 8px;
+  padding: 5px 10px;
   border-radius: 8px;
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 800;
   color: rgba(18, 41, 10, 0.9);
   background: rgba(180, 255, 158, 0.95);
@@ -941,20 +968,22 @@ main > *{
 }
 
 .wf2-searchCardBody{
-  margin-top: 10px;
+  margin-top: 0;
+  padding: 10px 12px 12px;
   display: grid;
-  gap: 4px;
+  gap: 2px;
+  background: rgba(56, 58, 66, 0.9);
 }
 
 .wf2-searchCardTitle{
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 800;
   line-height: 1.25;
   color: rgba(236, 243, 255, 0.97);
 }
 
 .wf2-searchCardMeta{
-  font-size: 13px;
+  font-size: 12px;
   color: rgba(187, 203, 229, 0.9);
 }
 
@@ -1337,95 +1366,187 @@ main > *{
 .wf2-btnWide{ padding:10px 36px; }
 
 /* ===== FOOTER ===== */
-.wf2-footer{
+.wf2-footerShell{
   margin-top: 0;
-  border-top: 0;
-  padding: 34px var(--page-pad) 40px;
+  padding: 8px 0 10px;
   background: #3f3f44;
-  backdrop-filter: blur(6px);
   font-family: var(--font-hero);
 }
 
-.wf2-footer .wf2-container{
+.wf2-footerShell .wf2-container{
   padding-left: 0;
   padding-right: 0;
 }
-.wf2-footerGrid{
+
+.wf2-footerCard{
+  background: #3f3f44;
+  border-radius: 0;
+  border: 0;
+  box-shadow: none;
+  padding: 12px clamp(16px, 4vw, 52px) 10px;
+  color: rgba(234,240,255,0.95);
+}
+
+.wf2-footerTopRow{
   display: grid;
-  grid-template-columns: minmax(220px, 1.4fr) repeat(3, minmax(160px, 1fr));
-  gap: 32px;
+  grid-template-columns: minmax(240px, 1.35fr) minmax(220px, 1fr);
+  gap: clamp(16px, 2.2vw, 30px);
   align-items: start;
 }
 
-.wf2-footerIntro{
+.wf2-footerLead{
   display: grid;
-  gap: 16px;
+  gap: 12px;
 }
 
-.wf2-footerBrand{
-  font-weight:980;
-  font-size:18px;
-  margin-bottom:10px;
+.wf2-footerKicker{
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 12px;
+  font-weight: 750;
+  color: rgba(156, 167, 218, 0.86);
 }
 
-.wf2-footerText{
-  margin:0;
-  color: rgba(167,179,214,0.95);
-  font-size:12px;
-  line-height:1.7;
-  max-width:520px;
+.wf2-footerHeading{
+  margin: 0;
+  font-size: clamp(20px, 2.3vw, 30px);
+  line-height: 1.12;
+  font-weight: 880;
+  max-width: 420px;
 }
 
-.wf2-footerTitle{
-  font-weight:950;
-  font-size:12px;
-  margin-bottom:10px;
-  color: rgba(234,240,255,0.92);
+.wf2-footerCta{
+  margin-top: 2px;
+  width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+  background: #eef2fd;
+  color: #080d2f;
+  font-weight: 780;
+  font-size: 14px;
+  border-radius: 999px;
+  padding: 8px 16px;
+  border: 1px solid rgba(15, 17, 51, 0.3);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
-.wf2-footerLink{
-  display:block;
-  text-decoration:none;
-  color: rgba(167,179,214,0.95);
-  font-size:12px;
-  margin:8px 0;
-}
-.wf2-footerLink:hover{ color:#fff; }
-
-.wf2-footerSmall{
-  color: rgba(167,179,214,0.95);
-  font-size:12px;
-  margin:8px 0;
+.wf2-footerCta:hover{
+  transform: translateY(-1px);
+  box-shadow: 0 14px 24px rgba(0, 0, 0, 0.35);
 }
 
-.wf2-footerHighlights{
-  display: flex;
-  flex-wrap: wrap;
+.wf2-footerEmailWrap{
+  margin-top: 4px;
+  display: grid;
   gap: 8px;
 }
 
-.wf2-footerHighlight{
-  padding: 6px 10px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 700;
-  color: rgba(234,240,255,0.9);
-  background: rgba(0, 0, 0, 0.3);
+.wf2-footerEmailLabel{
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 12px;
+  font-weight: 750;
+  color: rgba(145, 157, 212, 0.82);
+}
+
+.wf2-footerEmailBtn{
+  width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
   border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 999px;
+  color: rgba(232,239,255,0.94);
+  background: rgba(123, 141, 216, 0.16);
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 680;
+  cursor: pointer;
+}
+
+.wf2-footerEmailBtn:hover{
+  background: rgba(140, 157, 228, 0.24);
+}
+
+.wf2-footerLinksWrap{
+  display: grid;
+  grid-template-columns: repeat(2, minmax(140px, 1fr));
+  gap: 18px;
+}
+
+.wf2-footerCol{
+  display: grid;
+  align-content: start;
+  gap: 6px;
+}
+
+.wf2-footerTitle{
+  margin: 2px 0 8px;
+  font-size: 12px;
+  font-weight: 760;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgba(161, 171, 222, 0.9);
+}
+
+.wf2-footerLink{
+  display: block;
+  width: fit-content;
+  text-decoration: none;
+  color: rgba(234,240,255,0.95);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.wf2-footerLink:hover{
+  color: #8ad6ff;
+}
+
+.wf2-footerDivider{
+  margin: clamp(14px, 2vw, 20px) 0 10px;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(255,255,255,0.08), rgba(255,255,255,0.15), rgba(255,255,255,0.08));
+}
+
+.wf2-footerBottomRow{
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
 }
 
 .wf2-footerLegal{
-  border-top: 1px solid rgba(255,255,255,0.08);
-  padding: 14px var(--page-pad) 22px;
-  text-align: center;
-  color: rgba(234,240,255,0.9);
-  font-size: 12px;
-  background-color: #070a10;
-  background-image: var(--page-bg), var(--page-pattern), var(--page-noise);
-  background-repeat: no-repeat, repeat, repeat;
-  background-size: cover, var(--page-pattern-size), 220px 220px;
-  background-position: top center, top center, center;
-  font-family: var(--font-hero);
+  margin: 0;
+  color: rgba(171,183,228,0.86);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 11px;
+}
+
+.wf2-footerSocials{
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.wf2-footerSocial{
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(235,240,255,0.92);
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.22);
+  background: rgba(255,255,255,0.03);
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+
+.wf2-footerSocial:hover{
+  transform: translateY(-1px);
+  border-color: rgba(139, 216, 255, 0.85);
 }
 
 @media (max-width:1024px){
@@ -1452,7 +1573,8 @@ main > *{
     width: 100%;
   }
   .wf2-searchPanel{
-    width: min(92vw, 680px);
+    width: min(95vw, 900px);
+    top: 130px;
   }
   .wf2-navPillsTop{
     flex-wrap: wrap;
@@ -1468,7 +1590,18 @@ main > *{
   .wf2-bookingBar{ align-items: flex-start; }
   .wf2-bookingControls{ gap: 16px; }
   .wf2-controlGroup{ min-width: 140px; }
-  .wf2-footerGrid{ grid-template-columns: 1fr 1fr; }
+  .wf2-footerTopRow{
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
+
+  .wf2-footerHeading{
+    max-width: 100%;
+  }
+
+  .wf2-footerLinksWrap{
+    grid-template-columns: repeat(2, minmax(130px, 1fr));
+  }
 }
 
 @media (max-width:768px){
@@ -1484,6 +1617,12 @@ main > *{
   .wf2-searchResultTitle{
     font-size: 24px;
   }
+  .wf2-searchPanelLabel{ font-size: 20px; }
+  .wf2-searchResultCount{ font-size: 14px; }
+  .wf2-searchGenreChip{ font-size: 12px; }
+  .wf2-searchRatingBadge{ font-size: 11px; }
+  .wf2-searchCardTitle{ font-size: 14px; }
+  .wf2-searchCardMeta{ font-size: 11px; }
   .wf2-searchResultGrid{
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1497,7 +1636,27 @@ main > *{
     font-size: 14px;
     max-width: 100%;
   }
-  .wf2-footerGrid{ grid-template-columns: 1fr; }
+  .wf2-footerShell{
+    padding: 6px 0 8px;
+  }
+
+  .wf2-footerCard{
+    padding: 12px 12px 10px;
+  }
+
+  .wf2-footerLinksWrap{
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
+
+  .wf2-footerBottomRow{
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .wf2-footerLink{
+    font-size: 13px;
+  }
 }
 
 @media (max-width:480px){
@@ -1506,6 +1665,7 @@ main > *{
     left: 50%;
     transform: translateX(-50%);
     padding: 14px;
+    top: 120px;
   }
   .wf2-searchResultGrid{
     grid-template-columns: 1fr;
