@@ -44,12 +44,19 @@ def trailers(request: Any):
 @api_view(["GET", "PUT", "PATCH", "DELETE"])
 def movie_detail(request: Any, movie_id: int):
     """Retrieve, update, or delete a movie by ID."""
-    movie = selectors.get_movie(movie_id)
+    movie = selectors.get_movie(
+        movie_id,
+        include_unapproved=permissions.is_admin_request(request) or permissions.is_vendor_request(request),
+    )
     if not movie:
         return Response({"message": "Movie not found"}, status=status.HTTP_404_NOT_FOUND)
 
     if request.method == "GET":
-        payload = selectors.build_movie_detail_payload(movie, request=request)
+        payload = selectors.build_movie_detail_payload(
+            movie,
+            request=request,
+            include_audit=permissions.is_admin_request(request) or permissions.is_vendor_request(request),
+        )
         return Response({"movie": payload}, status=status.HTTP_200_OK)
 
     if request.method == "DELETE":
@@ -63,10 +70,17 @@ def movie_detail(request: Any, movie_id: int):
 @api_view(["GET"])
 def movie_detail_by_slug(request: Any, slug: str):
     """Retrieve a movie by its slug."""
-    movie = selectors.get_movie_by_slug(slug)
+    movie = selectors.get_movie_by_slug(
+        slug,
+        include_unapproved=permissions.is_admin_request(request) or permissions.is_vendor_request(request),
+    )
     if not movie:
         return Response({"message": "Movie not found"}, status=status.HTTP_404_NOT_FOUND)
-    payload = selectors.build_movie_detail_payload(movie, request=request)
+    payload = selectors.build_movie_detail_payload(
+        movie,
+        request=request,
+        include_audit=permissions.is_admin_request(request) or permissions.is_vendor_request(request),
+    )
     return Response({"movie": payload}, status=status.HTTP_200_OK)
 
 
@@ -114,7 +128,11 @@ def movie_reviews(request: Any, movie_id: int):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
-    payload = selectors.build_movie_detail_payload(movie, request=request)
+    payload = selectors.build_movie_detail_payload(
+        movie,
+        request=request,
+        include_audit=permissions.is_admin_request(request) or permissions.is_vendor_request(request),
+    )
     return Response({"movie": payload}, status=status.HTTP_200_OK)
 
 
