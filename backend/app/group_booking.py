@@ -1205,10 +1205,10 @@ def _confirm_group_session_locked(session: GroupBookingSession) -> dict[str, Any
             )
 
         paid_amount = _decimal(participant.amount_paid or participant.amount_to_pay)
-        Payment.objects.create(
+        payment = Payment.objects.create(
             booking=booking,
             payment_method=_group_payment_method(session.id),
-            payment_status="Success",
+            payment_status=Payment.Status.SUCCESS,
             amount=paid_amount,
         )
 
@@ -1219,7 +1219,7 @@ def _confirm_group_session_locked(session: GroupBookingSession) -> dict[str, Any
             booking__isnull=True,
         ).update(booking=booking)
 
-        services._record_vendor_booking_earning(booking, gross_amount=booking_total)
+        services._record_vendor_booking_earning(booking, gross_amount=booking_total, payment=payment)
         transaction.on_commit(
             lambda booking_id=booking.id: services._run_post_booking_rewards(booking_id)
         )
@@ -1237,7 +1237,7 @@ def _confirm_group_session_locked(session: GroupBookingSession) -> dict[str, Any
             show=session.show,
             user=participant.user,
             seats=seat_labels,
-            payment_status="PAID",
+            payment_status=Ticket.PaymentStatus.PAID,
         )
         ticket = Ticket.objects.create(
             reference=reference,
