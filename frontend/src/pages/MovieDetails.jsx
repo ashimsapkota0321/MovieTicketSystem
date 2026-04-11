@@ -71,7 +71,8 @@ export default function MovieDetails() {
   }, [id, location?.state?.movie]);
 
   const activeMovie = movie;
-  const trailerUrl = resolveTrailerUrl(activeMovie);
+  const trailerUrls = resolveTrailerUrls(activeMovie);
+  const trailerUrl = trailerUrls[0] || "";
 
   const title = activeMovie?.title || activeMovie?.name || "Movie Title";
   const poster =
@@ -134,20 +135,27 @@ export default function MovieDetails() {
   const directorLabel = getDirectorLabel(activeMovie, crew) || "TBA";
   const castLabel = getCastLabel(cast) || "TBA";
   const trailerLang = getTrailerLang(language);
+  const hasMultipleTrailers = trailerUrls.length > 1;
   const scheduleKey =
     activeMovie?.slug ||
     activeMovie?.id ||
     activeMovie?._id ||
     id ||
     encodeURIComponent(title);
-  const openTrailer = (url) => {
-    if (!url) return;
-    setCurrentTrailer(url);
+  const handleTrailerAction = (preferredUrl = "") => {
+    if (!trailerUrls.length) return;
+    const initialUrl =
+      hasMultipleTrailers && preferredUrl && trailerUrls.includes(preferredUrl)
+        ? preferredUrl
+        : trailerUrls[0];
+    if (!initialUrl) return;
+    setCurrentTrailer(initialUrl);
     setTrailerOpen(true);
   };
 
   const closeTrailer = () => {
     setTrailerOpen(false);
+    setCurrentTrailer("");
   };
 
   const navigateToSchedule = () => {
@@ -276,7 +284,7 @@ export default function MovieDetails() {
         <button
           className="md-soonTrailer"
           type="button"
-          onClick={() => openTrailer(trailerUrl)}
+          onClick={() => handleTrailerAction(trailerUrl)}
           aria-label="Play trailer"
           disabled={!trailerUrl}
         >
@@ -367,13 +375,13 @@ export default function MovieDetails() {
                   <button
                     className="md-btn md-btnGhost"
                     type="button"
-                    onClick={() => openTrailer(trailerUrl)}
+                    onClick={() => handleTrailerAction(trailerUrl)}
                     disabled={!trailerUrl}
                   >
                     <span className="md-btnIcon">
                       <Play size={14} />
                     </span>
-                    Watch Trailer
+                    Watch Trailer{trailerUrls.length > 1 ? ` (${trailerUrls.length})` : ""}
                   </button>
                   <button
                     className="md-btn md-btnPrimary"
@@ -386,6 +394,7 @@ export default function MovieDetails() {
                     <Heart size={18} />
                   </button>
                 </div>
+
               </div>
             </section>
 
@@ -472,7 +481,12 @@ export default function MovieDetails() {
                             onClick={() => setReviewRating(value)}
                             aria-label={`Rate ${value} star${value > 1 ? "s" : ""}`}
                           >
-                            <Star size={16} fill={active ? "currentColor" : "none"} />
+                            <Star
+                              className="md-starIcon"
+                              aria-hidden="true"
+                              size={40}
+                              fill={active ? "currentColor" : "none"}
+                            />
                           </button>
                         );
                       })}
@@ -521,6 +535,7 @@ export default function MovieDetails() {
                     <Review
                       key={`${review.id || review.userId || "review"}-${idx}`}
                       userName={review.userName || review.user || "Anonymous"}
+                      userImage={review.userImage}
                       rating={review.rating}
                       comment={review.comment || review.text}
                       createdAt={review.createdAt}
@@ -566,7 +581,7 @@ export default function MovieDetails() {
       </div>
       {isTrailerOpen ? (
         <div className="md-trailerModal" role="dialog" aria-modal="true">
-          <div className="md-trailerCard">
+          <div className={`md-trailerCard ${hasMultipleTrailers ? "md-trailerCardMulti" : ""}`}>
             <button
               className="md-trailerClose"
               type="button"
@@ -575,13 +590,49 @@ export default function MovieDetails() {
             >
               ×
             </button>
-            <div className="md-trailerFrame">
-              <iframe
-                src={toEmbedUrl(currentTrailer)}
-                title="Trailer"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                allowFullScreen
-              />
+            <div className={`md-trailerBody ${hasMultipleTrailers ? "md-trailerBodyMulti" : ""}`}>
+              <div className="md-trailerMain">
+                <div className="md-trailerFrame">
+                  <iframe
+                    src={toEmbedUrl(currentTrailer)}
+                    title="Trailer"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    allowFullScreen
+                  />
+                </div>
+              </div>
+              {hasMultipleTrailers ? (
+                <aside className="md-trailerRail" aria-label="Trailers list">
+                  {trailerUrls.map((url, index) => {
+                    const preview = buildTrailerPreview(url, title, index);
+                    const active = url === currentTrailer;
+                    return (
+                      <button
+                        key={`trailer-choice-${index + 1}`}
+                        type="button"
+                        className={`md-trailerItem ${active ? "active" : ""}`}
+                        onClick={() => setCurrentTrailer(url)}
+                      >
+                        <span className="md-trailerItemThumbWrap">
+                          <img
+                            src={preview.thumbnail}
+                            alt={preview.title}
+                            className="md-trailerItemThumb"
+                            loading="lazy"
+                          />
+                          <span className="md-trailerItemPlay">
+                            <Play size={14} />
+                          </span>
+                        </span>
+                        <span className="md-trailerItemInfo">
+                          <span className="md-trailerItemTitle">{preview.title}</span>
+                          <span className="md-trailerItemMeta">Trailer {index + 1}</span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </aside>
+              ) : null}
             </div>
           </div>
         </div>
@@ -659,6 +710,17 @@ function toText(value) {
   return String(value).trim();
 }
 
+function getInitials(value) {
+  const text = String(value || "").trim();
+  if (!text) return "?";
+  const parts = text
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2);
+  if (!parts.length) return "?";
+  return parts.map((part) => part.charAt(0).toUpperCase()).join("");
+}
+
 function resolveCredits(movie, targetRoleType) {
   const roleType = String(targetRoleType || "").toUpperCase();
   const directList = roleType === "CAST" ? movie?.cast : movie?.crew;
@@ -733,6 +795,14 @@ function resolveReviews(movie) {
       review?.user_name ||
       review?.user ||
       "Anonymous",
+    userImage:
+      review?.userImage ||
+      review?.user_image ||
+      review?.profileImage ||
+      review?.profile_image ||
+      review?.user_profile_image ||
+      review?.avatar ||
+      "",
     createdAt:
       review?.createdAt ||
       review?.created_at ||
@@ -854,9 +924,20 @@ function getTrailerLang(language) {
 }
 
 function resolveTrailerUrl(movie) {
-  if (!movie) return "";
-  const url =
+  const trailers = resolveTrailerUrls(movie);
+  return trailers[0] || "";
+}
+
+function resolveTrailerUrls(movie) {
+  if (!movie) return [];
+  const fromList = Array.isArray(movie?.trailerUrls)
+    ? movie.trailerUrls
+    : Array.isArray(movie?.trailer_urls)
+      ? movie.trailer_urls
+      : [];
+  const single =
     movie.trailerUrl ||
+    movie.trailer_url ||
     movie.trailer ||
     movie.videoUrl ||
     movie.youtubeUrl ||
@@ -864,30 +945,60 @@ function resolveTrailerUrl(movie) {
     movie.trailer_link ||
     movie.trailerLink ||
     movie.promoUrl;
-  if (typeof url === "string") return url;
-  if (url && typeof url === "object") {
-    return url.url || url.link || "";
+
+  const normalized = [];
+  for (const value of [...fromList, single]) {
+    const url = typeof value === "string"
+      ? value.trim()
+      : value && typeof value === "object"
+        ? String(value.url || value.link || "").trim()
+        : "";
+    if (!url || normalized.includes(url)) continue;
+    normalized.push(url);
   }
-  return "";
+  return normalized;
 }
 
 function toEmbedUrl(url) {
+  if (!url) return "";
+  const id = extractYoutubeId(url);
+  if (id) return `https://www.youtube.com/embed/${id}?rel=0`;
+  return url;
+}
+
+function extractYoutubeId(url) {
   if (!url) return "";
   try {
     const match = url.match(/(?:v=)([0-9A-Za-z_-]{11})(?:[&?]|$)\s*/);
     const shortMatch = url.match(/youtu\.be\/([0-9A-Za-z_-]{11})/);
     const match2 = url.match(/\/([0-9A-Za-z_-]{11})(?:\?|$)/);
     const id = (match && match[1]) || (shortMatch && shortMatch[1]) || (match2 && match2[1]);
-    if (id) return `https://www.youtube.com/embed/${id}?rel=0`;
+    if (id) return id;
   } catch {}
-  return url;
+  return "";
+}
+
+function buildTrailerPreview(url, movieTitle, index) {
+  const id = extractYoutubeId(url);
+  const fallbackTitle = `${movieTitle || "Movie"} Trailer ${index + 1}`;
+  const thumbnail = id
+    ? `https://img.youtube.com/vi/${id}/mqdefault.jpg`
+    : "https://img.youtube.com/vi/dQw4w9WgXcQ/mqdefault.jpg";
+  return {
+    title: fallbackTitle,
+    thumbnail,
+  };
 }
 
 function Person({ name, role, photo, onSelect }) {
   return (
     <button type="button" className="md-person md-personBtn" onClick={onSelect}>
       <div className="md-avatar">
-        {photo ? <img src={photo} alt={name || "Person"} /> : <div className="md-avatarPlaceholder">No photo</div>}
+        {photo ? (
+          <img src={photo} alt={name || "Person"} />
+        ) : (
+          <div className="md-avatarPlaceholder">{getInitials(name)}</div>
+        )}
       </div>
       <p className="md-personName">{name}</p>
       {role ? <p className="md-personRole">{role}</p> : null}
@@ -895,7 +1006,7 @@ function Person({ name, role, photo, onSelect }) {
   );
 }
 
-function Review({ userName, rating, comment, createdAt, canManage, onEdit, onDelete }) {
+function Review({ userName, userImage, rating, comment, createdAt, canManage, onEdit, onDelete }) {
   const stars = Array.from({ length: 5 }).map((_, index) => {
     const value = index + 1;
     const active = value <= Number(rating || 0);
@@ -906,7 +1017,13 @@ function Review({ userName, rating, comment, createdAt, canManage, onEdit, onDel
   return (
     <div className="md-review">
       <div className="md-reviewHead">
-        <div className="md-reviewAvatar" />
+        <div className="md-reviewAvatar">
+          {userImage ? (
+            <img src={userImage} alt={userName || "Reviewer"} />
+          ) : (
+            <span>{getInitials(userName)}</span>
+          )}
+        </div>
         <div>
           <p className="md-reviewName">{userName}</p>
           {createdAt ? (
