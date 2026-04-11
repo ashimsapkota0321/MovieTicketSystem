@@ -34,6 +34,40 @@ def _unique_slugify(
     return slug
 
 
+def _generate_transaction_uuid() -> str:
+    return uuid.uuid4().hex
+
+
+def _normalize_choice_value(
+    value: str | None,
+    default: str,
+    allowed_values: set[str],
+    aliases: dict[str, str] | None = None,
+) -> str:
+    normalized = str(value or default).strip().upper()
+    if aliases:
+        normalized = aliases.get(normalized, normalized)
+    if normalized in allowed_values:
+        return normalized
+    return default
+
+
+def _validate_status_transition(
+    model_name: str,
+    field_name: str,
+    current_value: str | None,
+    new_value: str,
+    allowed_transitions: dict[str, set[str]],
+) -> None:
+    if current_value is None or current_value == new_value:
+        return
+    allowed_next_values = allowed_transitions.get(current_value)
+    if allowed_next_values is None or new_value not in allowed_next_values:
+        raise ValidationError(
+            {field_name: f"{model_name} {field_name} cannot transition from {current_value} to {new_value}."}
+        )
+
+
 class User(models.Model):
     phone_number = models.CharField(max_length=13, unique=True)
     email = models.EmailField(unique=True)
@@ -264,6 +298,42 @@ class LoginAttempt(models.Model):
         return f"{self.identifier} ({self.ip_address})"
 
 
+class AuthSession(models.Model):
+    ROLE_ADMIN = "admin"
+    ROLE_VENDOR = "vendor"
+    ROLE_CUSTOMER = "customer"
+    ROLE_CHOICES = [
+        (ROLE_ADMIN, "Admin"),
+        (ROLE_VENDOR, "Vendor"),
+        (ROLE_CUSTOMER, "Customer"),
+    ]
+
+    session_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False, db_index=True)
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES)
+    user_id = models.PositiveIntegerField(db_index=True)
+    staff_id = models.PositiveIntegerField(blank=True, null=True, db_index=True)
+    staff_role = models.CharField(max_length=40, blank=True, null=True)
+    refresh_token_hash = models.CharField(max_length=64, unique=True, blank=True, null=True)
+    access_expires_at = models.DateTimeField(db_index=True)
+    refresh_expires_at = models.DateTimeField(db_index=True)
+    revoked_at = models.DateTimeField(blank=True, null=True, db_index=True)
+    revoked_reason = models.CharField(max_length=100, blank=True, null=True)
+    last_used_at = models.DateTimeField(blank=True, null=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "auth_sessions"
+        indexes = [
+            models.Index(fields=["role", "user_id"]),
+            models.Index(fields=["role", "revoked_at", "refresh_expires_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.role}:{self.user_id} ({self.session_id})"
+
+
 class Movie(models.Model):
     STATUS_NOW_SHOWING = "NOW_SHOWING"
     STATUS_COMING_SOON = "COMING_SOON"
@@ -290,17 +360,43 @@ class Movie(models.Model):
     banner_image = models.ImageField(upload_to="movie_banners/", blank=True, null=True)
     poster_url = models.URLField(blank=True, null=True)
     trailer_url = models.URLField(blank=True, null=True)
+    trailer_urls = models.JSONField(default=list, blank=True)
     status = models.CharField(
         max_length=20, choices=STATUS_CHOICES, default=STATUS_COMING_SOON
     )
     average_rating = models.DecimalField(max_digits=3, decimal_places=2, default=0)
     review_count = models.PositiveIntegerField(default=0)
+    class ApprovalStatus(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        APPROVED = "APPROVED", "Approved"
+        REJECTED = "REJECTED", "Rejected"
+
+    approval_status = models.CharField(
+        max_length=20,
+        choices=ApprovalStatus.choices,
+        default=ApprovalStatus.APPROVED,
+    )
+    approval_reason = models.CharField(max_length=255, blank=True, null=True)
+    approval_metadata = models.JSONField(default=dict, blank=True)
+    approved_by = models.ForeignKey(
+        "Admin",
+        on_delete=models.SET_NULL,
+        related_name="approved_movies",
+        blank=True,
+        null=True,
+    )
+    approved_at = models.DateTimeField(blank=True, null=True)
     is_active = models.BooleanField(default=True)
+    is_approved = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = "movies"
+        indexes = [
+            models.Index(fields=["approval_status", "created_at"]),
+            models.Index(fields=["is_approved", "created_at"]),
+        ]
 
     def __str__(self):
         return self.title
@@ -309,6 +405,11 @@ class Movie(models.Model):
         """Generate a slug for the movie if missing."""
         if self.title and not self.slug:
             self.slug = _unique_slugify(self, self.title, "slug", 220)
+        approval_status = str(self.approval_status or self.ApprovalStatus.APPROVED).strip().upper()
+        if approval_status not in self.ApprovalStatus.values:
+            approval_status = self.ApprovalStatus.APPROVED
+        self.approval_status = approval_status
+        self.is_approved = approval_status == self.ApprovalStatus.APPROVED
         super().save(*args, **kwargs)
 
 
@@ -321,7 +422,7 @@ class Show(models.Model):
         (STATUS_RUNNING, "Running"),
         (STATUS_COMPLETED, "Completed"),
     ]
-    BOOKING_CLOSE_BEFORE_START_MINUTES = 10
+    BOOKING_CLOSE_BEFORE_START_MINUTES = 30
 
     vendor = models.ForeignKey(Vendor, on_delete=models.CASCADE, related_name="shows")
     movie = models.ForeignKey(Movie, on_delete=models.CASCADE, related_name="shows")
@@ -713,6 +814,25 @@ class OTPVerification(models.Model):
 
 
 class Ticket(models.Model):
+    class PaymentStatus(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        PAID = "PAID", "Paid"
+        FAILED = "FAILED", "Failed"
+        REFUNDED = "REFUNDED", "Refunded"
+
+    LEGACY_PAYMENT_STATUS_ALIASES = {
+        "SUCCESS": PaymentStatus.PAID,
+        "COMPLETED": PaymentStatus.PAID,
+        "CONFIRMED": PaymentStatus.PAID,
+    }
+
+    PAYMENT_STATUS_TRANSITIONS = {
+        PaymentStatus.PENDING: {PaymentStatus.PAID, PaymentStatus.FAILED},
+        PaymentStatus.PAID: {PaymentStatus.REFUNDED},
+        PaymentStatus.FAILED: set(),
+        PaymentStatus.REFUNDED: set(),
+    }
+
     ticket_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False, db_index=True)
     reference = models.CharField(max_length=20, unique=True)
     user = models.ForeignKey(
@@ -731,7 +851,11 @@ class Ticket(models.Model):
     )
     seats = models.CharField(max_length=255, blank=True, null=True)
     show_datetime = models.DateTimeField(blank=True, null=True)
-    payment_status = models.CharField(max_length=20, default="PENDING")
+    payment_status = models.CharField(
+        max_length=20,
+        choices=PaymentStatus.choices,
+        default=PaymentStatus.PENDING,
+    )
     token_expires_at = models.DateTimeField(blank=True, null=True)
     is_used = models.BooleanField(default=False)
     payload = models.JSONField()
@@ -739,6 +863,34 @@ class Ticket(models.Model):
 
     class Meta:
         db_table = "tickets"
+
+    @classmethod
+    def normalize_payment_status(cls, value: str | None) -> str:
+        return _normalize_choice_value(
+            value,
+            cls.PaymentStatus.PENDING,
+            set(cls.PaymentStatus.values),
+            cls.LEGACY_PAYMENT_STATUS_ALIASES,
+        )
+
+    def save(self, *args, **kwargs):
+        normalized_status = self.normalize_payment_status(self.payment_status)
+        if self.pk:
+            current_status = (
+                type(self)
+                .objects.filter(pk=self.pk)
+                .values_list("payment_status", flat=True)
+                .first()
+            )
+            _validate_status_transition(
+                self.__class__.__name__,
+                "payment_status",
+                self.normalize_payment_status(current_status),
+                normalized_status,
+                self.PAYMENT_STATUS_TRANSITIONS,
+            )
+        self.payment_status = normalized_status
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"Ticket {self.reference}"
@@ -1313,6 +1465,18 @@ class SubscriptionTransaction(models.Model):
 
 
 class Booking(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        CONFIRMED = "CONFIRMED", "Confirmed"
+        CANCELLED = "CANCELLED", "Cancelled"
+
+    LEGACY_STATUS_ALIASES = {
+        "PENDING": Status.PENDING,
+        "CONFIRMED": Status.CONFIRMED,
+        "CANCELLED": Status.CANCELLED,
+        "CANCELED": Status.CANCELLED,
+    }
+
     FRAUD_LEVEL_LOW = "LOW"
     FRAUD_LEVEL_MEDIUM = "MEDIUM"
     FRAUD_LEVEL_HIGH = "HIGH"
@@ -1324,11 +1488,24 @@ class Booking(models.Model):
         (FRAUD_LEVEL_CRITICAL, "Critical"),
     ]
 
+    STATUS_TRANSITIONS = {
+        Status.PENDING: {Status.CONFIRMED, Status.CANCELLED},
+        Status.CONFIRMED: {Status.CANCELLED},
+        Status.CANCELLED: set(),
+    }
+
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="bookings")
     showtime = models.ForeignKey(Showtime, on_delete=models.CASCADE, related_name="bookings")
     booking_date = models.DateTimeField(auto_now_add=True)
-    booking_status = models.CharField(max_length=20, default="Pending")
+    booking_status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
     total_amount = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
+    admin_commission = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    vendor_earning = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    commission_percent_applied = models.DecimalField(max_digits=5, decimal_places=2, default=10)
     coupon = models.ForeignKey(
         Coupon,
         on_delete=models.SET_NULL,
@@ -1379,6 +1556,38 @@ class Booking(models.Model):
 
     class Meta:
         db_table = "bookings"
+        indexes = [
+            models.Index(fields=["booking_date"]),
+            models.Index(fields=["booking_status", "booking_date"]),
+        ]
+
+    @classmethod
+    def normalize_booking_status(cls, value: str | None) -> str:
+        return _normalize_choice_value(
+            value,
+            cls.Status.PENDING,
+            set(cls.Status.values),
+            cls.LEGACY_STATUS_ALIASES,
+        )
+
+    def save(self, *args, **kwargs):
+        normalized_status = self.normalize_booking_status(self.booking_status)
+        if self.pk:
+            current_status = (
+                type(self)
+                .objects.filter(pk=self.pk)
+                .values_list("booking_status", flat=True)
+                .first()
+            )
+            _validate_status_transition(
+                self.__class__.__name__,
+                "booking_status",
+                self.normalize_booking_status(current_status),
+                normalized_status,
+                self.STATUS_TRANSITIONS,
+            )
+        self.booking_status = normalized_status
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"Booking {self.pk} ({self.booking_status})"
@@ -1685,6 +1894,15 @@ class BookingSeat(models.Model):
         return f"{self.booking_id} - {self.seat_id}"
 
 
+class BookingItem(BookingSeat):
+    """Compatibility alias for seat-level booking items."""
+
+    class Meta:
+        proxy = True
+        verbose_name = "Booking Item"
+        verbose_name_plural = "Booking Items"
+
+
 class FoodItem(models.Model):
     vendor = models.ForeignKey(
         Vendor,
@@ -1696,6 +1914,8 @@ class FoodItem(models.Model):
     hall = models.CharField(max_length=80, blank=True, null=True)
     item_name = models.CharField(max_length=100)
     category = models.CharField(max_length=50, blank=True, null=True)
+    is_veg = models.BooleanField(default=True)
+    item_image = models.ImageField(upload_to="food_items/", blank=True, null=True)
     price = models.DecimalField(max_digits=8, decimal_places=2)
     track_inventory = models.BooleanField(default=False)
     stock_quantity = models.PositiveIntegerField(default=0)
@@ -2252,10 +2472,18 @@ class Notification(models.Model):
 
 class BackgroundJob(models.Model):
     TYPE_NOTIFICATION_EMAIL = "NOTIFICATION_EMAIL"
+    TYPE_NOTIFICATION_EMAIL_RETRY = "NOTIFICATION_EMAIL_RETRY"
     TYPE_ANALYTICS_MONITOR_EXPORT = "ANALYTICS_MONITOR_EXPORT"
+    TYPE_GATEWAY_STATUS_CHECK = "GATEWAY_STATUS_CHECK"
+    TYPE_FINANCIAL_SUMMARY_ROLLUP = "FINANCIAL_SUMMARY_ROLLUP"
+    TYPE_WITHDRAWAL_SETTLEMENT = "WITHDRAWAL_SETTLEMENT"
     TYPE_CHOICES = [
         (TYPE_NOTIFICATION_EMAIL, "Notification Email"),
+        (TYPE_NOTIFICATION_EMAIL_RETRY, "Notification Email Retry"),
         (TYPE_ANALYTICS_MONITOR_EXPORT, "Analytics Monitor Export"),
+        (TYPE_GATEWAY_STATUS_CHECK, "Gateway Status Check"),
+        (TYPE_FINANCIAL_SUMMARY_ROLLUP, "Financial Summary Rollup"),
+        (TYPE_WITHDRAWAL_SETTLEMENT, "Withdrawal Settlement"),
     ]
 
     STATUS_PENDING = "PENDING"
@@ -2367,28 +2595,158 @@ class BookingDropoffEvent(models.Model):
 
 
 class Payment(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        SUCCESS = "SUCCESS", "Success"
+        FAILED = "FAILED", "Failed"
+        REFUNDED = "REFUNDED", "Refunded"
+        PARTIALLY_REFUNDED = "PARTIALLY_REFUNDED", "Partially Refunded"
+
+    LEGACY_STATUS_ALIASES = {
+        "PENDING": Status.PENDING,
+        "SUCCESS": Status.SUCCESS,
+        "PAID": Status.SUCCESS,
+        "COMPLETED": Status.SUCCESS,
+        "CONFIRMED": Status.SUCCESS,
+        "FAILED": Status.FAILED,
+        "DECLINED": Status.FAILED,
+        "REFUNDED": Status.REFUNDED,
+        "PARTIALLY REFUNDED": Status.PARTIALLY_REFUNDED,
+        "PARTIALLY_REFUNDED": Status.PARTIALLY_REFUNDED,
+    }
+
+    STATUS_TRANSITIONS = {
+        Status.PENDING: {Status.SUCCESS, Status.FAILED},
+        Status.SUCCESS: {Status.REFUNDED, Status.PARTIALLY_REFUNDED},
+        Status.FAILED: set(),
+        Status.REFUNDED: set(),
+        Status.PARTIALLY_REFUNDED: {Status.REFUNDED},
+    }
+
     booking = models.ForeignKey(Booking, on_delete=models.CASCADE, related_name="payments")
     payment_method = models.CharField(max_length=30)
-    payment_status = models.CharField(max_length=20, default="Pending")
+    transaction_uuid = models.CharField(max_length=80, blank=True, null=True, unique=True, db_index=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    payment_status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     payment_date = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table = "payments"
+        indexes = [
+            models.Index(fields=["payment_status", "payment_date"]),
+            models.Index(fields=["booking", "payment_date"]),
+        ]
+
+    @classmethod
+    def normalize_payment_status(cls, value: str | None) -> str:
+        return _normalize_choice_value(
+            value,
+            cls.Status.PENDING,
+            set(cls.Status.values),
+            cls.LEGACY_STATUS_ALIASES,
+        )
+
+    def save(self, *args, **kwargs):
+        normalized_status = self.normalize_payment_status(self.payment_status)
+        if self.transaction_uuid:
+            normalized_transaction_uuid = str(self.transaction_uuid).strip() or None
+            if normalized_transaction_uuid:
+                existing_payment = type(self).objects.filter(
+                    transaction_uuid=normalized_transaction_uuid,
+                )
+                if self.pk:
+                    existing_payment = existing_payment.exclude(pk=self.pk)
+                if existing_payment.exists():
+                    raise ValidationError(
+                        {"transaction_uuid": "Payment transaction UUID must be unique."}
+                    )
+            self.transaction_uuid = normalized_transaction_uuid
+        if self.pk:
+            current_status = (
+                type(self)
+                .objects.filter(pk=self.pk)
+                .values_list("payment_status", flat=True)
+                .first()
+            )
+            _validate_status_transition(
+                self.__class__.__name__,
+                "payment_status",
+                self.normalize_payment_status(current_status),
+                normalized_status,
+                self.STATUS_TRANSITIONS,
+            )
+        self.payment_status = normalized_status
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"Payment {self.pk} ({self.payment_status})"
 
 
 class Refund(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        COMPLETED = "COMPLETED", "Completed"
+        FAILED = "FAILED", "Failed"
+
+    LEGACY_STATUS_ALIASES = {
+        "PENDING": Status.PENDING,
+        "REFUNDED": Status.COMPLETED,
+        "SUCCESS": Status.COMPLETED,
+        "COMPLETED": Status.COMPLETED,
+        "FAILED": Status.FAILED,
+    }
+
+    STATUS_TRANSITIONS = {
+        Status.PENDING: {Status.COMPLETED, Status.FAILED},
+        Status.COMPLETED: set(),
+        Status.FAILED: set(),
+    }
+
     payment = models.ForeignKey(Payment, on_delete=models.CASCADE, related_name="refunds")
     refund_amount = models.DecimalField(max_digits=10, decimal_places=2)
     refund_date = models.DateTimeField(auto_now_add=True)
     refund_reason = models.CharField(max_length=255, blank=True, null=True)
-    refund_status = models.CharField(max_length=20, default="Pending")
+    refund_status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
 
     class Meta:
         db_table = "refunds"
+
+    @classmethod
+    def normalize_refund_status(cls, value: str | None) -> str:
+        return _normalize_choice_value(
+            value,
+            cls.Status.PENDING,
+            set(cls.Status.values),
+            cls.LEGACY_STATUS_ALIASES,
+        )
+
+    def save(self, *args, **kwargs):
+        normalized_status = self.normalize_refund_status(self.refund_status)
+        if self.pk:
+            current_status = (
+                type(self)
+                .objects.filter(pk=self.pk)
+                .values_list("refund_status", flat=True)
+                .first()
+            )
+            _validate_status_transition(
+                self.__class__.__name__,
+                "refund_status",
+                self.normalize_refund_status(current_status),
+                normalized_status,
+                self.STATUS_TRANSITIONS,
+            )
+        self.refund_status = normalized_status
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"Refund {self.pk} ({self.refund_status})"
@@ -2410,6 +2768,165 @@ class Wallet(models.Model):
         return f"Wallet {self.vendor_id}"
 
 
+class VendorWallet(Wallet):
+    """Compatibility alias for vendor wallet naming used by APIs/dashboards."""
+
+    class Meta:
+        proxy = True
+        verbose_name = "Vendor Wallet"
+        verbose_name_plural = "Vendor Wallets"
+
+
+class PlatformRevenueConfig(models.Model):
+    key = models.CharField(max_length=20, unique=True, default="default")
+    commission_percent = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=10,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+    )
+    is_active = models.BooleanField(default=True)
+    updated_by = models.ForeignKey(
+        Admin,
+        on_delete=models.SET_NULL,
+        related_name="updated_revenue_configs",
+        blank=True,
+        null=True,
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "platform_revenue_configs"
+
+    def save(self, *args, **kwargs):
+        self.key = "default"
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"Revenue Config ({self.commission_percent}%)"
+
+
+class AdminWallet(models.Model):
+    key = models.CharField(max_length=20, unique=True, default="primary")
+    balance = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    total_commission_earned = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    total_commission_reversed = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "admin_wallets"
+
+    def save(self, *args, **kwargs):
+        self.key = "primary"
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"AdminWallet {self.key}"
+
+
+class AdminWalletTransaction(models.Model):
+    TYPE_COMMISSION_CREDIT = "COMMISSION_CREDIT"
+    TYPE_COMMISSION_REVERSAL = "COMMISSION_REVERSAL"
+    TYPE_ADJUSTMENT = "ADJUSTMENT"
+    TYPE_CHOICES = [
+        (TYPE_COMMISSION_CREDIT, "Commission Credit"),
+        (TYPE_COMMISSION_REVERSAL, "Commission Reversal"),
+        (TYPE_ADJUSTMENT, "Adjustment"),
+    ]
+
+    STATUS_COMPLETED = "COMPLETED"
+    STATUS_REVERSED = "REVERSED"
+    STATUS_CHOICES = [
+        (STATUS_COMPLETED, "Completed"),
+        (STATUS_REVERSED, "Reversed"),
+    ]
+
+    STATUS_TRANSITIONS = {
+        STATUS_COMPLETED: {STATUS_REVERSED},
+        STATUS_REVERSED: set(),
+    }
+
+    wallet = models.ForeignKey(AdminWallet, on_delete=models.CASCADE, related_name="transactions")
+    booking = models.ForeignKey(
+        Booking,
+        on_delete=models.SET_NULL,
+        related_name="admin_wallet_transactions",
+        blank=True,
+        null=True,
+    )
+    payment = models.ForeignKey(
+        "Payment",
+        on_delete=models.SET_NULL,
+        related_name="admin_wallet_transactions",
+        blank=True,
+        null=True,
+    )
+    refund = models.ForeignKey(
+        "Refund",
+        on_delete=models.SET_NULL,
+        related_name="admin_wallet_transactions",
+        blank=True,
+        null=True,
+    )
+    vendor = models.ForeignKey(
+        Vendor,
+        on_delete=models.SET_NULL,
+        related_name="admin_wallet_transactions",
+        blank=True,
+        null=True,
+    )
+    transaction_type = models.CharField(max_length=30, choices=TYPE_CHOICES)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_COMPLETED)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    gross_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    commission_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    description = models.CharField(max_length=255, blank=True, null=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "admin_wallet_transactions"
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["transaction_type", "created_at"]),
+            models.Index(fields=["vendor", "created_at"]),
+            models.Index(fields=["booking", "created_at"]),
+            models.Index(fields=["status", "created_at"]),
+        ]
+
+    def save(self, *args, **kwargs):
+        normalized_status = _normalize_choice_value(
+            self.status,
+            self.STATUS_COMPLETED,
+            {choice for choice, _ in self.STATUS_CHOICES},
+        )
+        if self.pk:
+            current_status = (
+                type(self)
+                .objects.filter(pk=self.pk)
+                .values_list("status", flat=True)
+                .first()
+            )
+            _validate_status_transition(
+                self.__class__.__name__,
+                "status",
+                _normalize_choice_value(
+                    current_status,
+                    self.STATUS_COMPLETED,
+                    {choice for choice, _ in self.STATUS_CHOICES},
+                ),
+                normalized_status,
+                self.STATUS_TRANSITIONS,
+            )
+        self.status = normalized_status
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"AdminWalletTx {self.id} ({self.transaction_type})"
+
+
 class ReferralWallet(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="referral_wallet")
     balance = models.DecimalField(max_digits=12, decimal_places=2, default=0)
@@ -2424,6 +2941,114 @@ class ReferralWallet(models.Model):
 
     def __str__(self):
         return f"ReferralWallet {self.user_id}"
+
+
+class UserWallet(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="cash_wallet")
+    balance = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    total_credited = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    total_debited = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "user_wallets"
+        ordering = ["-updated_at", "-id"]
+
+    def __str__(self):
+        return f"UserWallet {self.user_id}"
+
+
+class UserWalletTransaction(models.Model):
+    TYPE_TOPUP = "TOPUP"
+    TYPE_DEBIT = "DEBIT"
+    TYPE_REFUND = "REFUND"
+    TYPE_ADJUSTMENT = "ADJUSTMENT"
+    TYPE_CHOICES = [
+        (TYPE_TOPUP, "Top Up"),
+        (TYPE_DEBIT, "Debit"),
+        (TYPE_REFUND, "Refund"),
+        (TYPE_ADJUSTMENT, "Adjustment"),
+    ]
+
+    STATUS_PENDING = "PENDING"
+    STATUS_COMPLETED = "COMPLETED"
+    STATUS_FAILED = "FAILED"
+    STATUS_REVERSED = "REVERSED"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_COMPLETED, "Completed"),
+        (STATUS_FAILED, "Failed"),
+        (STATUS_REVERSED, "Reversed"),
+    ]
+
+    STATUS_TRANSITIONS = {
+        STATUS_PENDING: {STATUS_COMPLETED, STATUS_FAILED, STATUS_REVERSED},
+        STATUS_COMPLETED: {STATUS_REVERSED},
+        STATUS_FAILED: set(),
+        STATUS_REVERSED: set(),
+    }
+
+    wallet = models.ForeignKey(UserWallet, on_delete=models.CASCADE, related_name="transactions")
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="user_wallet_transactions")
+    booking = models.ForeignKey(
+        Booking,
+        on_delete=models.SET_NULL,
+        related_name="user_wallet_transactions",
+        blank=True,
+        null=True,
+    )
+    transaction_type = models.CharField(max_length=20, choices=TYPE_CHOICES)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_COMPLETED)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    reference_id = models.CharField(max_length=120, blank=True, null=True, db_index=True)
+    provider = models.CharField(max_length=20, default="SYSTEM")
+    metadata = models.JSONField(default=dict, blank=True)
+    processed_at = models.DateTimeField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "user_wallet_transactions"
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["user", "status", "created_at"]),
+            models.Index(fields=["reference_id"]),
+            models.Index(fields=["transaction_type", "created_at"]),
+            models.Index(fields=["status", "created_at"]),
+        ]
+
+    def save(self, *args, **kwargs):
+        normalized_status = _normalize_choice_value(
+            self.status,
+            self.STATUS_COMPLETED,
+            {choice for choice, _ in self.STATUS_CHOICES},
+        )
+        if self.pk:
+            current_status = (
+                type(self)
+                .objects.filter(pk=self.pk)
+                .values_list("status", flat=True)
+                .first()
+            )
+            _validate_status_transition(
+                self.__class__.__name__,
+                "status",
+                _normalize_choice_value(
+                    current_status,
+                    self.STATUS_COMPLETED,
+                    {choice for choice, _ in self.STATUS_CHOICES},
+                ),
+                normalized_status,
+                self.STATUS_TRANSITIONS,
+            )
+        self.status = normalized_status
+        if self.provider:
+            self.provider = str(self.provider).strip().upper()[:20]
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"UserWalletTx {self.id} ({self.transaction_type})"
 
 
 class ReferralTransaction(models.Model):
@@ -2564,6 +3189,24 @@ class Transaction(models.Model):
         (STATUS_REJECTED, "Rejected"),
     ]
 
+    STATUS_TRANSITIONS = {
+        STATUS_PENDING: {STATUS_COMPLETED, STATUS_REJECTED},
+        STATUS_COMPLETED: set(),
+        STATUS_REJECTED: set(),
+    }
+
+    STATUS_REQUESTED = STATUS_PENDING
+    STATUS_APPROVED = STATUS_COMPLETED
+    STATUS_REJECTED = STATUS_REJECTED
+
+    transaction_uuid = models.CharField(
+        max_length=80,
+        unique=True,
+        blank=True,
+        null=True,
+        db_index=True,
+    )
+
     wallet = models.ForeignKey(Wallet, on_delete=models.CASCADE, related_name="transactions")
     vendor = models.ForeignKey(Vendor, on_delete=models.CASCADE, related_name="transactions")
     booking = models.ForeignKey(
@@ -2579,14 +3222,260 @@ class Transaction(models.Model):
     gross_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_COMPLETED)
     description = models.CharField(max_length=255, blank=True, null=True)
+    decision_metadata = models.JSONField(default=dict, blank=True)
+    decision_reason = models.CharField(max_length=255, blank=True, null=True)
+    decision_by = models.ForeignKey(
+        Admin,
+        on_delete=models.SET_NULL,
+        related_name="decided_vendor_transactions",
+        blank=True,
+        null=True,
+    )
+    decision_at = models.DateTimeField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table = "transactions"
         ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["vendor", "created_at"]),
+            models.Index(fields=["status", "created_at"]),
+            models.Index(fields=["transaction_uuid"]),
+        ]
+
+    @classmethod
+    def normalize_status(cls, value: str | None) -> str:
+        return _normalize_choice_value(
+            value,
+            cls.STATUS_COMPLETED,
+            {choice for choice, _ in cls.STATUS_CHOICES},
+        )
+
+    def save(self, *args, **kwargs):
+        normalized_status = self.normalize_status(self.status)
+        if self.transaction_uuid:
+            normalized_transaction_uuid = str(self.transaction_uuid).strip() or None
+            if normalized_transaction_uuid:
+                existing = type(self).objects.filter(transaction_uuid=normalized_transaction_uuid)
+                if self.pk:
+                    existing = existing.exclude(pk=self.pk)
+                if existing.exists():
+                    raise ValidationError({"transaction_uuid": "Transaction UUID must be unique."})
+            self.transaction_uuid = normalized_transaction_uuid
+        else:
+            self.transaction_uuid = _generate_transaction_uuid()
+        if self.pk:
+            current_status = (
+                type(self)
+                .objects.filter(pk=self.pk)
+                .values_list("status", flat=True)
+                .first()
+            )
+            _validate_status_transition(
+                self.__class__.__name__,
+                "status",
+                self.normalize_status(current_status),
+                normalized_status,
+                self.STATUS_TRANSITIONS,
+            )
+        self.status = normalized_status
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.transaction_type} {self.amount} ({self.status})"
+
+
+class FinancialLedgerEntry(models.Model):
+    transaction_uuid = models.CharField(
+        max_length=80,
+        unique=True,
+        blank=True,
+        null=True,
+        db_index=True,
+    )
+    reference_id = models.CharField(max_length=120, blank=True, null=True, db_index=True)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    gross_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    commission_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    metadata = models.JSONField(default=dict, blank=True)
+    decision_metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        abstract = True
+
+    def save(self, *args, **kwargs):
+        if self.transaction_uuid:
+            normalized_transaction_uuid = str(self.transaction_uuid).strip() or None
+            if normalized_transaction_uuid:
+                existing = type(self).objects.filter(transaction_uuid=normalized_transaction_uuid)
+                if self.pk:
+                    existing = existing.exclude(pk=self.pk)
+                if existing.exists():
+                    raise ValidationError({"transaction_uuid": "Transaction UUID must be unique."})
+            self.transaction_uuid = normalized_transaction_uuid
+        else:
+            self.transaction_uuid = _generate_transaction_uuid()
+        super().save(*args, **kwargs)
+
+
+class VendorCommissionLedger(FinancialLedgerEntry):
+    ENTRY_EARNED = "EARNED"
+    ENTRY_REVERSED = "REVERSED"
+    ENTRY_CHOICES = [
+        (ENTRY_EARNED, "Earned"),
+        (ENTRY_REVERSED, "Reversed"),
+    ]
+
+    STATUS_PENDING = "PENDING"
+    STATUS_COMPLETED = "COMPLETED"
+    STATUS_FAILED = "FAILED"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_COMPLETED, "Completed"),
+        (STATUS_FAILED, "Failed"),
+    ]
+
+    vendor = models.ForeignKey(Vendor, on_delete=models.CASCADE, related_name="commission_ledger_entries")
+    wallet = models.ForeignKey(Wallet, on_delete=models.CASCADE, related_name="commission_ledger_entries")
+    booking = models.ForeignKey(Booking, on_delete=models.SET_NULL, related_name="commission_ledger_entries", blank=True, null=True)
+    payment = models.ForeignKey(Payment, on_delete=models.SET_NULL, related_name="commission_ledger_entries", blank=True, null=True)
+    entry_type = models.CharField(max_length=20, choices=ENTRY_CHOICES)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_COMPLETED)
+    commission_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+
+    class Meta:
+        db_table = "vendor_commission_ledger_entries"
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["vendor", "created_at"]),
+            models.Index(fields=["booking", "created_at"]),
+            models.Index(fields=["payment", "created_at"]),
+            models.Index(fields=["entry_type", "created_at"]),
+            models.Index(fields=["status", "created_at"]),
+        ]
+
+
+class RefundLedger(FinancialLedgerEntry):
+    STATUS_PENDING = "PENDING"
+    STATUS_COMPLETED = "COMPLETED"
+    STATUS_FAILED = "FAILED"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_COMPLETED, "Completed"),
+        (STATUS_FAILED, "Failed"),
+    ]
+
+    payment = models.ForeignKey(Payment, on_delete=models.CASCADE, related_name="refund_ledger_entries")
+    refund = models.ForeignKey(Refund, on_delete=models.CASCADE, related_name="ledger_entries")
+    booking = models.ForeignKey(Booking, on_delete=models.CASCADE, related_name="refund_ledger_entries")
+    vendor = models.ForeignKey(Vendor, on_delete=models.CASCADE, related_name="refund_ledger_entries")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_COMPLETED)
+    refund_reason = models.CharField(max_length=255, blank=True, null=True)
+
+    class Meta:
+        db_table = "refund_ledger_entries"
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["vendor", "created_at"]),
+            models.Index(fields=["booking", "created_at"]),
+            models.Index(fields=["payment", "created_at"]),
+            models.Index(fields=["refund", "created_at"]),
+            models.Index(fields=["status", "created_at"]),
+        ]
+
+
+class ReversalLedger(FinancialLedgerEntry):
+    TYPE_BOOKING_EARNING = "BOOKING_EARNING"
+    TYPE_PLATFORM_COMMISSION = "PLATFORM_COMMISSION"
+    TYPE_REFUND = "REFUND"
+    TYPE_WITHDRAWAL = "WITHDRAWAL"
+    TYPE_CHOICES = [
+        (TYPE_BOOKING_EARNING, "Booking Earning"),
+        (TYPE_PLATFORM_COMMISSION, "Platform Commission"),
+        (TYPE_REFUND, "Refund"),
+        (TYPE_WITHDRAWAL, "Withdrawal"),
+    ]
+
+    STATUS_PENDING = "PENDING"
+    STATUS_COMPLETED = "COMPLETED"
+    STATUS_FAILED = "FAILED"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_COMPLETED, "Completed"),
+        (STATUS_FAILED, "Failed"),
+    ]
+
+    vendor = models.ForeignKey(Vendor, on_delete=models.CASCADE, related_name="reversal_ledger_entries")
+    wallet = models.ForeignKey(Wallet, on_delete=models.CASCADE, related_name="reversal_ledger_entries")
+    booking = models.ForeignKey(Booking, on_delete=models.SET_NULL, related_name="reversal_ledger_entries", blank=True, null=True)
+    payment = models.ForeignKey(Payment, on_delete=models.SET_NULL, related_name="reversal_ledger_entries", blank=True, null=True)
+    refund = models.ForeignKey(Refund, on_delete=models.SET_NULL, related_name="reversal_ledger_entries", blank=True, null=True)
+    reversal_type = models.CharField(max_length=30, choices=TYPE_CHOICES)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_COMPLETED)
+    reversal_reason = models.CharField(max_length=255, blank=True, null=True)
+
+    class Meta:
+        db_table = "reversal_ledger_entries"
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["vendor", "created_at"]),
+            models.Index(fields=["booking", "created_at"]),
+            models.Index(fields=["payment", "created_at"]),
+            models.Index(fields=["refund", "created_at"]),
+            models.Index(fields=["reversal_type", "created_at"]),
+            models.Index(fields=["status", "created_at"]),
+        ]
+
+
+class WithdrawalLedger(FinancialLedgerEntry):
+    STATUS_REQUESTED = "REQUESTED"
+    STATUS_APPROVED = "APPROVED"
+    STATUS_REJECTED = "REJECTED"
+    STATUS_PROCESSING = "PROCESSING"
+    STATUS_PAID = "PAID"
+    STATUS_FAILED = "FAILED"
+    STATUS_REVERSED = "REVERSED"
+    STATUS_CHOICES = [
+        (STATUS_REQUESTED, "Requested"),
+        (STATUS_APPROVED, "Approved"),
+        (STATUS_REJECTED, "Rejected"),
+        (STATUS_PROCESSING, "Processing"),
+        (STATUS_PAID, "Paid"),
+        (STATUS_FAILED, "Failed"),
+        (STATUS_REVERSED, "Reversed"),
+    ]
+
+    vendor = models.ForeignKey(Vendor, on_delete=models.CASCADE, related_name="withdrawal_ledger_entries")
+    wallet = models.ForeignKey(Wallet, on_delete=models.CASCADE, related_name="withdrawal_ledger_entries")
+    withdrawal_transaction = models.ForeignKey(
+        Transaction,
+        on_delete=models.CASCADE,
+        related_name="withdrawal_ledger_entries",
+    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_REQUESTED)
+    payout_reference = models.CharField(max_length=120, blank=True, null=True, db_index=True)
+    decision_reason = models.CharField(max_length=255, blank=True, null=True)
+    decision_by = models.ForeignKey(
+        Admin,
+        on_delete=models.SET_NULL,
+        related_name="withdrawal_ledger_decisions",
+        blank=True,
+        null=True,
+    )
+    decision_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        db_table = "withdrawal_ledger_entries"
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["vendor", "created_at"]),
+            models.Index(fields=["wallet", "created_at"]),
+            models.Index(fields=["withdrawal_transaction", "created_at"]),
+            models.Index(fields=["status", "created_at"]),
+            models.Index(fields=["payout_reference"]),
+        ]
 
 
 class LoyaltyProgramConfig(models.Model):
