@@ -30,8 +30,7 @@ export default function PaymentSuccess() {
 
   const query = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const dataValue = query.get("data") || "";
-  const transactionUuid =
-    query.get("transaction_uuid") || query.get("transactionUuid") || "";
+  const transactionUuid = query.get("transaction_uuid") || query.get("transactionUuid") || "";
   const decoded = useMemo(() => decodeEsewaData(dataValue), [dataValue]);
 
   useEffect(() => {
@@ -78,12 +77,8 @@ export default function PaymentSuccess() {
   const verified = Boolean(verification?.verified);
   const confirmed = Boolean(verification?.confirmed);
   const completed = Boolean(verification?.is_complete);
-  const statusLabel =
-    verification?.status ||
-    verification?.status_check?.status ||
-    "UNKNOWN";
-  const orderPayload =
-    verification?.order || verification?.ticket?.payload?.order || null;
+  const statusLabel = verification?.status || verification?.status_check?.status || "UNKNOWN";
+  const orderPayload = verification?.order || verification?.ticket?.payload?.order || null;
   const ticketPayload = verification?.ticket || null;
 
   const handleContinue = () => {
@@ -98,34 +93,44 @@ export default function PaymentSuccess() {
 
   return (
     <div className="wf2-orderPage">
-      <div className="wf2-orderPanel" style={{ maxWidth: 720, margin: "40px auto" }}>
-        <h2>eSewa Payment Success Callback</h2>
-        {error ? <p style={{ color: "#ff6b6b" }}>{error}</p> : null}
+      <div className="wf2-orderPanel wf2-lifecycleShell" style={{ maxWidth: 840, margin: "40px auto" }}>
+        <div className="wf2-lifecycleHero">
+          <span className="wf2-orderChip">Payment verified</span>
+          <h2>eSewa payment success</h2>
+          <p>The callback was accepted and the booking is moving toward final ticket handoff.</p>
+        </div>
+
+        {error ? <div className="wf2-lifecycleAlert wf2-lifecycleAlertDanger">{error}</div> : null}
 
         {!error ? (
-          <div style={{ marginTop: 12 }}>
-            <p>
-              Verification: <strong>{verified ? "VALID" : "INVALID"}</strong>
-            </p>
-            <p>
-              Status: <strong>{completed ? "COMPLETE" : statusLabel}</strong>
-            </p>
-            <p>
-              Booking: <strong>{confirmed ? "CONFIRMED" : "NOT CONFIRMED"}</strong>
-            </p>
-            {verification?.message ? <p>{verification.message}</p> : null}
+          <div className="wf2-lifecycleGrid">
+            <div className="wf2-lifecycleCard">
+              <span>Verification</span>
+              <strong>{verified ? "Valid" : "Invalid"}</strong>
+              <p>Gateway response signature and payload were checked.</p>
+            </div>
+            <div className="wf2-lifecycleCard">
+              <span>Gateway status</span>
+              <strong>{completed ? "Complete" : statusLabel}</strong>
+              <p>The gateway status is now the source of truth for this booking.</p>
+            </div>
+            <div className="wf2-lifecycleCard">
+              <span>Booking state</span>
+              <strong>{confirmed ? "Confirmed" : "Waiting"}</strong>
+              <p>{confirmed ? "Ticket download can continue." : "The booking still needs completion."}</p>
+            </div>
           </div>
         ) : null}
 
-        <div style={{ marginTop: 16 }}>
-          <h4>Decoded Response</h4>
-          <pre style={{ whiteSpace: "pre-wrap" }}>
-            {JSON.stringify(verification?.decoded || decoded || {}, null, 2)}
-          </pre>
-        </div>
+        {verification?.message ? <div className="wf2-lifecycleAlert">{verification.message}</div> : null}
 
-        <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-          <button className="wf2-orderPayBtn" type="button" onClick={() => navigate("/")}>
+        <details className="wf2-lifecycleDetails">
+          <summary>Decoded response</summary>
+          <pre>{JSON.stringify(verification?.decoded || decoded || {}, null, 2)}</pre>
+        </details>
+
+        <div className="wf2-lifecycleActions">
+          <button className="wf2-orderPayBtn" type="button" onClick={() => navigate("/") }>
             Go Home
           </button>
           {confirmed ? (
@@ -133,11 +138,7 @@ export default function PaymentSuccess() {
               Continue
             </button>
           ) : (
-            <button
-              className="wf2-orderPayBtn"
-              type="button"
-              onClick={() => navigate("/movies")}
-            >
+            <button className="wf2-orderPayBtn" type="button" onClick={() => navigate("/movies") }>
               Browse Movies
             </button>
           )}
