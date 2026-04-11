@@ -9,6 +9,7 @@ import re
 from typing import Any, Optional
 
 from django.db import transaction
+from django.utils import timezone
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 
@@ -479,10 +480,12 @@ class MovieSerializer(serializers.ModelSerializer):
             "banner_image",
             "poster_url",
             "trailer_url",
+            "trailer_urls",
             "status",
             "average_rating",
             "review_count",
             "is_active",
+            "is_approved",
             "created_at",
             "updated_at",
         ]
@@ -717,10 +720,17 @@ class MovieAdminReadSerializer(serializers.ModelSerializer):
             "banner_image",
             "poster_url",
             "trailer_url",
+            "trailer_urls",
             "status",
             "average_rating",
             "review_count",
+            "approval_status",
+            "approval_reason",
+            "approval_metadata",
+            "approved_by",
+            "approved_at",
             "is_active",
+            "is_approved",
             "created_at",
             "updated_at",
             "credits",
@@ -750,10 +760,18 @@ class MovieAdminWriteSerializer(serializers.ModelSerializer):
             "banner_image",
             "poster_url",
             "trailer_url",
+            "trailer_urls",
             "status",
             "is_active",
+            "is_approved",
+            "approval_status",
+            "approval_reason",
+            "approval_metadata",
+            "approved_by",
+            "approved_at",
             "credits",
         ]
+        read_only_fields = ["approval_metadata"]
 
     def to_internal_value(self, data):
         """Accept both camelCase and snake_case payload keys from admin clients."""
@@ -767,7 +785,13 @@ class MovieAdminWriteSerializer(serializers.ModelSerializer):
             "bannerImage": "banner_image",
             "posterUrl": "poster_url",
             "trailerUrl": "trailer_url",
+            "trailerUrls": "trailer_urls",
+            "trailers": "trailer_urls",
             "isActive": "is_active",
+            "isApproved": "is_approved",
+            "approvalStatus": "approval_status",
+            "approvalReason": "approval_reason",
+            "approvalMetadata": "approval_metadata",
             "synopsis": "description",
         }
         for source_key, target_key in aliases.items():
@@ -793,6 +817,19 @@ class MovieAdminWriteSerializer(serializers.ModelSerializer):
         normalized_credits = _extract_movie_credits_input(mutable)
         if normalized_credits is not None:
             mutable["credits"] = normalized_credits
+
+        # DRF treats QueryDict as HTML form input and ignores direct list values
+        # for nested serializers unless indexed keys are used. Flatten to a plain
+        # dict so normalized credits lists are validated consistently.
+        if hasattr(mutable, "getlist"):
+            flattened: dict[str, Any] = {}
+            for key in mutable.keys():
+                values = mutable.getlist(key)
+                if len(values) == 1:
+                    flattened[key] = values[0]
+                else:
+                    flattened[key] = values
+            mutable = flattened
 
         return super().to_internal_value(mutable)
 
@@ -840,19 +877,86 @@ class MovieAdminWriteSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         """Create a movie and optionally sync credits in a transaction."""
         credits_data = validated_data.pop("credits", [])
+        approval_status = validated_data.pop("approval_status", None)
+        approval_reason = validated_data.pop("approval_reason", None)
+        approval_metadata = validated_data.pop("approval_metadata", None)
         with transaction.atomic():
+            validated_data.setdefault("is_approved", True)
             movie = super().create(validated_data)
             if credits_data:
                 self._sync_credits(movie, credits_data)
+            request = self.context.get("request")
+            if request:
+                from .permissions import is_admin_request, resolve_admin
+
+                if is_admin_request(request):
+                    now = timezone.now()
+                    decision_status = str(approval_status or movie.approval_status or "").strip().upper()
+                    if not decision_status:
+                        decision_status = movie.ApprovalStatus.APPROVED if movie.is_approved else movie.ApprovalStatus.PENDING
+                    movie.approval_status = decision_status
+                    movie.approved_by = resolve_admin(request)
+                    movie.approved_at = now
+                    movie.approval_reason = str(approval_reason or "").strip() or None
+                    current_metadata = dict(movie.approval_metadata or {})
+                    if isinstance(approval_metadata, dict):
+                        current_metadata.update(approval_metadata)
+                    current_metadata.update(
+                        {
+                            "source": "admin_serializer_create",
+                            "decision": decision_status,
+                            "decision_by": getattr(movie.approved_by, "id", None),
+                            "decision_at": now.isoformat(),
+                            "reason": movie.approval_reason,
+                        }
+                    )
+                    movie.approval_metadata = current_metadata
+                    movie.save(update_fields=["approval_status", "approval_reason", "approval_metadata", "approved_by", "approved_at", "is_approved", "updated_at"])
         return movie
 
     def update(self, instance, validated_data):
         """Update a movie and optionally sync credits in a transaction."""
         credits_data = validated_data.pop("credits", None)
+        approval_status = validated_data.pop("approval_status", None)
+        approval_reason = validated_data.pop("approval_reason", None)
+        approval_metadata = validated_data.pop("approval_metadata", None)
         with transaction.atomic():
             movie = super().update(instance, validated_data)
             if credits_data is not None:
                 self._sync_credits(movie, credits_data)
+            request = self.context.get("request")
+            if request:
+                from .permissions import is_admin_request, resolve_admin
+
+                if is_admin_request(request) and (
+                    approval_status is not None
+                    or approval_reason is not None
+                    or approval_metadata is not None
+                    or "is_approved" in validated_data
+                ):
+                    now = timezone.now()
+                    decision_status = str(approval_status or movie.approval_status or "").strip().upper()
+                    if decision_status not in Movie.ApprovalStatus.values:
+                        decision_status = movie.ApprovalStatus.APPROVED if movie.is_approved else movie.ApprovalStatus.PENDING
+                    movie.approval_status = decision_status
+                    movie.approved_by = resolve_admin(request)
+                    movie.approved_at = now
+                    if approval_reason is not None:
+                        movie.approval_reason = str(approval_reason or "").strip() or None
+                    current_metadata = dict(movie.approval_metadata or {})
+                    if isinstance(approval_metadata, dict):
+                        current_metadata.update(approval_metadata)
+                    current_metadata.update(
+                        {
+                            "source": "admin_serializer_update",
+                            "decision": decision_status,
+                            "decision_by": getattr(movie.approved_by, "id", None),
+                            "decision_at": now.isoformat(),
+                            "reason": movie.approval_reason,
+                        }
+                    )
+                    movie.approval_metadata = current_metadata
+                    movie.save(update_fields=["approval_status", "approval_reason", "approval_metadata", "approved_by", "approved_at", "is_approved", "updated_at"])
         return movie
 
 
