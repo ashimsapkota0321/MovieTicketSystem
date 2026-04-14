@@ -21,11 +21,12 @@ from typing import Any, Iterable, Optional
 from django.conf import settings
 from django.core.cache import cache
 from django.core import signing
-from django.core.mail import send_mail
+from django.core.mail import EmailMessage, send_mail
 from django.db import transaction
 from django.db import IntegrityError
 from django.db.models import Q, Count, Sum, F, DecimalField, Avg, Max, Min
 from django.db.models.functions import ExtractWeekDay, TruncDate, TruncMonth
+from django.utils.dateparse import parse_datetime
 from django.utils import timezone
 from django.utils.html import escape
 from PIL import Image, ImageDraw, ImageFont
@@ -91,6 +92,7 @@ from ..models import (
     VendorCampaign,
     VendorCampaignDispatch,
     VendorCancellationPolicy,
+    VendorPayoutProfile,
 )
 from ..serializers import (
     UserRegistrationSerializer,
@@ -161,12 +163,14 @@ def _issue_session_tokens(role: str, user_id: int, extras: Optional[dict[str, An
     )
     return _build_auth_token_payload(session, access_token, refresh_token)
 
+
 PHONE_REGEX = re.compile(r"^[0-9]{10,13}$")
 DEFAULT_VENDOR_STATUS = "Active"
 STATUS_BLOCKED = "Blocked"
 AUTH_REQUIRED_MESSAGE = "Authentication required"
 ADMIN_REQUIRED_MESSAGE = "Admin access required"
 INVALID_PHONE_MESSAGE = "Invalid phone number format"
+PHONE_EXISTS_MESSAGE = "Phone number already exists"
 SEAT_STATUS_SOLD = "Sold"
 SEAT_STATUS_BOOKED = "Booked"
 SEAT_STATUS_AVAILABLE = "Available"
@@ -236,6 +240,7 @@ SEAT_CATEGORY_SCREEN_FIELDS = {
 BOOKED_STATUSES = {SEAT_STATUS_BOOKED.lower(), SEAT_STATUS_SOLD.lower()}
 RESERVE_HOLD_MINUTES = 10
 BOOKING_RESUME_NOTICE_WINDOW_MINUTES = RESERVE_HOLD_MINUTES
+EMAIL_OTP_TTL_MINUTES = 10
 PLATFORM_COMMISSION_PERCENT = Decimal("10.00")
 WEEKDAY_CODES = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
 DEFAULT_REFUND_PERCENT_2H_PLUS = Decimal("100.00")
@@ -257,10 +262,15 @@ REFERRAL_CODE_LENGTH = 8
 REFERRAL_REWARD_REFERRER_DEFAULT = Decimal("100.00")
 REFERRAL_REWARD_REFERRED_DEFAULT = Decimal("50.00")
 REFERRAL_SIGNUP_REWARD_DEFAULT = Decimal("20.00")
+REFERRAL_REWARD_HOLD_PERIOD_DAYS_DEFAULT = 7
 REFERRAL_REWARD_EXPIRY_DAYS_DEFAULT = 90
 REFERRAL_WALLET_CAP_PERCENT_DEFAULT = Decimal("20.00")
 ANALYTICS_CACHE_TTL_SECONDS = 120
 ANALYTICS_VENDOR_CACHE_TTL_SECONDS = 90
+VENDOR_PAYOUT_DEFAULT_MINIMUM_WITHDRAWAL = Decimal("500.00")
+VENDOR_PAYOUT_DEFAULT_SCHEDULE = "WEEKLY"
+VENDOR_PAYOUT_DEFAULT_SCHEDULE_DAY = 0
+VENDOR_PAYOUT_DEFAULT_SCHEDULE_TIME = time_cls(hour=10, minute=0)
 
 
 def _dashboard_cache_key(prefix: str, *parts: Any) -> str:
@@ -293,6 +303,11 @@ BACKGROUND_JOB_TYPE_GATEWAY_STATUS_CHECK = BackgroundJob.TYPE_GATEWAY_STATUS_CHE
 BACKGROUND_JOB_TYPE_FINANCIAL_SUMMARY_ROLLUP = BackgroundJob.TYPE_FINANCIAL_SUMMARY_ROLLUP
 BACKGROUND_JOB_TYPE_WITHDRAWAL_SETTLEMENT = BackgroundJob.TYPE_WITHDRAWAL_SETTLEMENT
 BACKGROUND_JOB_TYPE_NOTIFICATION_EMAIL_RETRY = BackgroundJob.TYPE_NOTIFICATION_EMAIL_RETRY
+BACKGROUND_JOB_TYPE_STALE_PENDING_CLEANUP = BackgroundJob.TYPE_STALE_PENDING_CLEANUP
+BACKGROUND_JOB_TYPE_DATA_RECONCILIATION = BackgroundJob.TYPE_DATA_RECONCILIATION
+BACKGROUND_JOB_TYPE_ANALYTICS_ROLLUP = BackgroundJob.TYPE_ANALYTICS_ROLLUP
+PRECOMPUTED_SUMMARY_CACHE_KEY = "mt:summary:precomputed:v1"
+PRECOMPUTED_SUMMARY_CACHE_TTL_SECONDS = 60
 WEEKDAY_TO_DAY_CODE = {
     0: PricingRule.DAY_OF_WEEK_MON,
     1: PricingRule.DAY_OF_WEEK_TUE,
@@ -787,6 +802,7 @@ def _get_referral_policy() -> ReferralPolicy:
     defaults = {
         "referrer_reward_amount": REFERRAL_REWARD_REFERRER_DEFAULT,
         "referred_reward_amount": REFERRAL_REWARD_REFERRED_DEFAULT,
+        "reward_hold_period_days": REFERRAL_REWARD_HOLD_PERIOD_DAYS_DEFAULT,
         "reward_expiry_days": REFERRAL_REWARD_EXPIRY_DAYS_DEFAULT,
         "wallet_cap_percent": REFERRAL_WALLET_CAP_PERCENT_DEFAULT,
         "max_signups_per_ip_per_day": REFERRAL_MAX_IP_SIGNUPS_PER_DAY_DEFAULT,
@@ -833,6 +849,15 @@ def _referral_reward_expiry_days() -> int:
     else:
         value = _settings_int("REFERRAL_REWARD_EXPIRY_DAYS", REFERRAL_REWARD_EXPIRY_DAYS_DEFAULT)
     return max(1, value)
+
+
+def _referral_reward_hold_period_days() -> int:
+    policy = _get_referral_policy()
+    if policy and bool(policy.is_active):
+        value = int(policy.reward_hold_period_days or REFERRAL_REWARD_HOLD_PERIOD_DAYS_DEFAULT)
+    else:
+        value = _settings_int("REFERRAL_REWARD_HOLD_PERIOD_DAYS", REFERRAL_REWARD_HOLD_PERIOD_DAYS_DEFAULT)
+    return max(0, value)
 
 
 def _referral_wallet_cap_percent() -> Decimal:
@@ -1034,11 +1059,24 @@ def get_referral_wallet_snapshot(user: User, *, use_cache: bool = True) -> dict[
     wallet = _referral_wallet_for_user(user)
     wallet = _recalculate_referral_wallet_snapshot(wallet)
     balance = _quantize_money(wallet.balance)
-    spendable = balance if balance > Decimal("0") else Decimal("0.00")
+    now_value = timezone.now()
+    spendable = _quantize_money(
+        wallet.transactions.filter(
+            transaction_type=ReferralTransaction.TYPE_CREDIT,
+            status=ReferralTransaction.STATUS_COMPLETED,
+        )
+        .filter(Q(available_at__isnull=True) | Q(available_at__lte=now_value))
+        .aggregate(total=Sum("remaining_amount"))
+        .get("total")
+        or Decimal("0")
+    )
+    if spendable < Decimal("0"):
+        spendable = Decimal("0.00")
     payload = {
         "user_id": user.id,
         "balance": float(balance),
         "spendable_balance": float(spendable),
+        "locked_balance": float(_quantize_money(balance - spendable)) if balance > spendable else 0.0,
         "total_credited": float(_quantize_money(wallet.total_credited)),
         "total_debited": float(_quantize_money(wallet.total_debited)),
         "total_expired": float(_quantize_money(wallet.total_expired)),
@@ -1058,6 +1096,7 @@ def _create_referral_transaction(
     status_value: str = ReferralTransaction.STATUS_COMPLETED,
     referral: Optional[Referral] = None,
     booking: Optional[Booking] = None,
+    available_at: Optional[datetime] = None,
     expires_at: Optional[datetime] = None,
     remaining_amount: Optional[Decimal] = None,
     metadata: Optional[dict[str, Any]] = None,
@@ -1072,10 +1111,23 @@ def _create_referral_transaction(
         reason=reason,
         amount=_quantize_money(amount),
         remaining_amount=_quantize_money(remaining_amount if remaining_amount is not None else Decimal("0")),
+        available_at=available_at,
         expires_at=expires_at,
         processed_at=timezone.now(),
         metadata=metadata or {},
     )
+
+
+def _referral_transaction_is_spendable(tx: ReferralTransaction, now_value: Optional[datetime] = None) -> bool:
+    if not tx or tx.transaction_type != ReferralTransaction.TYPE_CREDIT:
+        return False
+    if tx.status != ReferralTransaction.STATUS_COMPLETED:
+        return False
+    available_at = tx.available_at
+    if not available_at:
+        return True
+    current_time = now_value or timezone.now()
+    return available_at <= current_time
 
 
 def _consume_referral_credit_buckets(user_id: int, amount: Decimal) -> None:
@@ -1092,6 +1144,7 @@ def _consume_referral_credit_buckets(user_id: int, amount: Decimal) -> None:
             status=ReferralTransaction.STATUS_COMPLETED,
             remaining_amount__gt=Decimal("0"),
         )
+        .filter(Q(available_at__isnull=True) | Q(available_at__lte=timezone.now()))
         .order_by("expires_at", "created_at", "id")
     )
     for row in credit_rows:
@@ -1131,6 +1184,7 @@ def _credit_referral_wallet(
             status_value=ReferralTransaction.STATUS_COMPLETED,
             referral=referral,
             booking=booking,
+            available_at=timezone.now() + timedelta(days=_referral_reward_hold_period_days()),
             expires_at=expires_at,
             remaining_amount=credit_amount,
             metadata=metadata,
@@ -1161,23 +1215,33 @@ def _debit_referral_wallet(
         wallet = _referral_wallet_for_user(user, lock_for_update=True)
         wallet = _recalculate_referral_wallet_snapshot(wallet)
         current_balance = _quantize_money(wallet.balance)
-        if require_available_balance and current_balance < debit_amount:
+        spendable_balance = _quantize_money(
+            wallet.transactions.filter(
+                transaction_type=ReferralTransaction.TYPE_CREDIT,
+                status=ReferralTransaction.STATUS_COMPLETED,
+            )
+            .filter(Q(available_at__isnull=True) | Q(available_at__lte=timezone.now()))
+            .aggregate(total=Sum("remaining_amount"))
+            .get("total")
+            or Decimal("0")
+        )
+        if require_available_balance and spendable_balance < debit_amount:
             return (
                 None,
                 {
                     "message": "Insufficient referral wallet balance.",
-                    "available_balance": float(current_balance),
+                    "available_balance": float(spendable_balance),
                     "requested_amount": float(debit_amount),
                 },
                 status.HTTP_400_BAD_REQUEST,
             )
 
-        if not allow_negative_balance and current_balance < debit_amount:
+        if not allow_negative_balance and spendable_balance < debit_amount:
             return (
                 None,
                 {
                     "message": "Referral wallet cannot go negative.",
-                    "available_balance": float(current_balance),
+                    "available_balance": float(spendable_balance),
                     "requested_amount": float(debit_amount),
                 },
                 status.HTTP_400_BAD_REQUEST,
@@ -1214,7 +1278,7 @@ def preview_referral_wallet_usage_for_user(
 
     wallet_snapshot = get_referral_wallet_snapshot(user)
     wallet_balance = _quantize_money(wallet_snapshot.get("balance") or Decimal("0"))
-    spendable_balance = wallet_balance if wallet_balance > Decimal("0") else Decimal("0.00")
+    spendable_balance = _quantize_money(wallet_snapshot.get("spendable_balance") or Decimal("0"))
 
     cap_percent = _referral_wallet_cap_percent()
     cap_amount = _quantize_money((subtotal_amount * cap_percent) / Decimal("100"))
@@ -2149,6 +2213,87 @@ def enqueue_notification_email_retry_job(
     )
 
 
+def enqueue_stale_pending_cleanup_job(
+    *,
+    metadata: Optional[dict[str, Any]] = None,
+) -> Optional[BackgroundJob]:
+    """Queue cleanup for expired pending bookings, seat locks, and group sessions."""
+    return _enqueue_background_job(
+        job_type=BACKGROUND_JOB_TYPE_STALE_PENDING_CLEANUP,
+        payload={"metadata": metadata or {}},
+        max_attempts=2,
+    )
+
+
+def enqueue_data_reconciliation_job(
+    *,
+    metadata: Optional[dict[str, Any]] = None,
+) -> Optional[BackgroundJob]:
+    """Queue background reconciliation checks and wallet rollups."""
+    return _enqueue_background_job(
+        job_type=BACKGROUND_JOB_TYPE_DATA_RECONCILIATION,
+        payload={"metadata": metadata or {}},
+        max_attempts=2,
+    )
+
+
+def enqueue_analytics_rollup_job(
+    *,
+    metadata: Optional[dict[str, Any]] = None,
+) -> Optional[BackgroundJob]:
+    """Queue precomputation of cache-heavy analytics summary counters."""
+    return _enqueue_background_job(
+        job_type=BACKGROUND_JOB_TYPE_ANALYTICS_ROLLUP,
+        payload={"metadata": metadata or {}},
+        max_attempts=2,
+    )
+
+
+def _schedule_background_job_once(
+    *,
+    cache_key: str,
+    interval_seconds: int,
+    enqueue_fn: Any,
+) -> bool:
+    safe_interval = max(int(interval_seconds or 0), 10)
+    if not cache.add(cache_key, timezone.now().isoformat(), timeout=safe_interval):
+        return False
+    job = enqueue_fn()
+    if job is not None:
+        return True
+    cache.delete(cache_key)
+    return False
+
+
+def enqueue_scheduled_maintenance_jobs() -> dict[str, int]:
+    """Enqueue periodic maintenance jobs with cache-backed throttling."""
+    stale_interval = max(_settings_int("BACKGROUND_STALE_PENDING_CLEANUP_INTERVAL_SECONDS", 30), 10)
+    reconcile_interval = max(_settings_int("BACKGROUND_RECONCILIATION_INTERVAL_SECONDS", 120), 30)
+    analytics_interval = max(_settings_int("BACKGROUND_ANALYTICS_ROLLUP_INTERVAL_SECONDS", 60), 30)
+
+    stale_enqueued = _schedule_background_job_once(
+        cache_key="mt:bg:schedule:stale-pending-cleanup",
+        interval_seconds=stale_interval,
+        enqueue_fn=lambda: enqueue_stale_pending_cleanup_job(metadata={"scheduled": True}),
+    )
+    reconciliation_enqueued = _schedule_background_job_once(
+        cache_key="mt:bg:schedule:data-reconciliation",
+        interval_seconds=reconcile_interval,
+        enqueue_fn=lambda: enqueue_data_reconciliation_job(metadata={"scheduled": True}),
+    )
+    analytics_enqueued = _schedule_background_job_once(
+        cache_key="mt:bg:schedule:analytics-rollup",
+        interval_seconds=analytics_interval,
+        enqueue_fn=lambda: enqueue_analytics_rollup_job(metadata={"scheduled": True}),
+    )
+
+    return {
+        "stale_cleanup_enqueued": 1 if stale_enqueued else 0,
+        "reconciliation_enqueued": 1 if reconciliation_enqueued else 0,
+        "analytics_rollup_enqueued": 1 if analytics_enqueued else 0,
+    }
+
+
 def get_vendor_monitor_export_job(vendor_id: int, job_id: int) -> Optional[BackgroundJob]:
     safe_job_id = _coerce_int(job_id)
     safe_vendor_id = _coerce_int(vendor_id)
@@ -2196,6 +2341,16 @@ def _queue_notification_email(
     if not email:
         return False
 
+    # Try immediate delivery first so critical customer notifications are not blocked
+    # by a missing background worker.
+    if _send_notification_email(
+        subject=subject,
+        message=message,
+        recipient_email=email,
+        html_message=html_message,
+    ):
+        return True
+
     queued_job = _enqueue_background_job(
         job_type=BackgroundJob.TYPE_NOTIFICATION_EMAIL,
         payload={
@@ -2218,13 +2373,7 @@ def _queue_notification_email(
     )
     if retry_job:
         return True
-
-    return _send_notification_email(
-        subject=subject,
-        message=message,
-        recipient_email=email,
-        html_message=html_message,
-    )
+    return False
 
 
 def _process_notification_email_background_job(job: BackgroundJob) -> dict[str, Any]:
@@ -2369,6 +2518,111 @@ def _process_financial_summary_rollup_background_job(job: BackgroundJob) -> dict
     }
 
 
+def _build_precomputed_summary_counts() -> dict[str, Any]:
+    """Build small, hot-path counters to be served from Redis cache."""
+    booking_stats = Booking.objects.aggregate(
+        total=Count("id"),
+        pending=Count("id", filter=Q(booking_status__iexact=BOOKING_STATUS_PENDING)),
+        confirmed=Count("id", filter=Q(booking_status__iexact=BOOKING_STATUS_CONFIRMED)),
+        cancelled=Count("id", filter=Q(booking_status__iexact=BOOKING_STATUS_CANCELLED)),
+        gross=Sum("total_amount"),
+    )
+    payment_stats = Payment.objects.aggregate(
+        total=Count("id"),
+        pending=Count("id", filter=Q(payment_status__iexact=PAYMENT_STATUS_PENDING)),
+        success=Count("id", filter=Q(payment_status__iexact=PAYMENT_STATUS_SUCCESS)),
+        failed=Count("id", filter=Q(payment_status__iexact=PAYMENT_STATUS_FAILED)),
+        collected=Sum("amount", filter=Q(payment_status__iexact=PAYMENT_STATUS_SUCCESS)),
+    )
+
+    return {
+        "bookings": {
+            "total": int(booking_stats.get("total") or 0),
+            "pending": int(booking_stats.get("pending") or 0),
+            "confirmed": int(booking_stats.get("confirmed") or 0),
+            "cancelled": int(booking_stats.get("cancelled") or 0),
+            "gross": float(_quantize_money(booking_stats.get("gross") or Decimal("0"))),
+        },
+        "payments": {
+            "total": int(payment_stats.get("total") or 0),
+            "pending": int(payment_stats.get("pending") or 0),
+            "success": int(payment_stats.get("success") or 0),
+            "failed": int(payment_stats.get("failed") or 0),
+            "collected": float(_quantize_money(payment_stats.get("collected") or Decimal("0"))),
+        },
+        "users": {
+            "customers": User.objects.count(),
+            "vendors": Vendor.objects.count(),
+            "admins": Admin.objects.count(),
+        },
+        "notifications": {
+            "unread": Notification.objects.filter(is_read=False).count(),
+            "total": Notification.objects.count(),
+        },
+        "generated_at": timezone.now().isoformat(),
+    }
+
+
+def _process_analytics_rollup_background_job(job: BackgroundJob) -> dict[str, Any]:
+    summary = _build_precomputed_summary_counts()
+    cache.set(PRECOMPUTED_SUMMARY_CACHE_KEY, summary, PRECOMPUTED_SUMMARY_CACHE_TTL_SECONDS)
+    return {
+        "summary_cached": True,
+        "cache_key": PRECOMPUTED_SUMMARY_CACHE_KEY,
+        "generated_at": summary.get("generated_at"),
+    }
+
+
+def _process_stale_pending_cleanup_background_job(job: BackgroundJob) -> dict[str, Any]:
+    """Process stale pending cleanup in worker context, not request context."""
+    expired_bookings = cleanup_expired_pending_bookings()
+    stale_locks = cleanup_stale_seat_locks()
+
+    from .. import group_booking as group_booking_module
+
+    group_result = group_booking_module.expire_group_booking_sessions()
+    return {
+        "expired_pending_bookings": int(expired_bookings or 0),
+        "stale_seat_locks_cleared": int(stale_locks or 0),
+        "expired_group_sessions": int(group_result.get("expired_sessions") or 0),
+        "processed_at": timezone.now().isoformat(),
+    }
+
+
+def _process_data_reconciliation_background_job(job: BackgroundJob) -> dict[str, Any]:
+    rollup = _process_financial_summary_rollup_background_job(job)
+
+    pending_without_pending_payment = Booking.objects.filter(
+        booking_status__iexact=BOOKING_STATUS_PENDING,
+    ).exclude(
+        payments__payment_status__iexact=PAYMENT_STATUS_PENDING,
+    ).distinct().count()
+
+    settled_without_success_payment = Booking.objects.filter(
+        Q(booking_status__iexact=BOOKING_STATUS_CONFIRMED)
+        | Q(booking_status__iexact=Booking.Status.COMPLETED),
+    ).exclude(
+        payments__payment_status__iexact=PAYMENT_STATUS_SUCCESS,
+    ).distinct().count()
+
+    cache.set(
+        "mt:summary:reconciliation:v1",
+        {
+            "pending_without_pending_payment": int(pending_without_pending_payment),
+            "settled_without_success_payment": int(settled_without_success_payment),
+            "checked_at": timezone.now().isoformat(),
+        },
+        timeout=60,
+    )
+
+    return {
+        "wallet_rollup": rollup,
+        "pending_without_pending_payment": int(pending_without_pending_payment),
+        "settled_without_success_payment": int(settled_without_success_payment),
+        "checked_at": timezone.now().isoformat(),
+    }
+
+
 def _process_withdrawal_settlement_background_job(job: BackgroundJob) -> dict[str, Any]:
     payload = job.payload if isinstance(job.payload, dict) else {}
     withdrawal_id = _coerce_int(payload.get("withdrawal_transaction_id"))
@@ -2376,6 +2630,9 @@ def _process_withdrawal_settlement_background_job(job: BackgroundJob) -> dict[st
         raise ValueError("Missing withdrawal_transaction_id for settlement.")
 
     payout_reference = str(payload.get("payout_reference") or "").strip() or None
+    settled_vendor: Optional[Vendor] = None
+    settled_amount: Decimal = Decimal("0")
+    settled_reference: Optional[str] = payout_reference
 
     with transaction.atomic():
         withdrawal_txn = (
@@ -2444,6 +2701,9 @@ def _process_withdrawal_settlement_background_job(job: BackgroundJob) -> dict[st
             ledger.save(update_fields=["status", "payout_reference", "decision_metadata", "updated_at"])
 
             _recalculate_vendor_wallet_snapshot(withdrawal_txn.wallet)
+            settled_vendor = withdrawal_txn.vendor
+            settled_amount = _quantize_money(ledger.amount or withdrawal_txn.amount or Decimal("0"))
+            settled_reference = ledger.payout_reference or payout_reference
     except Exception:
         with transaction.atomic():
             withdrawal_txn = (
@@ -2469,6 +2729,33 @@ def _process_withdrawal_settlement_background_job(job: BackgroundJob) -> dict[st
                     }
                     ledger.save(update_fields=["status", "decision_metadata", "updated_at"])
         raise
+
+    if settled_vendor:
+        try:
+            readable_reference = settled_reference or f"WSET-{withdrawal_id}"
+            _create_notification(
+                recipient_role=Notification.ROLE_VENDOR,
+                recipient_id=settled_vendor.id,
+                recipient_email=settled_vendor.email,
+                event_type=Notification.EVENT_CUSTOM_MESSAGE,
+                title="Withdrawal Transaction Complete",
+                message=(
+                    f"Your withdrawal of NPR {float(settled_amount):,.2f} has been completed. "
+                    f"Reference: {readable_reference}."
+                ),
+                metadata={
+                    "source": "withdrawal_settlement",
+                    "withdrawal_transaction_id": withdrawal_id,
+                    "payout_reference": readable_reference,
+                    "amount": float(settled_amount),
+                },
+                send_email_too=True,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to send vendor withdrawal completion notification for transaction %s",
+                withdrawal_id,
+            )
 
     return {
         "withdrawal_transaction_id": withdrawal_id,
@@ -2496,6 +2783,12 @@ def _process_background_job(job: BackgroundJob) -> dict[str, Any]:
         return _process_financial_summary_rollup_background_job(job)
     if job.job_type == BACKGROUND_JOB_TYPE_WITHDRAWAL_SETTLEMENT:
         return _process_withdrawal_settlement_background_job(job)
+    if job.job_type == BACKGROUND_JOB_TYPE_STALE_PENDING_CLEANUP:
+        return _process_stale_pending_cleanup_background_job(job)
+    if job.job_type == BACKGROUND_JOB_TYPE_DATA_RECONCILIATION:
+        return _process_data_reconciliation_background_job(job)
+    if job.job_type == BACKGROUND_JOB_TYPE_ANALYTICS_ROLLUP:
+        return _process_analytics_rollup_background_job(job)
     raise ValueError(f"Unsupported background job type: {job.job_type}")
 
 
@@ -2660,96 +2953,16 @@ def _ensure_show_is_bookable(show: Show) -> tuple[Optional[dict[str, Any]], Opti
     return None, None
 
 
-def _send_email_via_resend(
-    *,
-    subject: str,
-    message: str,
-    recipient_email: str,
-    html_message: Optional[str] = None,
-) -> bool:
-    """Send email through Resend API when an API key is configured."""
-    api_key = str(getattr(settings, "RESEND_API_KEY", "") or "").strip()
-    if not api_key:
-        return False
-
-    endpoint_base = str(
-        getattr(settings, "RESEND_API_BASE_URL", "https://api.resend.com")
-        or "https://api.resend.com"
-    ).rstrip("/")
-    endpoint = f"{endpoint_base}/emails"
-
-    from_email = str(
-        getattr(settings, "RESEND_FROM_EMAIL", "")
-        or getattr(settings, "DEFAULT_FROM_EMAIL", "")
-        or "Mero Ticket <onboarding@resend.dev>"
-    ).strip()
-
-    payload: dict[str, Any] = {
-        "from": from_email,
-        "to": [recipient_email],
-        "subject": subject,
-        "text": message,
-    }
-    if html_message:
-        payload["html"] = html_message
-
-    request_body = json.dumps(payload).encode("utf-8")
-    request_obj = urllib_request.Request(
-        endpoint,
-        data=request_body,
-        method="POST",
-    )
-    request_obj.add_header("Authorization", f"Bearer {api_key}")
-    request_obj.add_header("Content-Type", "application/json")
-
-    try:
-        with urllib_request.urlopen(request_obj, timeout=20) as response:
-            status_code = int(getattr(response, "status", response.getcode()))
-            if status_code in (200, 201, 202):
-                return True
-            body = response.read().decode("utf-8", errors="ignore")
-            logger.error(
-                "Resend email failed with status %s: %s",
-                status_code,
-                body,
-            )
-            return False
-    except urllib_error.HTTPError as exc:
-        body = ""
-        try:
-            body = exc.read().decode("utf-8", errors="ignore")
-        except Exception:
-            body = str(exc)
-        logger.error(
-            "Resend email failed with status %s: %s",
-            getattr(exc, "code", "unknown"),
-            body,
-        )
-        return False
-    except Exception:
-        logger.exception("Failed to send email via Resend to %s", recipient_email)
-        return False
-
-
 def _send_notification_email(
     subject: str,
     message: str,
     recipient_email: Optional[str],
     html_message: Optional[str] = None,
 ) -> bool:
-    """Send a notification email and return whether delivery was attempted successfully."""
+    """Send a notification email using Django's configured email backend."""
     email = str(recipient_email or "").strip()
     if not email:
         return False
-
-    resend_key = str(getattr(settings, "RESEND_API_KEY", "") or "").strip()
-    if resend_key:
-        return _send_email_via_resend(
-            subject=subject,
-            message=message,
-            recipient_email=email,
-            html_message=html_message,
-        )
 
     from_email = getattr(settings, "DEFAULT_FROM_EMAIL", None) or "noreply@meroticket.local"
     try:
@@ -2827,7 +3040,7 @@ def _send_password_changed_email(
     *,
     context_label: str,
 ) -> bool:
-    """Send a password changed confirmation email via configured provider (Resend/SMTP)."""
+    """Send a password changed confirmation email via the configured email backend."""
     email = str(recipient_email or "").strip()
     if not email:
         return False
@@ -3256,10 +3469,18 @@ def list_notifications(request: Any) -> tuple[dict[str, Any], int]:
         return {"message": AUTH_REQUIRED_MESSAGE}, status.HTTP_401_UNAUTHORIZED
 
     unread_only = parse_bool(request.query_params.get("unread"), default=False)
+    raw_event_types = coalesce(request.query_params, "event_type", "eventType", default="")
+    event_types = [
+        str(item).strip().upper()
+        for item in str(raw_event_types or "").split(",")
+        if str(item).strip()
+    ]
     base_queryset = Notification.objects.filter(
         recipient_role=actor_role,
         recipient_id=actor_id,
     )
+    if event_types:
+        base_queryset = base_queryset.filter(event_type__in=event_types)
     queryset = base_queryset.filter(is_read=False) if unread_only else base_queryset
 
     try:
@@ -3271,11 +3492,23 @@ def list_notifications(request: Any) -> tuple[dict[str, Any], int]:
     notifications = list(queryset[:limit])
     unread_count = base_queryset.filter(is_read=False).count()
     total_count = base_queryset.count()
+    event_unread_counts = {
+        str(item.get("event_type") or ""): int(item.get("total") or 0)
+        for item in base_queryset.filter(is_read=False)
+        .values("event_type")
+        .annotate(total=Count("id"))
+    }
+    event_total_counts = {
+        str(item.get("event_type") or ""): int(item.get("total") or 0)
+        for item in base_queryset.values("event_type").annotate(total=Count("id"))
+    }
     return {
         "notifications": [_build_notification_payload(item) for item in notifications],
         "count": len(notifications),
         "total_count": total_count,
         "unread_count": unread_count,
+        "event_total_counts": event_total_counts,
+        "event_unread_counts": event_unread_counts,
     }, status.HTTP_200_OK
 
 
@@ -3321,6 +3554,230 @@ def mark_notifications_read(request: Any) -> tuple[dict[str, Any], int]:
         "updated": int(updated),
         "unread_count": int(unread_count),
     }, status.HTTP_200_OK
+
+
+def send_admin_custom_email_to_vendor(request: Any) -> tuple[dict[str, Any], int]:
+    """Send a custom admin message/email to a vendor and create notification records."""
+    admin = resolve_admin(request)
+    if not admin:
+        return {"message": AUTH_REQUIRED_MESSAGE}, status.HTTP_401_UNAUTHORIZED
+
+    payload = get_payload(request)
+    vendor_id = _coerce_int(coalesce(payload, "vendor_id", "vendorId"))
+    vendor_email = str(
+        coalesce(payload, "vendor_email", "vendorEmail", "email", "recipient_email", "recipientEmail") or ""
+    ).strip()
+
+    vendor = None
+    if vendor_id:
+        vendor = Vendor.objects.filter(id=vendor_id, is_active=True).first()
+    elif vendor_email:
+        vendor = Vendor.objects.filter(email__iexact=vendor_email, is_active=True).first()
+    if not vendor:
+        return {"message": "Vendor not found."}, status.HTTP_404_NOT_FOUND
+
+    subject = str(coalesce(payload, "subject", "title") or "").strip()
+    message = str(coalesce(payload, "message", "body") or "").strip()
+    if not subject:
+        return {"message": "subject is required."}, status.HTTP_400_BAD_REQUEST
+    if not message:
+        return {"message": "message is required."}, status.HTTP_400_BAD_REQUEST
+
+    send_email_too = parse_bool(coalesce(payload, "send_email", "sendEmail"), default=True)
+    metadata = coalesce(payload, "metadata", default={})
+    if not isinstance(metadata, dict):
+        metadata = {}
+    metadata.update(
+        {
+            "source": "admin_custom_email",
+            "sender_role": Notification.ROLE_ADMIN,
+            "sender_id": admin.id,
+            "sender_email": getattr(admin, "email", None),
+            "target_vendor_id": vendor.id,
+        }
+    )
+
+    notification = _create_notification(
+        recipient_role=Notification.ROLE_VENDOR,
+        recipient_id=vendor.id,
+        recipient_email=vendor.email,
+        event_type=Notification.EVENT_CUSTOM_MESSAGE,
+        title=subject,
+        message=message,
+        metadata=metadata,
+        send_email_too=send_email_too,
+    )
+
+    _create_notification(
+        recipient_role=Notification.ROLE_ADMIN,
+        recipient_id=admin.id,
+        recipient_email=getattr(admin, "email", None),
+        event_type=Notification.EVENT_CUSTOM_MESSAGE,
+        title=f"Message sent to vendor {vendor.name or vendor.email}",
+        message=subject,
+        metadata={
+            "source": "admin_custom_email",
+            "vendor_id": vendor.id,
+            "vendor_email": vendor.email,
+            "target_notification_id": notification.id,
+        },
+        send_email_too=False,
+    )
+
+    return {
+        "message": "Custom message sent to vendor.",
+        "notification": _build_notification_payload(notification),
+    }, status.HTTP_200_OK
+
+
+def send_vendor_custom_email_to_customer(request: Any) -> tuple[dict[str, Any], int]:
+    """Send a custom vendor message/email to a customer tied to vendor activity."""
+    vendor = resolve_vendor(request)
+    if not vendor:
+        return {"message": AUTH_REQUIRED_MESSAGE}, status.HTTP_401_UNAUTHORIZED
+
+    payload = get_payload(request)
+    user_id = _coerce_int(coalesce(payload, "user_id", "userId", "customer_id", "customerId"))
+    user_email = str(
+        coalesce(payload, "user_email", "userEmail", "email", "recipient_email", "recipientEmail") or ""
+    ).strip()
+    booking_id = _coerce_int(coalesce(payload, "booking_id", "bookingId"))
+
+    customer = None
+    if booking_id:
+        booking = (
+            Booking.objects.select_related("user", "showtime__screen")
+            .filter(id=booking_id, showtime__screen__vendor_id=vendor.id)
+            .first()
+        )
+        if booking:
+            customer = booking.user
+    if not customer and user_id:
+        customer = User.objects.filter(id=user_id, is_active=True).first()
+    if not customer and user_email:
+        customer = User.objects.filter(email__iexact=user_email, is_active=True).first()
+    if not customer:
+        return {"message": "Customer not found."}, status.HTTP_404_NOT_FOUND
+
+    has_relationship = Booking.objects.filter(
+        user_id=customer.id,
+        showtime__screen__vendor_id=vendor.id,
+    ).exists()
+    if not has_relationship:
+        return {
+            "message": "You can only message customers who booked with your cinema.",
+        }, status.HTTP_403_FORBIDDEN
+
+    subject = str(coalesce(payload, "subject", "title") or "").strip()
+    message = str(coalesce(payload, "message", "body") or "").strip()
+    if not subject:
+        return {"message": "subject is required."}, status.HTTP_400_BAD_REQUEST
+    if not message:
+        return {"message": "message is required."}, status.HTTP_400_BAD_REQUEST
+
+    send_email_too = parse_bool(coalesce(payload, "send_email", "sendEmail"), default=True)
+    metadata = coalesce(payload, "metadata", default={})
+    if not isinstance(metadata, dict):
+        metadata = {}
+    metadata.update(
+        {
+            "source": "vendor_custom_email",
+            "sender_role": Notification.ROLE_VENDOR,
+            "sender_id": vendor.id,
+            "sender_email": getattr(vendor, "email", None),
+            "target_user_id": customer.id,
+        }
+    )
+
+    notification = _create_notification(
+        recipient_role=Notification.ROLE_CUSTOMER,
+        recipient_id=customer.id,
+        recipient_email=customer.email,
+        event_type=Notification.EVENT_CUSTOM_MESSAGE,
+        title=subject,
+        message=message,
+        metadata=metadata,
+        send_email_too=send_email_too,
+    )
+
+    _create_notification(
+        recipient_role=Notification.ROLE_VENDOR,
+        recipient_id=vendor.id,
+        recipient_email=vendor.email,
+        event_type=Notification.EVENT_CUSTOM_MESSAGE,
+        title=f"Message sent to customer {customer.email}",
+        message=subject,
+        metadata={
+            "source": "vendor_custom_email",
+            "customer_id": customer.id,
+            "customer_email": customer.email,
+            "target_notification_id": notification.id,
+        },
+        send_email_too=False,
+    )
+
+    return {
+        "message": "Custom message sent to customer.",
+        "notification": _build_notification_payload(notification),
+    }, status.HTTP_200_OK
+
+
+def notify_user_feedback_submission(review: Any) -> None:
+    """Notify vendors/admin when a customer submits movie feedback/review."""
+    if not review or not getattr(review, "movie_id", None) or not getattr(review, "user_id", None):
+        return
+
+    movie = getattr(review, "movie", None)
+    customer = getattr(review, "user", None)
+    movie_title = str(getattr(movie, "title", None) or f"Movie #{review.movie_id}")
+    customer_label = "Customer"
+    if customer:
+        customer_label = str(customer.full_name or customer.username or customer.email or f"User #{customer.id}")
+
+    comment_text = str(getattr(review, "comment", "") or "").strip()
+    metadata = {
+        "source": "user_feedback",
+        "review_id": review.id,
+        "movie_id": review.movie_id,
+        "movie_title": movie_title,
+        "user_id": review.user_id,
+        "rating": int(getattr(review, "rating", 0) or 0),
+        "comment_preview": comment_text[:240],
+    }
+    title = "New user feedback received"
+    message = f"{customer_label} rated {movie_title} {int(getattr(review, 'rating', 0) or 0)}/5."
+
+    vendor_ids = list(
+        Show.objects.filter(movie_id=review.movie_id)
+        .values_list("vendor_id", flat=True)
+        .distinct()
+    )
+    if vendor_ids:
+        vendors = Vendor.objects.filter(id__in=vendor_ids, is_active=True).only("id", "email")
+        for vendor in vendors:
+            _create_notification(
+                recipient_role=Notification.ROLE_VENDOR,
+                recipient_id=vendor.id,
+                recipient_email=vendor.email,
+                event_type=Notification.EVENT_USER_FEEDBACK,
+                title=title,
+                message=message,
+                metadata=metadata,
+                send_email_too=False,
+            )
+
+    admins = Admin.objects.filter(is_active=True).only("id", "email")
+    for admin in admins:
+        _create_notification(
+            recipient_role=Notification.ROLE_ADMIN,
+            recipient_id=admin.id,
+            recipient_email=admin.email,
+            event_type=Notification.EVENT_USER_FEEDBACK,
+            title=title,
+            message=message,
+            metadata=metadata,
+            send_email_too=False,
+        )
 
 
 def _quantize_money(value: Decimal) -> Decimal:
@@ -3608,6 +4065,140 @@ def _pending_withdrawal_total(wallet: Wallet) -> Decimal:
     return _quantize_money(pending.get("total") or Decimal("0"))
 
 
+def _get_or_create_vendor_payout_profile(vendor: Vendor) -> VendorPayoutProfile:
+    """Return a persisted payout profile for the vendor with safe defaults."""
+    profile, created = VendorPayoutProfile.objects.get_or_create(
+        vendor=vendor,
+        defaults={
+            "destination_type": VendorPayoutProfile.DESTINATION_BANK,
+            "minimum_withdrawal_amount": VENDOR_PAYOUT_DEFAULT_MINIMUM_WITHDRAWAL,
+            "payout_schedule": VENDOR_PAYOUT_DEFAULT_SCHEDULE,
+            "payout_schedule_days": [VENDOR_PAYOUT_DEFAULT_SCHEDULE_DAY],
+            "payout_schedule_time": VENDOR_PAYOUT_DEFAULT_SCHEDULE_TIME,
+        },
+    )
+    if created:
+        return profile
+
+    changed_fields: list[str] = []
+    if not profile.minimum_withdrawal_amount:
+        profile.minimum_withdrawal_amount = VENDOR_PAYOUT_DEFAULT_MINIMUM_WITHDRAWAL
+        changed_fields.append("minimum_withdrawal_amount")
+    if not profile.payout_schedule:
+        profile.payout_schedule = VENDOR_PAYOUT_DEFAULT_SCHEDULE
+        changed_fields.append("payout_schedule")
+    if not isinstance(profile.payout_schedule_days, list) or not profile.payout_schedule_days:
+        profile.payout_schedule_days = [VENDOR_PAYOUT_DEFAULT_SCHEDULE_DAY]
+        changed_fields.append("payout_schedule_days")
+    if not profile.payout_schedule_time:
+        profile.payout_schedule_time = VENDOR_PAYOUT_DEFAULT_SCHEDULE_TIME
+        changed_fields.append("payout_schedule_time")
+    if changed_fields:
+        profile.save(update_fields=changed_fields + ["updated_at"])
+    return profile
+
+
+def _normalize_schedule_day_values(values: Any) -> list[int]:
+    if not isinstance(values, list):
+        values = [values]
+    normalized: list[int] = []
+    for value in values:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            continue
+        parsed = max(0, min(parsed, 31))
+        if parsed not in normalized:
+            normalized.append(parsed)
+    return normalized
+
+
+def _payout_schedule_time_value(profile: VendorPayoutProfile) -> time_cls:
+    return profile.payout_schedule_time or VENDOR_PAYOUT_DEFAULT_SCHEDULE_TIME
+
+
+def _vendor_payout_window_matches(profile: VendorPayoutProfile, current_dt: datetime) -> bool:
+    schedule = str(profile.payout_schedule or VENDOR_PAYOUT_DEFAULT_SCHEDULE).strip().upper()
+    current_date = current_dt.date()
+    current_time = current_dt.time()
+    schedule_time = _payout_schedule_time_value(profile)
+    if current_time < schedule_time:
+        return False
+
+    if schedule == VendorPayoutProfile.SCHEDULE_DAILY:
+        return True
+
+    if schedule == VendorPayoutProfile.SCHEDULE_MONTHLY:
+        day_values = _normalize_schedule_day_values(profile.payout_schedule_days or [1])
+        return current_date.day in day_values
+
+    day_values = _normalize_schedule_day_values(profile.payout_schedule_days or [VENDOR_PAYOUT_DEFAULT_SCHEDULE_DAY])
+    return current_date.weekday() in day_values
+
+
+def _next_vendor_payout_window(profile: VendorPayoutProfile, now: Optional[datetime] = None) -> Optional[datetime]:
+    current_dt = _ensure_timezone_aware(now or timezone.now()) or timezone.now()
+    schedule = str(profile.payout_schedule or VENDOR_PAYOUT_DEFAULT_SCHEDULE).strip().upper()
+    schedule_time = _payout_schedule_time_value(profile)
+    day_values = _normalize_schedule_day_values(profile.payout_schedule_days or [VENDOR_PAYOUT_DEFAULT_SCHEDULE_DAY])
+    search_days = 45 if schedule == VendorPayoutProfile.SCHEDULE_MONTHLY else 14
+    for offset in range(search_days):
+        candidate_date = (current_dt + timedelta(days=offset)).date()
+        if schedule == VendorPayoutProfile.SCHEDULE_MONTHLY:
+            if candidate_date.day not in day_values:
+                continue
+        elif schedule == VendorPayoutProfile.SCHEDULE_WEEKLY:
+            if candidate_date.weekday() not in day_values:
+                continue
+        candidate_dt = _ensure_timezone_aware(datetime.combine(candidate_date, schedule_time))
+        if candidate_dt and candidate_dt > current_dt:
+            return candidate_dt
+        if candidate_dt and offset == 0 and candidate_dt >= current_dt:
+            return candidate_dt
+    return None
+
+
+def _serialize_vendor_payout_profile(profile: VendorPayoutProfile) -> dict[str, Any]:
+    schedule_time = profile.payout_schedule_time.isoformat(timespec="minutes") if profile.payout_schedule_time else None
+    reference = str(profile.destination_reference or "").strip()
+    masked_reference = None
+    if reference:
+        masked_reference = reference[:2] + ("*" * max(len(reference) - 4, 4)) + reference[-2:]
+    return {
+        "vendor_id": profile.vendor_id,
+        "destination_type": profile.destination_type,
+        "destination_name": profile.destination_name,
+        "destination_reference": masked_reference,
+        "account_holder_name": profile.account_holder_name,
+        "bank_name": profile.bank_name,
+        "branch_name": profile.branch_name,
+        "minimum_withdrawal_amount": float(_quantize_money(profile.minimum_withdrawal_amount or VENDOR_PAYOUT_DEFAULT_MINIMUM_WITHDRAWAL)),
+        "payout_schedule": profile.payout_schedule,
+        "payout_schedule_days": profile.payout_schedule_days or [],
+        "payout_schedule_time": schedule_time,
+        "failed_retry_limit": int(profile.failed_retry_limit or 0),
+        "retry_backoff_minutes": int(profile.retry_backoff_minutes or 0),
+        "is_destination_verified": bool(profile.is_destination_verified),
+        "destination_verified_at": profile.destination_verified_at.isoformat() if profile.destination_verified_at else None,
+        "verification_requested_at": profile.verification_requested_at.isoformat() if profile.verification_requested_at else None,
+    }
+
+
+def _vendor_payout_policy_payload(profile: VendorPayoutProfile, now: Optional[datetime] = None) -> dict[str, Any]:
+    current_dt = _ensure_timezone_aware(now or timezone.now()) or timezone.now()
+    next_window = _next_vendor_payout_window(profile, now=current_dt)
+    return {
+        "minimum_withdrawal_amount": float(_quantize_money(profile.minimum_withdrawal_amount or VENDOR_PAYOUT_DEFAULT_MINIMUM_WITHDRAWAL)),
+        "payout_schedule": profile.payout_schedule,
+        "payout_schedule_days": profile.payout_schedule_days or [],
+        "payout_schedule_time": profile.payout_schedule_time.isoformat(timespec="minutes") if profile.payout_schedule_time else None,
+        "next_payout_window": next_window.isoformat() if next_window else None,
+        "payout_window_open": _vendor_payout_window_matches(profile, current_dt),
+        "failed_retry_limit": int(profile.failed_retry_limit or 0),
+        "retry_backoff_minutes": int(profile.retry_backoff_minutes or 0),
+    }
+
+
 def _record_vendor_booking_earning(
     booking: Booking,
     gross_amount: Optional[Decimal] = None,
@@ -3819,12 +4410,16 @@ def get_vendor_wallet_balance(request: Any) -> tuple[dict[str, Any], int]:
         return {"message": "Vendor not found."}, status.HTTP_404_NOT_FOUND
 
     wallet = _wallet_for_vendor(vendor)
+    payout_profile = _get_or_create_vendor_payout_profile(vendor)
     _recalculate_vendor_wallet_snapshot(wallet)
     pending_withdrawal = _pending_withdrawal_total(wallet)
     available = _quantize_money((wallet.balance or Decimal("0")) - pending_withdrawal)
     if available < Decimal("0"):
         available = Decimal("0")
     commission_percent = _resolve_vendor_commission_percent(vendor)
+    withdrawal_history = list(
+        WithdrawalLedger.objects.filter(vendor=vendor).select_related("withdrawal_transaction").order_by("-created_at", "-id")[:50]
+    )
 
     return {
         "vendor_id": vendor.id,
@@ -3837,6 +4432,24 @@ def get_vendor_wallet_balance(request: Any) -> tuple[dict[str, Any], int]:
             "total_withdrawn": float(_quantize_money(wallet.total_withdrawn or Decimal("0"))),
             "platform_commission_percent": float(commission_percent),
         },
+        "payout_profile": _serialize_vendor_payout_profile(payout_profile),
+        "payout_policy": _vendor_payout_policy_payload(payout_profile),
+        "withdrawal_history": [
+            {
+                "id": entry.id,
+                "status": entry.status,
+                "amount": float(_quantize_money(entry.amount or Decimal("0"))),
+                "gross_amount": float(_quantize_money(entry.gross_amount or Decimal("0"))),
+                "payout_reference": entry.payout_reference,
+                "decision_reason": entry.decision_reason,
+                "decision_at": entry.decision_at.isoformat() if entry.decision_at else None,
+                "created_at": entry.created_at.isoformat() if entry.created_at else None,
+                "retry_count": int((entry.decision_metadata or {}).get("retry_count") or 0),
+                "transaction_id": entry.withdrawal_transaction_id,
+                "transaction_status": entry.withdrawal_transaction.status if entry.withdrawal_transaction else None,
+            }
+            for entry in withdrawal_history
+        ],
     }, status.HTTP_200_OK
 
 
@@ -3852,6 +4465,7 @@ def create_vendor_withdrawal_request(request: Any) -> tuple[dict[str, Any], int]
         return {"message": "Valid amount is required."}, status.HTTP_400_BAD_REQUEST
 
     wallet = _wallet_for_vendor(vendor)
+    payout_profile = _get_or_create_vendor_payout_profile(vendor)
     pending_withdrawal = _pending_withdrawal_total(wallet)
     available = _quantize_money((wallet.balance or Decimal("0")) - pending_withdrawal)
     if amount > available:
@@ -3859,6 +4473,29 @@ def create_vendor_withdrawal_request(request: Any) -> tuple[dict[str, Any], int]
             "message": "Insufficient withdrawable balance.",
             "available_balance": float(max(available, Decimal("0"))),
         }, status.HTTP_400_BAD_REQUEST
+
+    minimum_withdrawal = _quantize_money(payout_profile.minimum_withdrawal_amount or VENDOR_PAYOUT_DEFAULT_MINIMUM_WITHDRAWAL)
+    if amount < minimum_withdrawal:
+        next_window = _next_vendor_payout_window(payout_profile)
+        return {
+            "message": "Requested amount is below the minimum withdrawal threshold.",
+            "minimum_withdrawal_amount": float(minimum_withdrawal),
+            "next_payout_window": next_window.isoformat() if next_window else None,
+        }, status.HTTP_400_BAD_REQUEST
+
+    if not payout_profile.is_destination_verified:
+        return {
+            "message": "Your payout destination must be verified before requesting withdrawal.",
+            "payout_profile": _serialize_vendor_payout_profile(payout_profile),
+        }, status.HTTP_409_CONFLICT
+
+    if not _vendor_payout_window_matches(payout_profile, timezone.localtime(timezone.now())):
+        next_window = _next_vendor_payout_window(payout_profile)
+        return {
+            "message": "Withdrawals are only allowed during the configured payout window.",
+            "next_payout_window": next_window.isoformat() if next_window else None,
+            "payout_policy": _vendor_payout_policy_payload(payout_profile),
+        }, status.HTTP_409_CONFLICT
 
     note = str(coalesce(payload, "note", "description", "remark") or "").strip() or None
     txn = Transaction.objects.create(
@@ -3875,6 +4512,7 @@ def create_vendor_withdrawal_request(request: Any) -> tuple[dict[str, Any], int]
             "requested_by": vendor.id,
             "requested_at": timezone.now().isoformat(),
             "reason": note,
+            "payout_profile": _serialize_vendor_payout_profile(payout_profile),
         },
         decision_at=timezone.now(),
     )
@@ -3904,6 +4542,182 @@ def create_vendor_withdrawal_request(request: Any) -> tuple[dict[str, Any], int]
     }, status.HTTP_201_CREATED
 
 
+def update_vendor_payout_profile(request: Any) -> tuple[dict[str, Any], int]:
+    """Create or update a vendor payout destination and schedule policy."""
+    vendor = resolve_vendor(request)
+    if not vendor:
+        return {"message": "Vendor not found."}, status.HTTP_404_NOT_FOUND
+
+    payload = get_payload(request)
+    profile = _get_or_create_vendor_payout_profile(vendor)
+    destination_type = str(coalesce(payload, "destination_type", "destinationType") or profile.destination_type or "").strip().upper()
+    if destination_type not in dict(VendorPayoutProfile.DESTINATION_CHOICES):
+        destination_type = profile.destination_type or VendorPayoutProfile.DESTINATION_BANK
+
+    schedule = str(coalesce(payload, "payout_schedule", "payoutSchedule") or profile.payout_schedule or "").strip().upper()
+    if schedule not in dict(VendorPayoutProfile.SCHEDULE_CHOICES):
+        schedule = profile.payout_schedule or VENDOR_PAYOUT_DEFAULT_SCHEDULE
+
+    payout_schedule_days = coalesce(payload, "payout_schedule_days", "payoutScheduleDays")
+    if payout_schedule_days is None:
+        payout_schedule_days = profile.payout_schedule_days or [VENDOR_PAYOUT_DEFAULT_SCHEDULE_DAY]
+    payout_schedule_days = _normalize_schedule_day_values(payout_schedule_days)
+    if not payout_schedule_days:
+        payout_schedule_days = [VENDOR_PAYOUT_DEFAULT_SCHEDULE_DAY]
+
+    minimum_amount = _parse_price_amount(coalesce(payload, "minimum_withdrawal_amount", "minimumWithdrawalAmount"))
+    if minimum_amount is None or minimum_amount <= Decimal("0"):
+        minimum_amount = profile.minimum_withdrawal_amount or VENDOR_PAYOUT_DEFAULT_MINIMUM_WITHDRAWAL
+
+    payout_time_raw = coalesce(payload, "payout_schedule_time", "payoutScheduleTime")
+    payout_time = parse_time(payout_time_raw) if payout_time_raw else profile.payout_schedule_time
+
+    profile.destination_type = destination_type
+    profile.destination_name = str(coalesce(payload, "destination_name", "destinationName") or "").strip() or None
+    profile.destination_reference = str(coalesce(payload, "destination_reference", "destinationReference", "account_number", "accountNumber", "upi_id", "upiId", "mobile_number", "mobileNumber") or "").strip() or None
+    profile.account_holder_name = str(coalesce(payload, "account_holder_name", "accountHolderName") or "").strip() or None
+    profile.bank_name = str(coalesce(payload, "bank_name", "bankName") or "").strip() or None
+    profile.branch_name = str(coalesce(payload, "branch_name", "branchName") or "").strip() or None
+    profile.minimum_withdrawal_amount = _quantize_money(minimum_amount)
+    profile.payout_schedule = schedule
+    profile.payout_schedule_days = payout_schedule_days
+    profile.payout_schedule_time = payout_time or profile.payout_schedule_time or VENDOR_PAYOUT_DEFAULT_SCHEDULE_TIME
+    profile.failed_retry_limit = max(int(coalesce(payload, "failed_retry_limit", "failedRetryLimit") or profile.failed_retry_limit or 3), 1)
+    profile.retry_backoff_minutes = max(int(coalesce(payload, "retry_backoff_minutes", "retryBackoffMinutes") or profile.retry_backoff_minutes or 60), 1)
+    profile.is_destination_verified = False
+    profile.destination_verified_at = None
+    profile.verification_metadata = {
+        **(profile.verification_metadata if isinstance(profile.verification_metadata, dict) else {}),
+        "updated_at": timezone.now().isoformat(),
+        "updated_by_vendor_id": vendor.id,
+    }
+    profile.save()
+
+    return {
+        "message": "Payout destination saved. Verify the destination using the OTP sent to your email.",
+        "payout_profile": _serialize_vendor_payout_profile(profile),
+        "payout_policy": _vendor_payout_policy_payload(profile),
+    }, status.HTTP_200_OK
+
+
+def request_vendor_payout_destination_verification(request: Any) -> tuple[dict[str, Any], int]:
+    """Send an OTP to verify the vendor payout destination."""
+    vendor = resolve_vendor(request)
+    if not vendor:
+        return {"message": "Vendor not found."}, status.HTTP_404_NOT_FOUND
+
+    profile = _get_or_create_vendor_payout_profile(vendor)
+    if not profile.destination_reference:
+        return {"message": "Save your payout destination before requesting verification."}, status.HTTP_400_BAD_REQUEST
+
+    otp = f"{random.randint(100000, 999999)}"
+    record = OTPVerification.objects.create(email=vendor.email, otp=otp)
+    subject = "Verify your payout destination"
+    message = (
+        "Use this OTP to verify your vendor payout destination:\n\n"
+        f"{otp}\n\n"
+        "If you did not request this, ignore this email."
+    )
+    sent = _send_notification_email(
+        subject=subject,
+        message=message,
+        recipient_email=vendor.email,
+    )
+    if not sent:
+        record.delete()
+        return {"message": "Failed to send verification OTP."}, status.HTTP_500_INTERNAL_SERVER_ERROR
+
+    profile.verification_requested_at = timezone.now()
+    profile.save(update_fields=["verification_requested_at", "updated_at"])
+    if bool(getattr(settings, "DEBUG", False)):
+        print(f"DEBUG PAYOUT OTP for {vendor.email}: {otp}")
+
+    return {
+        "message": "Verification OTP sent to vendor email.",
+        "payout_profile": _serialize_vendor_payout_profile(profile),
+    }, status.HTTP_200_OK
+
+
+def verify_vendor_payout_destination(request: Any) -> tuple[dict[str, Any], int]:
+    """Verify the payout destination OTP and enable withdrawals."""
+    vendor = resolve_vendor(request)
+    if not vendor:
+        return {"message": "Vendor not found."}, status.HTTP_404_NOT_FOUND
+
+    profile = _get_or_create_vendor_payout_profile(vendor)
+    otp = str(coalesce(get_payload(request), "otp") or "").strip()
+    if not otp:
+        return {"message": "OTP is required."}, status.HTTP_400_BAD_REQUEST
+
+    cutoff = timezone.now() - timedelta(minutes=10)
+    record = OTPVerification.objects.filter(
+        email__iexact=vendor.email,
+        otp=otp,
+        created_at__gte=cutoff,
+    ).order_by("-created_at").first()
+    if not record:
+        return {"message": "Invalid or expired OTP."}, status.HTTP_400_BAD_REQUEST
+
+    record.is_verified = True
+    record.save(update_fields=["is_verified"])
+    profile.is_destination_verified = True
+    profile.destination_verified_at = timezone.now()
+    profile.verification_metadata = {
+        **(profile.verification_metadata if isinstance(profile.verification_metadata, dict) else {}),
+        "verified_at": timezone.now().isoformat(),
+        "verified_by_email": vendor.email,
+    }
+    profile.save(update_fields=["is_destination_verified", "destination_verified_at", "verification_metadata", "updated_at"])
+
+    return {
+        "message": "Payout destination verified successfully.",
+        "payout_profile": _serialize_vendor_payout_profile(profile),
+    }, status.HTTP_200_OK
+
+
+def retry_failed_withdrawal_settlement(request: Any, withdrawal_txn: Transaction) -> tuple[dict[str, Any], int]:
+    """Retry a failed withdrawal settlement by requeueing the background job."""
+    if not is_admin_request(request):
+        return {"message": ADMIN_REQUIRED_MESSAGE}, status.HTTP_403_FORBIDDEN
+    if withdrawal_txn.transaction_type != Transaction.TYPE_WITHDRAWAL_REQUEST:
+        return {"message": "Transaction is not a withdrawal request."}, status.HTTP_400_BAD_REQUEST
+
+    ledger = (
+        WithdrawalLedger.objects.select_for_update()
+        .filter(withdrawal_transaction=withdrawal_txn)
+        .order_by("-created_at", "-id")
+        .first()
+    )
+    if not ledger:
+        return {"message": "Withdrawal ledger not found."}, status.HTTP_404_NOT_FOUND
+    if ledger.status == WithdrawalLedger.STATUS_PAID:
+        return {"message": "Withdrawal already settled."}, status.HTTP_400_BAD_REQUEST
+
+    retry_count = int((ledger.decision_metadata or {}).get("retry_count") or 0) + 1
+    ledger.status = WithdrawalLedger.STATUS_APPROVED
+    ledger.decision_metadata = {
+        **(ledger.decision_metadata if isinstance(ledger.decision_metadata, dict) else {}),
+        "action": "RETRY",
+        "retry_count": retry_count,
+        "retry_requested_at": timezone.now().isoformat(),
+        "retry_requested_by": getattr(resolve_admin(request), "id", None),
+    }
+    ledger.save(update_fields=["status", "decision_metadata", "updated_at"])
+
+    enqueue_withdrawal_settlement_job(
+        withdrawal_transaction_id=withdrawal_txn.id,
+        payout_reference=ledger.payout_reference or f"WSET-{withdrawal_txn.transaction_uuid or withdrawal_txn.id}",
+        metadata={"source": "admin_retry", "retry_count": retry_count},
+    )
+
+    return {
+        "message": "Withdrawal settlement retry queued.",
+        "transaction_id": withdrawal_txn.id,
+        "retry_count": retry_count,
+        "status": ledger.status,
+    }, status.HTTP_200_OK
+
+
 def list_vendor_wallet_transactions(request: Any) -> tuple[dict[str, Any], int]:
     """List authenticated vendor wallet transactions."""
     vendor = resolve_vendor(request)
@@ -3921,6 +4735,11 @@ def list_vendor_wallet_transactions(request: Any) -> tuple[dict[str, Any], int]:
 
     payload = []
     for txn in transactions[:200]:
+        ledger = (
+            WithdrawalLedger.objects.filter(withdrawal_transaction=txn).order_by("-created_at", "-id").first()
+            if txn.transaction_type == Transaction.TYPE_WITHDRAWAL_REQUEST
+            else None
+        )
         payload.append(
             {
                 "id": txn.id,
@@ -3932,11 +4751,29 @@ def list_vendor_wallet_transactions(request: Any) -> tuple[dict[str, Any], int]:
                 "booking_id": txn.booking_id,
                 "vendor_id": txn.vendor_id,
                 "description": txn.description,
+                "payout_status": ledger.status if ledger else None,
+                "payout_reference": ledger.payout_reference if ledger else None,
+                "retry_count": int((ledger.decision_metadata or {}).get("retry_count") or 0) if ledger else 0,
                 "created_at": txn.created_at.isoformat() if txn.created_at else None,
             }
         )
 
-    return {"transactions": payload}, status.HTTP_200_OK
+    withdrawal_history = [
+        {
+            "id": entry.id,
+            "transaction_id": entry.withdrawal_transaction_id,
+            "status": entry.status,
+            "amount": float(_quantize_money(entry.amount or Decimal("0"))),
+            "payout_reference": entry.payout_reference,
+            "decision_reason": entry.decision_reason,
+            "retry_count": int((entry.decision_metadata or {}).get("retry_count") or 0),
+            "created_at": entry.created_at.isoformat() if entry.created_at else None,
+            "updated_at": entry.updated_at.isoformat() if entry.updated_at else None,
+        }
+        for entry in WithdrawalLedger.objects.filter(vendor=vendor).order_by("-created_at", "-id")[:100]
+    ]
+
+    return {"transactions": payload, "withdrawal_history": withdrawal_history}, status.HTTP_200_OK
 
 
 def _parse_date_range_from_request(request: Any) -> tuple[Optional[datetime], Optional[datetime], str]:
@@ -4008,6 +4845,14 @@ def get_vendor_revenue_analytics(request: Any) -> tuple[dict[str, Any], int]:
     if cached_response is not None:
         return cached_response
     bookings = _apply_datetime_window(_vendor_successful_booking_queryset(vendor), "booking_date", start_dt, end_dt)
+    all_bookings = _apply_datetime_window(
+        Booking.objects.filter(showtime__screen__vendor=vendor)
+        .select_related("showtime", "showtime__movie", "showtime__screen")
+        .distinct(),
+        "booking_date",
+        start_dt,
+        end_dt,
+    )
 
     totals = bookings.aggregate(
         total_earnings=Sum("vendor_earning"),
@@ -4018,6 +4863,20 @@ def get_vendor_revenue_analytics(request: Any) -> tuple[dict[str, Any], int]:
     total_commission = _quantize_money(totals.get("total_commission") or Decimal("0"))
     total_revenue = _quantize_money(totals.get("total_revenue") or Decimal("0"))
     tickets_sold = BookingSeat.objects.filter(booking__in=bookings).count()
+    total_booking_rows = all_bookings.count()
+    cancelled_booking_rows = all_bookings.filter(booking_status__iexact=BOOKING_STATUS_CANCELLED).count()
+    refund_booking_rows = all_bookings.filter(
+        Q(payments__refunds__refund_status__iexact=Refund.Status.COMPLETED)
+        | Q(payments__payment_status__iexact=PAYMENT_STATUS_REFUNDED)
+        | Q(payments__payment_status__iexact=PAYMENT_STATUS_PARTIALLY_REFUNDED)
+    ).distinct().count()
+    refund_total_amount = _quantize_money(
+        all_bookings.filter(payments__refunds__refund_status__iexact=Refund.Status.COMPLETED).aggregate(
+            total=Sum("payments__refunds__refund_amount")
+        ).get("total") or Decimal("0")
+    )
+    wallet = _wallet_for_vendor(vendor)
+    pending_payout_amount = _pending_withdrawal_total(wallet)
 
     by_show_rows = (
         bookings.values("showtime__movie__title", "showtime__id")
@@ -4088,6 +4947,42 @@ def get_vendor_revenue_analytics(request: Any) -> tuple[dict[str, Any], int]:
             for row in trend_rows
         ]
 
+    occupancy_rows = list(
+        bookings.values(
+            "showtime__id",
+            "showtime__start_time",
+            "showtime__movie__title",
+            "showtime__screen__screen_number",
+            "showtime__screen_id",
+        ).annotate(
+            tickets_sold=Count("booking_seats__id"),
+        ).order_by("showtime__start_time")
+    )
+    screen_ids = [row.get("showtime__screen_id") for row in occupancy_rows if row.get("showtime__screen_id")]
+    capacity_rows = Seat.objects.filter(screen_id__in=screen_ids).values("screen_id").annotate(total=Count("id"))
+    screen_capacity_map = {row["screen_id"]: int(row["total"] or 0) for row in capacity_rows}
+    occupancy_by_slot = []
+    for row in occupancy_rows:
+        screen_id = row.get("showtime__screen_id")
+        capacity = int(screen_capacity_map.get(screen_id) or 0)
+        sold = int(row.get("tickets_sold") or 0)
+        occupancy_percent = (sold / capacity * 100) if capacity > 0 else 0
+        start_time = row.get("showtime__start_time")
+        occupancy_by_slot.append(
+            {
+                "showtime_id": row.get("showtime__id"),
+                "movie_title": row.get("showtime__movie__title") or "Unknown",
+                "slot_label": start_time.strftime("%Y-%m-%d %H:%M") if start_time else "",
+                "hall": row.get("showtime__screen__screen_number") or "-",
+                "capacity": capacity,
+                "tickets_sold": sold,
+                "occupancy_percent": round(occupancy_percent, 2),
+            }
+        )
+
+    cancellation_rate = (cancelled_booking_rows / total_booking_rows * 100) if total_booking_rows > 0 else 0
+    refund_rate = (refund_booking_rows / total_booking_rows * 100) if total_booking_rows > 0 else 0
+
     response = {
         "vendor_id": vendor.id,
         "range": range_key,
@@ -4097,8 +4992,13 @@ def get_vendor_revenue_analytics(request: Any) -> tuple[dict[str, Any], int]:
             "total_commission": float(total_commission),
             "total_revenue": float(total_revenue),
             "total_tickets_sold": int(tickets_sold),
+            "cancellation_rate": round(cancellation_rate, 2),
+            "refund_rate": round(refund_rate, 2),
+            "payout_pending": float(pending_payout_amount),
+            "refund_total_amount": float(refund_total_amount),
         },
         "earnings_per_show": earnings_per_show,
+        "occupancy_by_slot": occupancy_by_slot,
         "trend": trend_points,
         "chart": {
             "series": [{"name": "Vendor Earnings", "data": trend_points}],
@@ -5951,6 +6851,15 @@ def register_user(request: Any) -> tuple[dict[str, Any], int]:
     """Register a new user account."""
     serializer = UserRegistrationSerializer(data=request.data)
     if serializer.is_valid():
+        email = str(serializer.validated_data.get("email") or "").strip().lower()
+        if not _has_verified_registration_otp(email):
+            return {
+                "message": (
+                    "Email verification required. Send OTP and verify your email "
+                    "before registering."
+                )
+            }, status.HTTP_400_BAD_REQUEST
+
         payload = get_payload(request)
         requested_referral_code = str(
             coalesce(payload, "referral_code", "referralCode", default=serializer.validated_data.get("referral_code"))
@@ -5981,6 +6890,8 @@ def register_user(request: Any) -> tuple[dict[str, Any], int]:
                         signup_device_fingerprint=signup_device_fingerprint,
                     )
 
+                OTPVerification.objects.filter(email__iexact=email).delete()
+
             response_payload: dict[str, Any] = {
                 "message": "Registration successful",
                 "user": build_user_payload(user, request),
@@ -6000,6 +6911,104 @@ def register_user(request: Any) -> tuple[dict[str, Any], int]:
         "message": "Registration failed",
         "errors": serializer.errors,
     }, status.HTTP_400_BAD_REQUEST
+
+
+def _has_verified_registration_otp(email: Optional[str]) -> bool:
+    normalized_email = str(email or "").strip().lower()
+    if not normalized_email:
+        return False
+
+    cutoff = timezone.now() - timedelta(minutes=EMAIL_OTP_TTL_MINUTES)
+    return OTPVerification.objects.filter(
+        email__iexact=normalized_email,
+        is_verified=True,
+        created_at__gte=cutoff,
+    ).exists()
+
+
+def request_registration_otp(email: Optional[str]) -> tuple[dict[str, Any], int]:
+    """Send email OTP for registration verification."""
+    normalized_email = str(email or "").strip().lower()
+    if not normalized_email:
+        return {"message": "Email is required"}, status.HTTP_400_BAD_REQUEST
+
+    if "@" not in normalized_email or "." not in normalized_email.split("@")[-1]:
+        return {"message": "Invalid email format"}, status.HTTP_400_BAD_REQUEST
+
+    if User.objects.filter(email__iexact=normalized_email).exists():
+        return {
+            "message": "Email is already registered. Please login with this email."
+        }, status.HTTP_409_CONFLICT
+
+    email_backend = str(getattr(settings, "EMAIL_BACKEND", "") or "").strip().lower()
+    smtp_backend = "django.core.mail.backends.smtp.emailbackend"
+    if email_backend == smtp_backend:
+        smtp_user = str(getattr(settings, "EMAIL_HOST_USER", "") or "").strip()
+        smtp_password = str(getattr(settings, "EMAIL_HOST_PASSWORD", "") or "").strip()
+        if not smtp_user or not smtp_password:
+            return {
+                "message": (
+                    "Email service is not configured. Set EMAIL_HOST_USER and "
+                    "EMAIL_HOST_PASSWORD in .env.local, then restart backend."
+                )
+            }, status.HTTP_503_SERVICE_UNAVAILABLE
+
+    otp = f"{random.randint(100000, 999999)}"
+    otp_record = OTPVerification.objects.create(email=normalized_email, otp=otp)
+    subject = "Mero Ticket registration OTP"
+    message = (
+        "Your Mero Ticket registration OTP is: "
+        f"{otp}\n\n"
+        f"This OTP is valid for {EMAIL_OTP_TTL_MINUTES} minutes.\n"
+        "If you did not request this, please ignore this email."
+    )
+    html_message = _build_password_reset_otp_html(otp)
+
+    email_sent = _send_notification_email(
+        subject=subject,
+        message=message,
+        recipient_email=normalized_email,
+        html_message=html_message,
+    )
+    if not email_sent:
+        otp_record.delete()
+        return {
+            "message": "Failed to send registration OTP email. Please try again later."
+        }, status.HTTP_500_INTERNAL_SERVER_ERROR
+
+    if bool(getattr(settings, "DEBUG", False)):
+        print(f"DEBUG REGISTER OTP for {normalized_email}: {otp}")
+
+    return {"message": "Registration OTP sent to your email"}, status.HTTP_200_OK
+
+
+def verify_registration_otp(email: Optional[str], otp: Optional[str]) -> tuple[dict[str, Any], int]:
+    """Verify registration OTP for an email address."""
+    normalized_email = str(email or "").strip().lower()
+    otp_value = str(otp or "").strip()
+    if not normalized_email or not otp_value:
+        return {
+            "message": "Email and OTP are required"
+        }, status.HTTP_400_BAD_REQUEST
+
+    cutoff = timezone.now() - timedelta(minutes=EMAIL_OTP_TTL_MINUTES)
+    record = (
+        OTPVerification.objects.filter(
+            email__iexact=normalized_email,
+            otp=otp_value,
+            created_at__gte=cutoff,
+        )
+        .order_by("-created_at")
+        .first()
+    )
+    if not record:
+        return {
+            "message": "Invalid or expired OTP"
+        }, status.HTTP_400_BAD_REQUEST
+
+    record.is_verified = True
+    record.save(update_fields=["is_verified"])
+    return {"message": "Registration OTP verified"}, status.HTTP_200_OK
 
 
 def login_user(request: Any) -> tuple[dict[str, Any], int]:
@@ -6084,6 +7093,7 @@ def login_user(request: Any) -> tuple[dict[str, Any], int]:
             "message": "An error occurred during login",
             "error": str(exc),
         }, status.HTTP_500_INTERNAL_SERVER_ERROR
+
 
 
 def list_vendors_payload(request: Any) -> list[dict[str, Any]]:
@@ -6557,6 +7567,7 @@ def _serialize_referral_wallet_transaction(tx: ReferralTransaction) -> dict[str,
         "reason": tx.reason,
         "amount": float(_quantize_money(tx.amount or Decimal("0"))),
         "remaining_amount": float(_quantize_money(tx.remaining_amount or Decimal("0"))),
+        "available_at": tx.available_at.isoformat() if tx.available_at else None,
         "referral_id": tx.referral_id,
         "booking_id": tx.booking_id,
         "expires_at": tx.expires_at.isoformat() if tx.expires_at else None,
@@ -6629,6 +7640,7 @@ def get_customer_referral_dashboard(request: Any) -> tuple[dict[str, Any], int]:
             "reward_policy": {
                 "referrer_reward_amount": float(signup_reward_amount),
                 "referred_reward_amount": 0.0,
+                "hold_days": _referral_reward_hold_period_days(),
                 "expiry_days": _referral_reward_expiry_days(),
                 "reward_mode": "SIGNUP_IMMEDIATE",
             },
@@ -6709,6 +7721,7 @@ def _serialize_referral_policy(policy: ReferralPolicy) -> dict[str, Any]:
     return {
         "referrer_reward_amount": float(_quantize_money(policy.referrer_reward_amount)),
         "referred_reward_amount": float(_quantize_money(policy.referred_reward_amount)),
+        "reward_hold_period_days": int(policy.reward_hold_period_days or 0),
         "reward_expiry_days": int(policy.reward_expiry_days or 0),
         "wallet_cap_percent": float(_quantize_money(policy.wallet_cap_percent)),
         "max_signups_per_ip_per_day": int(policy.max_signups_per_ip_per_day or 0),
@@ -6789,6 +7802,12 @@ def update_admin_referral_policy(request: Any) -> tuple[dict[str, Any], int]:
         if value is None or value < Decimal("0"):
             return {"message": "referred_reward_amount must be a non-negative number."}, status.HTTP_400_BAD_REQUEST
         policy.referred_reward_amount = value
+
+    if "reward_hold_period_days" in payload:
+        value = _coerce_int(payload.get("reward_hold_period_days"))
+        if value is None or value < 0:
+            return {"message": "reward_hold_period_days must be zero or more."}, status.HTTP_400_BAD_REQUEST
+        policy.reward_hold_period_days = value
 
     if "reward_expiry_days" in payload:
         value = _coerce_int(payload.get("reward_expiry_days"))
@@ -6943,7 +7962,12 @@ def list_customer_bookings_payload(request: Any) -> list[dict[str, Any]]:
     if not customer:
         return []
 
-    cleanup_expired_pending_bookings(user_id=customer.id)
+    enqueue_stale_pending_cleanup_job(
+        metadata={
+            "source": "list_customer_bookings_payload",
+            "user_id": customer.id,
+        }
+    )
 
     bookings = (
         Booking.objects.select_related(
@@ -6964,7 +7988,12 @@ def _get_customer_booking_or_none(request: Any, booking_id: int) -> Optional[Boo
     if not customer:
         return None
 
-    cleanup_expired_pending_bookings(user_id=customer.id)
+    enqueue_stale_pending_cleanup_job(
+        metadata={
+            "source": "get_customer_booking",
+            "user_id": customer.id,
+        }
+    )
 
     return (
         Booking.objects.select_related(
@@ -7137,6 +8166,20 @@ def cleanup_expired_pending_bookings(
         expired += 1
 
     return expired
+
+
+def cleanup_stale_seat_locks(*, showtime_id: Optional[int] = None) -> int:
+    """Release stale seat holds that have passed lock expiry."""
+    now = timezone.now()
+    queryset = SeatAvailability.objects.filter(
+        locked_until__isnull=False,
+        locked_until__lte=now,
+    ).exclude(
+        seat_status__in=[SEAT_STATUS_BOOKED, SEAT_STATUS_SOLD]
+    )
+    if showtime_id:
+        queryset = queryset.filter(showtime_id=showtime_id)
+    return int(queryset.update(locked_until=None) or 0)
 
 
 def admin_cancel_booking(request: Any, booking: Booking) -> tuple[dict[str, Any], int]:
@@ -9623,7 +10666,7 @@ def request_password_otp(email: Optional[str]) -> tuple[dict[str, Any], int]:
         otp_record = OTPVerification.objects.create(email=email, otp=otp)
 
         email_backend = str(getattr(settings, "EMAIL_BACKEND", "") or "").strip()
-        is_console_backend = email_backend == "django.core.mail.backends.console.EmailBackend"
+        is_console_backend = "console" in email_backend.lower()
         debug_mode = bool(getattr(settings, "DEBUG", False))
 
         email_sent = _send_password_reset_otp_email(email, otp)
@@ -9653,7 +10696,7 @@ def request_password_otp(email: Optional[str]) -> tuple[dict[str, Any], int]:
         if is_console_backend:
             return {
                 "message": (
-                    "OTP generated in backend console. Configure SMTP or Resend "
+                    "OTP generated in backend console. Configure SMTP "
                     "to send OTP to user email."
                 )
             }, status.HTTP_200_OK
@@ -10392,7 +11435,7 @@ def _create_booking_from_order(
     request: Any | None = None,
 ) -> tuple[Optional[dict[str, Any]], Optional[dict[str, Any]], int]:
     """Create booking + sold seat records from order context."""
-    cleanup_expired_pending_bookings()
+    enqueue_stale_pending_cleanup_job(metadata={"source": "create_booking"})
 
     context = _resolve_booking_context(order)
     source_ip = _normalize_booking_source_ip(
@@ -11635,8 +12678,21 @@ def get_show_dynamic_prices(payload: dict[str, Any]) -> tuple[dict[str, Any], in
     return response_payload, status.HTTP_200_OK
 
 
+def _settlement_status_for_amounts(amount_paid: Any, total_amount: Any) -> str:
+    """Return a simple settlement state for partial invoice tracking."""
+    paid_value = _quantize_money(_parse_price_amount(amount_paid) or Decimal("0"))
+    total_value = _quantize_money(_parse_price_amount(total_amount) or Decimal("0"))
+    if paid_value <= Decimal("0"):
+        return "UNSETTLED"
+    if paid_value >= total_value:
+        return "SETTLED"
+    return "PARTIALLY_SETTLED"
+
+
 def _serialize_private_screening_request(item: PrivateScreeningRequest) -> dict[str, Any]:
     """Serialize private screening request for API responses."""
+    invoice_total_amount = _quantize_money(item.invoice_total_amount or Decimal("0"))
+    amount_paid = _quantize_money(item.amount_paid or Decimal("0"))
     return {
         "id": item.id,
         "requester_type": item.requester_type,
@@ -11651,6 +12707,10 @@ def _serialize_private_screening_request(item: PrivateScreeningRequest) -> dict[
         "hall_preference": item.hall_preference,
         "special_requirements": item.special_requirements,
         "estimated_budget": float(item.estimated_budget) if item.estimated_budget is not None else None,
+        "invoice_total_amount": float(invoice_total_amount),
+        "amount_paid": float(amount_paid),
+        "balance_due": float(max(invoice_total_amount - amount_paid, Decimal("0"))),
+        "settlement_status": item.settlement_status or _settlement_status_for_amounts(amount_paid, invoice_total_amount),
         "status": item.status,
         "vendor_id": item.vendor_id,
         "vendor_name": item.vendor.name if item.vendor else None,
@@ -11717,6 +12777,11 @@ def create_private_screening_request(request: Any) -> tuple[dict[str, Any], int]
         vendor=vendor,
     )
 
+    item.invoice_total_amount = estimated_budget or Decimal("0.00")
+    item.amount_paid = Decimal("0.00")
+    item.settlement_status = _settlement_status_for_amounts(item.amount_paid, item.invoice_total_amount)
+    item.save(update_fields=["invoice_total_amount", "amount_paid", "settlement_status"])
+
     if vendor:
         _create_notification(
             recipient_role=Notification.ROLE_VENDOR,
@@ -11780,6 +12845,14 @@ def update_vendor_private_screening_request(request: Any, item: PrivateScreening
     if counter_offer is not None:
         item.counter_offer_amount = counter_offer
 
+    invoice_total_amount = _parse_price_amount(coalesce(payload, "invoice_total_amount", "invoiceTotalAmount"))
+    if invoice_total_amount is not None:
+        item.invoice_total_amount = invoice_total_amount
+
+    amount_paid = _parse_price_amount(coalesce(payload, "amount_paid", "amountPaid", "paid_amount", "paidAmount"))
+    if amount_paid is not None:
+        item.amount_paid = amount_paid
+
     if "vendor_notes" in payload or "vendorNotes" in payload:
         item.vendor_notes = str(coalesce(payload, "vendor_notes", "vendorNotes") or "").strip() or None
     if "invoice_notes" in payload or "invoiceNotes" in payload:
@@ -11793,8 +12866,13 @@ def update_vendor_private_screening_request(request: Any, item: PrivateScreening
             item.invoiced_at = timezone.now()
             if not item.invoice_number:
                 item.invoice_number = f"INV-{item.id}-{timezone.now().strftime('%Y%m%d')}"
+            if item.invoice_total_amount <= Decimal("0"):
+                fallback_total = item.counter_offer_amount or item.quoted_amount or item.estimated_budget or Decimal("0")
+                item.invoice_total_amount = _quantize_money(fallback_total)
         if next_status == PrivateScreeningRequest.STATUS_COMPLETED:
             item.finalized_at = timezone.now()
+
+    item.settlement_status = _settlement_status_for_amounts(item.amount_paid, item.invoice_total_amount)
 
     item.save()
 
@@ -11839,6 +12917,8 @@ def _serialize_bulk_ticket_batch(batch: BulkTicketBatch) -> dict[str, Any]:
     total_count = len(tickets)
     active_count = sum(1 for item in tickets if item.status == BulkTicketItem.STATUS_ACTIVE)
     redeemed_count = sum(1 for item in tickets if item.status == BulkTicketItem.STATUS_REDEEMED)
+    invoice_total_amount = _quantize_money(batch.invoice_total_amount or batch.total_amount or Decimal("0"))
+    amount_paid = _quantize_money(batch.amount_paid or Decimal("0"))
     return {
         "id": batch.id,
         "vendor_id": batch.vendor_id,
@@ -11850,8 +12930,15 @@ def _serialize_bulk_ticket_batch(batch: BulkTicketBatch) -> dict[str, Any]:
         "show_date": batch.show_date.isoformat() if batch.show_date else None,
         "show_time": batch.show_time.strftime("%H:%M") if batch.show_time else None,
         "valid_until": batch.valid_until.isoformat() if batch.valid_until else None,
+        "seat_hold_count": int(batch.seat_hold_count or 0),
+        "seat_hold_expires_at": batch.seat_hold_expires_at.isoformat() if batch.seat_hold_expires_at else None,
         "unit_price": float(batch.unit_price or Decimal("0")),
         "total_amount": float(batch.total_amount or Decimal("0")),
+        "invoice_number": batch.invoice_number,
+        "invoice_total_amount": float(invoice_total_amount),
+        "amount_paid": float(amount_paid),
+        "balance_due": float(max(invoice_total_amount - amount_paid, Decimal("0"))),
+        "settlement_status": batch.settlement_status or _settlement_status_for_amounts(amount_paid, invoice_total_amount),
         "status": batch.status,
         "notes": batch.notes,
         "ticket_count": total_count,
@@ -11911,6 +12998,26 @@ def create_vendor_bulk_ticket_batch(request: Any) -> tuple[dict[str, Any], int]:
 
     movie_title = str(coalesce(payload, "movie_title", "movieTitle") or "").strip() or None
     hall_name = str(coalesce(payload, "hall") or "").strip() or None
+    seat_hold_count = _parse_positive_int(
+        coalesce(payload, "seat_hold_count", "seatHoldCount", "hold_count", "holdCount"),
+        default=ticket_count,
+        minimum=0,
+        maximum=2000,
+    )
+    invoice_total_amount = _parse_price_amount(coalesce(payload, "invoice_total_amount", "invoiceTotalAmount"))
+    if invoice_total_amount is None:
+        invoice_total_amount = (unit_price * Decimal(ticket_count)).quantize(Decimal("0.01"))
+    amount_paid = _parse_price_amount(coalesce(payload, "amount_paid", "amountPaid", "paid_amount", "paidAmount"))
+    if amount_paid is None:
+        amount_paid = Decimal("0.00")
+    invoice_number = str(coalesce(payload, "invoice_number", "invoiceNumber") or "").strip() or None
+    hold_expires_at = _parse_datetime_value(
+        coalesce(payload, "seat_hold_expires_at", "seatHoldExpiresAt")
+    )
+    if hold_expires_at is None and valid_until:
+        hold_expires_at = _combine_local_date_time(valid_until, time_cls(23, 59))
+    if hold_expires_at is None:
+        hold_expires_at = timezone.now() + timedelta(days=1)
 
     if selected_show:
         movie_title = str(selected_show.movie.title if selected_show.movie else movie_title or "").strip() or None
@@ -11938,8 +13045,14 @@ def create_vendor_bulk_ticket_batch(request: Any) -> tuple[dict[str, Any], int]:
             show_date=show_date,
             show_time=show_time,
             valid_until=valid_until,
+            seat_hold_count=seat_hold_count,
+            seat_hold_expires_at=hold_expires_at,
             unit_price=unit_price,
             total_amount=(unit_price * Decimal(ticket_count)).quantize(Decimal("0.01")),
+            invoice_number=invoice_number,
+            invoice_total_amount=invoice_total_amount,
+            amount_paid=amount_paid,
+            settlement_status=_settlement_status_for_amounts(amount_paid, invoice_total_amount),
             notes=str(coalesce(payload, "notes", "note") or "").strip() or None,
             status=BulkTicketBatch.STATUS_GENERATED,
         )
@@ -15158,6 +16271,20 @@ def get_vendor_analytics(vendor: Vendor, request: Any) -> dict[str, Any]:
         completed_bookings = int(booking_summary.get('completed_bookings') or 0)
         pending_bookings = int(booking_summary.get('pending_bookings') or 0)
         cancelled_bookings = int(booking_summary.get('cancelled_bookings') or 0)
+        total_booking_rows = total_bookings
+        cancelled_booking_rows = cancelled_bookings
+        refund_booking_rows = vendor_bookings.filter(
+            Q(payments__refunds__refund_status__iexact=Refund.Status.COMPLETED)
+            | Q(payments__payment_status__iexact=PAYMENT_STATUS_REFUNDED)
+            | Q(payments__payment_status__iexact=PAYMENT_STATUS_PARTIALLY_REFUNDED)
+        ).distinct().count()
+        refund_total_amount = _quantize_money(
+            vendor_bookings.filter(payments__refunds__refund_status__iexact=Refund.Status.COMPLETED).aggregate(
+                total=Sum('payments__refunds__refund_amount')
+            ).get('total') or Decimal('0')
+        )
+        wallet = _wallet_for_vendor(vendor)
+        pending_payout_amount = _pending_withdrawal_total(wallet)
         
         total_seats_booked = vendor_booking_seats.count()
         total_shows = vendor_shows.count()
@@ -15340,6 +16467,42 @@ def get_vendor_analytics(vendor: Vendor, request: Any) -> dict[str, Any]:
             for item in revenue_per_show
         ]
 
+        occupancy_rows = list(
+            vendor_bookings.values(
+                "showtime__id",
+                "showtime__start_time",
+                "showtime__movie__title",
+                "showtime__screen__screen_number",
+                "showtime__screen_id",
+            ).annotate(
+                tickets_sold=Count("booking_seats__id"),
+            ).order_by("showtime__start_time")
+        )
+        screen_ids = [row.get("showtime__screen_id") for row in occupancy_rows if row.get("showtime__screen_id")]
+        capacity_rows = Seat.objects.filter(screen_id__in=screen_ids).values("screen_id").annotate(total=Count("id"))
+        screen_capacity_map = {row["screen_id"]: int(row["total"] or 0) for row in capacity_rows}
+        occupancy_by_slot = []
+        for row in occupancy_rows:
+            screen_id = row.get("showtime__screen_id")
+            capacity = int(screen_capacity_map.get(screen_id) or 0)
+            sold = int(row.get("tickets_sold") or 0)
+            occupancy_percent = (sold / capacity * 100) if capacity > 0 else 0
+            start_time = row.get("showtime__start_time")
+            occupancy_by_slot.append(
+                {
+                    "showtime_id": row.get("showtime__id"),
+                    "movie_title": row.get("showtime__movie__title") or "Unknown",
+                    "slot_label": start_time.strftime("%Y-%m-%d %H:%M") if start_time else "",
+                    "hall": row.get("showtime__screen__screen_number") or "-",
+                    "capacity": capacity,
+                    "tickets_sold": sold,
+                    "occupancy_percent": round(occupancy_percent, 2),
+                }
+            )
+
+        cancellation_rate = (cancelled_booking_rows / total_booking_rows * 100) if total_booking_rows > 0 else 0
+        refund_rate = (refund_booking_rows / total_booking_rows * 100) if total_booking_rows > 0 else 0
+
         dropoff_payload = _build_dropoff_analytics_payload(
             BookingDropoffEvent.objects.filter(vendor_id=vendor.id),
             days=14,
@@ -15356,6 +16519,10 @@ def get_vendor_analytics(vendor: Vendor, request: Any) -> dict[str, Any]:
                 'total_seats_booked': total_seats_booked,
                 'total_shows': total_shows,
                 'seat_utilization_percentage': round(seat_utilization_percentage, 2),
+                'cancellation_rate': round(cancellation_rate, 2),
+                'refund_rate': round(refund_rate, 2),
+                'payout_pending': float(pending_payout_amount),
+                'refund_total_amount': float(refund_total_amount),
                 'total_food_items_sold': vendor_food_bookings.aggregate(
                     total=Sum('quantity')
                 )['total'] or 0,
@@ -15387,6 +16554,7 @@ def get_vendor_analytics(vendor: Vendor, request: Any) -> dict[str, Any]:
             'weekly_bookings': weekly_bookings,
             'booking_value_stats': booking_value_stats,
             'revenue_per_show': revenue_per_show_list,
+            'occupancy_by_slot': occupancy_by_slot,
             'dropoff_summary': dropoff_payload['summary'],
             'dropoff_trend': dropoff_payload['trend'],
             'message': 'Analytics data retrieved successfully'
@@ -15578,6 +16746,74 @@ def build_ticket_download(reference: str) -> Optional[bytes]:
     ticket_image.save(buffer, format="PNG")
     buffer.seek(0)
     return buffer.read()
+
+
+def build_ticket_pdf(reference: str) -> Optional[bytes]:
+    """Return a rendered ticket PDF for download or email attachment."""
+    ticket = get_ticket(reference)
+    if not ticket:
+        return None
+
+    payload = ticket.payload or {}
+    qr_image = _build_qr_image(build_ticket_qr_data(ticket))
+    render_payload = dict(payload)
+    render_payload["ticket_id"] = str(ticket.ticket_id)
+    ticket_image = _render_ticket_bundle_image(render_payload, qr_image)
+    if ticket_image.mode != "RGB":
+        ticket_image = ticket_image.convert("RGB")
+
+    buffer = io.BytesIO()
+    ticket_image.save(buffer, format="PDF")
+    buffer.seek(0)
+    return buffer.read()
+
+
+def send_ticket_confirmation_email(ticket: Ticket) -> bool:
+    """Email a booking confirmation with the ticket PDF attached."""
+    if not ticket:
+        return False
+
+    payload = ticket.payload or {}
+    user_payload = payload.get("user") if isinstance(payload.get("user"), dict) else {}
+    recipient_email = str(
+        (ticket.user.email if ticket.user else None)
+        or user_payload.get("email")
+        or ""
+    ).strip()
+    if not recipient_email:
+        return False
+
+    reference = str(ticket.reference or "").strip()
+    pdf_bytes = build_ticket_pdf(reference)
+    if not pdf_bytes:
+        logger.warning("Ticket PDF could not be generated for reference %s", reference)
+        return False
+
+    movie = payload.get("movie") if isinstance(payload.get("movie"), dict) else {}
+    movie_title = str(movie.get("title") or "your booking").strip() or "your booking"
+    subject = f"Mero Ticket booking confirmed - {reference}"
+    message = (
+        f"Your booking for {movie_title} has been confirmed. "
+        f"Your ticket PDF is attached.")
+    if payload.get("details_url"):
+        message += f"\n\nTicket details: {payload.get('details_url')}"
+
+    from_email = getattr(settings, "DEFAULT_FROM_EMAIL", None) or "noreply@meroticket.local"
+    email_message = EmailMessage(
+        subject=subject,
+        body=message,
+        from_email=from_email,
+        to=[recipient_email],
+    )
+    filename = f"ticket-{reference or str(ticket.ticket_id)}.pdf"
+    email_message.attach(filename, pdf_bytes, "application/pdf")
+
+    try:
+        email_message.send(fail_silently=False)
+        return True
+    except Exception:
+        logger.exception("Failed to send ticket confirmation email to %s", recipient_email)
+        return False
 
 
 def build_ticket_details_html(reference: str) -> Optional[str]:

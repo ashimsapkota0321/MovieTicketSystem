@@ -43,6 +43,7 @@ from .models import (
     OTPVerification,
     Payment,
     Person,
+    PrivateScreeningRequest,
     Reward,
     RewardRedemption,
     Referral,
@@ -591,6 +592,136 @@ class BookingBulkAssignmentTests(TestCase):
         booking.refresh_from_db()
         self.assertEqual(booking.total_amount, Decimal("1000.00"))
 
+
+class CorporateBookingBillingAndAnalyticsTests(TestCase):
+    """Corporate billing settlement and vendor analytics coverage."""
+
+    def setUp(self) -> None:
+        cache.clear()
+        self.vendor = Vendor.objects.create(
+            name="Billing Vendor",
+            email="billing-vendor@meroticket.local",
+            phone_number="9800000999",
+            username="billing-vendor",
+            password="password",
+            theatre="Billing Theatre",
+            city="Kathmandu",
+            is_active=True,
+        )
+        self.vendor.set_password("password")
+        self.vendor.save()
+
+        self.movie = Movie.objects.create(title="Billing Movie", status=Movie.STATUS_NOW_SHOWING, is_active=True)
+        self.show = Show.objects.create(
+            vendor=self.vendor,
+            movie=self.movie,
+            hall="C",
+            show_date=date.today(),
+            start_time=time(18, 0),
+            price=Decimal("300.00"),
+            status="Open",
+        )
+        self.screen, self.showtime = services._get_or_create_showtime_for_context(self.show, self.show.hall)
+        self.seat = Seat.objects.create(
+            screen=self.screen,
+            row_label="A",
+            seat_number="1",
+            seat_type="Normal",
+        )
+
+        self.user = User.objects.create(
+            phone_number="9800000998",
+            email="billing-user@meroticket.local",
+            username="billing-user",
+            dob=date(1991, 1, 1),
+            first_name="Billing",
+            last_name="User",
+            password="password",
+        )
+        self.user.set_password("password")
+        self.user.save()
+
+    def test_private_screening_request_tracks_partial_settlement(self) -> None:
+        request_item = PrivateScreeningRequest.objects.create(
+            organization_name="Acme Corp",
+            contact_person="Ada Manager",
+            contact_email="ada@acme.local",
+            attendee_count=120,
+            vendor=self.vendor,
+            estimated_budget=Decimal("1000.00"),
+            invoice_total_amount=Decimal("1000.00"),
+            amount_paid=Decimal("0.00"),
+        )
+
+        request = type(
+            "Request",
+            (),
+            {
+                "data": {
+                    "status": "INVOICED",
+                    "invoice_total_amount": "1000",
+                    "amount_paid": "250",
+                },
+                "query_params": {},
+            },
+        )()
+
+        payload, status_code = services.update_vendor_private_screening_request(request, request_item)
+
+        self.assertEqual(status_code, status.HTTP_200_OK)
+        self.assertEqual(payload["request"]["settlement_status"], "PARTIALLY_SETTLED")
+        self.assertEqual(payload["request"]["balance_due"], 750.0)
+
+    def test_vendor_revenue_analytics_includes_occupancy_and_rates(self) -> None:
+        booking = Booking.objects.create(
+            user=self.user,
+            showtime=self.showtime,
+            booking_status=Booking.Status.CONFIRMED,
+            total_amount=Decimal("300.00"),
+            vendor_earning=Decimal("270.00"),
+            admin_commission=Decimal("30.00"),
+        )
+        BookingSeat.objects.create(
+            booking=booking,
+            showtime=self.showtime,
+            seat=self.seat,
+            seat_price=Decimal("300.00"),
+        )
+        payment = Payment.objects.create(
+            booking=booking,
+            payment_method="CARD",
+            payment_status=Payment.Status.SUCCESS,
+            amount=Decimal("300.00"),
+        )
+        Refund.objects.create(
+            payment=payment,
+            refund_amount=Decimal("50.00"),
+            refund_reason="Partial refund",
+            refund_status=Refund.Status.COMPLETED,
+        )
+
+        Booking.objects.create(
+            user=self.user,
+            showtime=self.showtime,
+            booking_status=Booking.Status.CANCELLED,
+            total_amount=Decimal("0.00"),
+            vendor_earning=Decimal("0.00"),
+            admin_commission=Decimal("0.00"),
+        )
+
+        request = APIRequestFactory().get("/api/vendor/revenue/analytics/")
+        request.user = self.vendor
+        request.query_params = {}
+
+        payload, status_code = services.get_vendor_revenue_analytics(request)
+
+        self.assertEqual(status_code, status.HTTP_200_OK)
+        self.assertGreater(len(payload.get("occupancy_by_slot") or []), 0)
+        summary = payload.get("summary") or {}
+        self.assertGreater(float(summary.get("cancellation_rate") or 0), 0)
+        self.assertGreater(float(summary.get("refund_rate") or 0), 0)
+        self.assertGreaterEqual(float(summary.get("refund_total_amount") or 0), 50.0)
+
     def test_promo_banner_disallows_movie(self) -> None:
         serializer = BannerCreateUpdateSerializer(
             data={
@@ -898,7 +1029,15 @@ class ForgotPasswordOtpEmailTests(TestCase):
         self.user.set_password("password")
         self.user.save()
 
-    @mock.patch("app.services.send_mail")
+    @override_settings(
+        DEBUG=False,
+        RESEND_API_KEY="",
+        EMAIL_BACKEND="django.core.mail.backends.smtp.EmailBackend",
+        EMAIL_HOST_USER="test@example.com",
+        EMAIL_HOST_PASSWORD="test-app-password",
+        DEFAULT_FROM_EMAIL="test@example.com",
+    )
+    @mock.patch("app.services.core.send_mail")
     def test_request_password_otp_sends_email(self, mocked_send_mail) -> None:
         mocked_send_mail.return_value = 1
 
@@ -911,8 +1050,15 @@ class ForgotPasswordOtpEmailTests(TestCase):
         )
         self.assertEqual(mocked_send_mail.call_count, 1)
 
-    @override_settings(DEBUG=False)
-    @mock.patch("app.services.send_mail")
+    @override_settings(
+        DEBUG=False,
+        RESEND_API_KEY="",
+        EMAIL_BACKEND="django.core.mail.backends.smtp.EmailBackend",
+        EMAIL_HOST_USER="test@example.com",
+        EMAIL_HOST_PASSWORD="test-app-password",
+        DEFAULT_FROM_EMAIL="test@example.com",
+    )
+    @mock.patch("app.services.core.send_mail")
     def test_request_password_otp_returns_error_when_email_fails(self, mocked_send_mail) -> None:
         mocked_send_mail.side_effect = Exception("SMTP unavailable")
 
@@ -924,8 +1070,15 @@ class ForgotPasswordOtpEmailTests(TestCase):
             OTPVerification.objects.filter(email__iexact=self.user.email).exists()
         )
 
-    @override_settings(DEBUG=True)
-    @mock.patch("app.services.send_mail")
+    @override_settings(
+        DEBUG=True,
+        RESEND_API_KEY="",
+        EMAIL_BACKEND="django.core.mail.backends.smtp.EmailBackend",
+        EMAIL_HOST_USER="test@example.com",
+        EMAIL_HOST_PASSWORD="test-app-password",
+        DEFAULT_FROM_EMAIL="test@example.com",
+    )
+    @mock.patch("app.services.core.send_mail")
     def test_request_password_otp_debug_falls_back_to_console_when_email_fails(
         self,
         mocked_send_mail,
@@ -940,55 +1093,7 @@ class ForgotPasswordOtpEmailTests(TestCase):
             OTPVerification.objects.filter(email__iexact=self.user.email).exists()
         )
 
-    @override_settings(
-        DEBUG=False,
-        RESEND_API_KEY="re_test_123",
-        RESEND_FROM_EMAIL="Mero Ticket <onboarding@resend.dev>",
-    )
-    @mock.patch("app.services.urllib_request.urlopen")
-    def test_request_password_otp_uses_resend_with_html_otp(
-        self,
-        mocked_resend_open,
-    ) -> None:
-        mocked_response = mock.Mock()
-        mocked_response.status = 200
-        mocked_resend_open.return_value.__enter__.return_value = mocked_response
-
-        payload, status_code = services.request_password_otp(self.user.email)
-
-        self.assertEqual(status_code, status.HTTP_200_OK)
-        self.assertEqual(payload.get("message"), "OTP sent to your email")
-        self.assertEqual(mocked_resend_open.call_count, 1)
-
-        request_obj = mocked_resend_open.call_args.args[0]
-        sent_payload = json.loads((request_obj.data or b"{}").decode("utf-8"))
-        self.assertEqual(sent_payload.get("to"), [self.user.email])
-        self.assertTrue(sent_payload.get("html"))
-
-        otp_record = OTPVerification.objects.filter(email__iexact=self.user.email).order_by("-created_at").first()
-        self.assertIsNotNone(otp_record)
-        self.assertIn(str(otp_record.otp), str(sent_payload.get("html") or ""))
-
-    @override_settings(
-        RESEND_API_KEY="re_test_123",
-        RESEND_FROM_EMAIL="Mero Ticket <onboarding@resend.dev>",
-    )
-    @mock.patch("app.services.urllib_request.urlopen")
-    def test_request_password_otp_returns_error_when_resend_fails(
-        self,
-        mocked_resend_open,
-    ) -> None:
-        mocked_resend_open.side_effect = Exception("Unauthorized")
-
-        payload, status_code = services.request_password_otp(self.user.email)
-
-        self.assertEqual(status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
-        self.assertIn("Failed to send OTP email", str(payload.get("message") or ""))
-        self.assertFalse(
-            OTPVerification.objects.filter(email__iexact=self.user.email).exists()
-        )
-
-    @mock.patch("app.services._send_password_changed_email")
+    @mock.patch("app.services.core._send_password_changed_email")
     def test_reset_password_with_otp_sends_password_changed_email(
         self,
         mocked_password_changed_email,
@@ -1017,7 +1122,7 @@ class ForgotPasswordOtpEmailTests(TestCase):
         self.user.refresh_from_db()
         self.assertTrue(self.user.check_password("new-secure-password"))
 
-    @mock.patch("app.services._send_password_changed_email")
+    @mock.patch("app.services.core._send_password_changed_email")
     def test_update_admin_user_sends_password_changed_email(
         self,
         mocked_password_changed_email,
@@ -1041,6 +1146,51 @@ class ForgotPasswordOtpEmailTests(TestCase):
         self.user.refresh_from_db()
         self.assertTrue(self.user.check_password("admin-updated-password"))
 
+
+class RegistrationOtpEmailTests(TestCase):
+    """Ensure registration requires verified email OTP and OTP flow works."""
+
+    @override_settings(
+        EMAIL_BACKEND="django.core.mail.backends.smtp.EmailBackend",
+        EMAIL_HOST_USER="test@example.com",
+        EMAIL_HOST_PASSWORD="test-app-password",
+        DEFAULT_FROM_EMAIL="test@example.com",
+    )
+    @mock.patch("app.services.core.send_mail")
+    def test_request_registration_otp_sends_email(self, mocked_send_mail) -> None:
+        mocked_send_mail.return_value = 1
+
+        payload, status_code = services.request_registration_otp("new-user@meroticket.local")
+
+        self.assertEqual(status_code, status.HTTP_200_OK)
+        self.assertIn("OTP", str(payload.get("message") or ""))
+        self.assertEqual(mocked_send_mail.call_count, 1)
+        self.assertTrue(
+            OTPVerification.objects.filter(email__iexact="new-user@meroticket.local").exists()
+        )
+
+    def test_register_user_requires_verified_registration_otp(self) -> None:
+        request = type(
+            "Request",
+            (),
+            {
+                "data": {
+                    "phone_number": "9850000199",
+                    "email": "otp-required@meroticket.local",
+                    "dob": "1998-02-10",
+                    "first_name": "Otp",
+                    "last_name": "Required",
+                    "password": "StrongPass123",
+                    "confirm_password": "StrongPass123",
+                },
+                "META": {},
+            },
+        )()
+
+        payload, status_code = services.register_user(request)
+
+        self.assertEqual(status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Email verification required", str(payload.get("message") or ""))
 
 class NotificationBackgroundQueueTests(TestCase):
     """Ensure notification emails are dispatched through the background queue."""
@@ -1276,7 +1426,7 @@ class CustomerRefundRequestNotificationTests(TestCase):
             is_active=True,
         )
 
-        start_at = timezone.now() + timedelta(hours=5)
+        start_at = timezone.now() + timedelta(days=2)
         self.show = Show.objects.create(
             vendor=self.vendor,
             movie=self.movie,
@@ -3120,6 +3270,108 @@ class LoyaltyLifecycleTests(TestCase):
             ).exists()
         )
 
+    def test_wallet_snapshot_downgrades_tier_when_points_window_expires(self) -> None:
+        config = loyalty.get_program_config()
+        config.tier_gold_threshold = 100
+        config.tier_points_window_months = 1
+        config.save(update_fields=["tier_gold_threshold", "tier_points_window_months", "updated_at"])
+
+        wallet = UserLoyaltyWallet.objects.create(
+            user=self.user,
+            available_points=300,
+            total_points=300,
+            lifetime_points=300,
+            tier=UserLoyaltyWallet.TIER_GOLD,
+        )
+        old_tx = LoyaltyTransaction.objects.create(
+            wallet=wallet,
+            user=self.user,
+            transaction_type=LoyaltyTransaction.TYPE_EARN,
+            points=250,
+            reference_type=LoyaltyTransaction.REFERENCE_BOOKING,
+            reference_id=str(self.booking.id),
+        )
+        LoyaltyTransaction.objects.filter(id=old_tx.id).update(created_at=timezone.now() - timedelta(days=45))
+
+        snapshot = loyalty.get_wallet_snapshot(self.user, use_cache=False)
+        wallet.refresh_from_db()
+        self.assertEqual(snapshot.get("tier"), UserLoyaltyWallet.TIER_SILVER)
+        self.assertEqual(wallet.tier, UserLoyaltyWallet.TIER_SILVER)
+
+    def test_preview_checkout_redemption_blocks_when_daily_points_cap_exceeded(self) -> None:
+        config = loyalty.get_program_config()
+        config.daily_redemption_points_cap = 100
+        config.save(update_fields=["daily_redemption_points_cap", "updated_at"])
+
+        wallet = UserLoyaltyWallet.objects.create(
+            user=self.user,
+            available_points=500,
+            total_points=500,
+            lifetime_points=500,
+            tier=UserLoyaltyWallet.TIER_SILVER,
+        )
+        LoyaltyTransaction.objects.create(
+            wallet=wallet,
+            user=self.user,
+            transaction_type=LoyaltyTransaction.TYPE_REDEEM,
+            points=90,
+            reference_type=LoyaltyTransaction.REFERENCE_SYSTEM,
+            reference_id="seed",
+        )
+
+        preview, error, status_code = loyalty.preview_checkout_redemption(
+            self.user,
+            {
+                "subtotal": "300.00",
+                "points": 20,
+            },
+        )
+
+        self.assertIsNone(preview)
+        self.assertEqual(status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertIn("cap", str((error or {}).get("message") or "").lower())
+
+    def test_redeem_reward_blocks_on_reward_cooldown(self) -> None:
+        config = loyalty.get_program_config()
+        config.reward_redeem_cooldown_minutes = 60
+        config.save(update_fields=["reward_redeem_cooldown_minutes", "updated_at"])
+
+        wallet = UserLoyaltyWallet.objects.create(
+            user=self.user,
+            available_points=500,
+            total_points=500,
+            lifetime_points=500,
+            tier=UserLoyaltyWallet.TIER_SILVER,
+        )
+        reward = Reward.objects.create(
+            vendor=self.vendor,
+            title="Cooldown Reward",
+            reward_type=Reward.TYPE_DISCOUNT,
+            points_required=100,
+            discount_amount=Decimal("40.00"),
+            is_active=True,
+        )
+        RewardRedemption.objects.create(
+            user=self.user,
+            reward=reward,
+            points_used=100,
+            status=RewardRedemption.STATUS_UNUSED,
+            expires_at=timezone.now() + timedelta(days=7),
+        )
+
+        request = type(
+            "Request",
+            (),
+            {
+                "user": self.user,
+                "data": {"reward_id": reward.id},
+            },
+        )()
+        payload, status_code = loyalty.redeem_reward_for_customer(request)
+
+        self.assertEqual(status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertIn("cooldown", str(payload.get("message") or "").lower())
+
 
 class ReferralWalletLifecycleTests(TestCase):
     """Referral signup, reward trigger, and wallet credit/debit coverage."""
@@ -3183,7 +3435,82 @@ class ReferralWalletLifecycleTests(TestCase):
         )
         _, self.showtime = services._get_or_create_showtime_for_context(self.show, self.show.hall)
 
+    def test_referral_anti_fraud_blocks_same_ip_and_device(self) -> None:
+        self.referrer.signup_ip_address = "10.20.30.40"
+        self.referrer.signup_device_fingerprint = "device-referrer"
+        self.referrer.save(update_fields=["signup_ip_address", "signup_device_fingerprint"])
+
+        blocked_ip_reason = services._referral_anti_fraud_reason(
+            referrer=self.referrer,
+            signup_email="new-user@meroticket.local",
+            signup_phone="9850000999",
+            signup_ip="10.20.30.40",
+            signup_device_fingerprint="device-new",
+        )
+        blocked_device_reason = services._referral_anti_fraud_reason(
+            referrer=self.referrer,
+            signup_email="new-user@meroticket.local",
+            signup_phone="9850000999",
+            signup_ip="10.20.30.41",
+            signup_device_fingerprint="device-referrer",
+        )
+
+        self.assertIn("same IP", blocked_ip_reason or "")
+        self.assertIn("same device", blocked_device_reason or "")
+
+    def test_referral_reward_is_held_before_spendable(self) -> None:
+        ReferralPolicy.objects.update_or_create(
+            key="default",
+            defaults={
+                "referrer_reward_amount": Decimal("120.00"),
+                "referred_reward_amount": Decimal("60.00"),
+                "reward_hold_period_days": 5,
+                "reward_expiry_days": 30,
+                "wallet_cap_percent": Decimal("20.00"),
+                "max_signups_per_ip_per_day": 3,
+                "max_signups_per_device_per_day": 2,
+                "auto_approve_rewards": True,
+                "is_active": True,
+            },
+        )
+
+        referral = Referral.objects.create(
+            referrer=self.referrer,
+            referred_user=self.customer,
+            referral_code=self.referrer.referral_code,
+            status=Referral.STATUS_PENDING,
+            expires_at=timezone.now() + timedelta(days=30),
+        )
+        booking = Booking.objects.create(
+            user=self.customer,
+            showtime=self.showtime,
+            booking_status=services.BOOKING_STATUS_CONFIRMED,
+            total_amount=Decimal("250.00"),
+        )
+
+        result = services.process_referral_reward_for_booking(booking)
+        self.assertTrue(result.get("awarded"), result)
+
+        transaction_row = ReferralTransaction.objects.get(
+            referral=referral,
+            user=self.referrer,
+            reason=ReferralTransaction.REASON_REFERRER_REWARD,
+        )
+        self.assertIsNotNone(transaction_row.available_at)
+        self.assertGreater(transaction_row.available_at, timezone.now())
+
+        wallet_snapshot = services.get_referral_wallet_snapshot(self.referrer, use_cache=False)
+        self.assertGreater(wallet_snapshot.get("balance", 0), 0)
+        self.assertEqual(wallet_snapshot.get("spendable_balance"), 0.0)
+        self.assertGreater(wallet_snapshot.get("locked_balance", 0), 0)
+
     def test_register_user_with_referral_code_rewards_referrer_immediately(self) -> None:
+        OTPVerification.objects.create(
+            email="new.referral@meroticket.local",
+            otp="123456",
+            is_verified=True,
+        )
+
         request = type(
             "Request",
             (),
@@ -3608,6 +3935,115 @@ class SubscriptionLifecycleTests(TestCase):
         second_reversal = subscription.reverse_booking_subscription_effects(booking, reason="repeat")
         self.assertEqual(second_reversal.get("free_tickets_restored"), 0)
         self.assertEqual(Decimal(str(second_reversal.get("discount_refund_amount") or 0)), Decimal("0.00"))
+
+    def test_renew_customer_extends_active_subscription(self) -> None:
+        plan = self._create_plan(
+            code="SUB-RENEW-001",
+            name="Renew Plan",
+            price=Decimal("180.00"),
+        )
+        subscribe_payload, subscribe_status = subscription.subscribe_customer(
+            self._request(self.user, {"plan_id": plan.id})
+        )
+        self.assertEqual(subscribe_status, status.HTTP_201_CREATED, subscribe_payload)
+
+        active = UserSubscription.objects.get(user=self.user, status=UserSubscription.STATUS_ACTIVE)
+        previous_end = active.end_at
+
+        renew_payload, renew_status = subscription.renew_customer_subscription(
+            self._request(self.user, {"payment_method": "ESEWA"})
+        )
+        self.assertEqual(renew_status, status.HTTP_200_OK, renew_payload)
+
+        active.refresh_from_db()
+        self.assertGreater(active.end_at, previous_end)
+        self.assertTrue(
+            SubscriptionTransaction.objects.filter(
+                user=self.user,
+                subscription=active,
+                transaction_type=SubscriptionTransaction.TYPE_RENEWAL,
+                status=SubscriptionTransaction.STATUS_SUCCESS,
+            ).exists()
+        )
+
+    def test_pause_and_resume_subscription_restores_remaining_time(self) -> None:
+        plan = self._create_plan(
+            code="SUB-PAUSE-001",
+            name="Pause Plan",
+            price=Decimal("210.00"),
+        )
+        subscribe_payload, subscribe_status = subscription.subscribe_customer(
+            self._request(self.user, {"plan_id": plan.id})
+        )
+        self.assertEqual(subscribe_status, status.HTTP_201_CREATED, subscribe_payload)
+
+        active = UserSubscription.objects.get(user=self.user, status=UserSubscription.STATUS_ACTIVE)
+        active.start_at = timezone.now() - timedelta(days=10)
+        active.end_at = timezone.now() + timedelta(days=5)
+        active.save(update_fields=["start_at", "end_at", "updated_at"])
+
+        pause_payload, pause_status = subscription.pause_customer_subscription(
+            self._request(self.user, {"reason": "Travel"})
+        )
+        self.assertEqual(pause_status, status.HTTP_200_OK, pause_payload)
+        active.refresh_from_db()
+        self.assertEqual(active.status, UserSubscription.STATUS_PAUSED)
+        paused_seconds = int(active.paused_remaining_seconds or 0)
+        self.assertGreater(paused_seconds, 0)
+
+        resume_payload, resume_status = subscription.resume_customer_subscription(
+            self._request(self.user, {"reason": "Back"})
+        )
+        self.assertEqual(resume_status, status.HTTP_200_OK, resume_payload)
+        active.refresh_from_db()
+        self.assertEqual(active.status, UserSubscription.STATUS_ACTIVE)
+        self.assertGreater(active.end_at, timezone.now())
+        self.assertEqual(int(active.paused_remaining_seconds or 0), 0)
+        self.assertTrue(
+            SubscriptionTransaction.objects.filter(
+                user=self.user,
+                subscription=active,
+                transaction_type=SubscriptionTransaction.TYPE_PAUSE,
+                status=SubscriptionTransaction.STATUS_SUCCESS,
+            ).exists()
+        )
+        self.assertTrue(
+            SubscriptionTransaction.objects.filter(
+                user=self.user,
+                subscription=active,
+                transaction_type=SubscriptionTransaction.TYPE_RESUME,
+                status=SubscriptionTransaction.STATUS_SUCCESS,
+            ).exists()
+        )
+
+    def test_preview_checkout_uses_coupon_and_referral_signals_for_compatibility(self) -> None:
+        plan = self._create_plan(
+            code="SUB-COMPAT-001",
+            name="Compatibility Plan",
+            price=Decimal("300.00"),
+        )
+        plan.is_stackable_with_coupon = False
+        plan.is_stackable_with_referral_wallet = False
+        plan.save(update_fields=["is_stackable_with_coupon", "is_stackable_with_referral_wallet", "updated_at"])
+
+        subscribe_payload, subscribe_status = subscription.subscribe_customer(
+            self._request(self.user, {"plan_id": plan.id})
+        )
+        self.assertEqual(subscribe_status, status.HTTP_201_CREATED, subscribe_payload)
+
+        preview, error, status_code = subscription.preview_checkout_subscription(
+            self.user.id,
+            {
+                "subtotal": "500",
+                "vendor_id": self.vendor.id,
+                "seat_count": 2,
+                "coupon_code": "SPRING50",
+                "referral_wallet_amount": "20",
+            },
+        )
+        self.assertIsNone(preview)
+        self.assertEqual(status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("combined", str((error or {}).get("message") or "").lower())
 
 
 class GroupBookingSplitPaymentTests(TestCase):

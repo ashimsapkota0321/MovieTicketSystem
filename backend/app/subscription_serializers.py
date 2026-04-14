@@ -99,6 +99,23 @@ class SubscriptionCancelSerializer(serializers.Serializer):
     reason = serializers.CharField(max_length=255, required=False, allow_blank=True)
 
 
+class SubscriptionRenewSerializer(serializers.Serializer):
+    payment_method = serializers.CharField(max_length=30, required=False, allow_blank=True)
+    payment_status = serializers.ChoiceField(
+        choices=["SUCCESS", "FAILED"],
+        required=False,
+    )
+    simulate_failure = serializers.BooleanField(required=False)
+
+
+class SubscriptionPauseSerializer(serializers.Serializer):
+    reason = serializers.CharField(max_length=255, required=False, allow_blank=True)
+
+
+class SubscriptionResumeSerializer(serializers.Serializer):
+    reason = serializers.CharField(max_length=255, required=False, allow_blank=True)
+
+
 class SubscriptionCheckoutPreviewSerializer(serializers.Serializer):
     user_subscription_id = serializers.IntegerField(min_value=1, required=False)
     subtotal = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=0, required=True)
@@ -107,5 +124,7 @@ class SubscriptionCheckoutPreviewSerializer(serializers.Serializer):
     use_free_ticket = serializers.BooleanField(required=False)
     requested_free_tickets = serializers.IntegerField(min_value=0, required=False)
     coupon_applied = serializers.BooleanField(required=False)
+    coupon_code = serializers.CharField(max_length=80, required=False, allow_blank=True)
     loyalty_applied = serializers.BooleanField(required=False)
     referral_wallet_applied = serializers.BooleanField(required=False)
+    referral_wallet_amount = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=0, required=False)

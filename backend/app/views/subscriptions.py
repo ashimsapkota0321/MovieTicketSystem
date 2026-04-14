@@ -77,6 +77,30 @@ def subscription_cancel(request: Any):
 
 @api_view(["POST"])
 @role_required(ROLE_CUSTOMER)
+def subscription_renew(request: Any):
+    """Renew current active subscription for one additional plan cycle."""
+    payload, status_code = subscription.renew_customer_subscription(request)
+    return Response(payload, status=status_code)
+
+
+@api_view(["POST"])
+@role_required(ROLE_CUSTOMER)
+def subscription_pause(request: Any):
+    """Pause active subscription and preserve remaining time for resume."""
+    payload, status_code = subscription.pause_customer_subscription(request)
+    return Response(payload, status=status_code)
+
+
+@api_view(["POST"])
+@role_required(ROLE_CUSTOMER)
+def subscription_resume(request: Any):
+    """Resume previously paused subscription."""
+    payload, status_code = subscription.resume_customer_subscription(request)
+    return Response(payload, status=status_code)
+
+
+@api_view(["POST"])
+@role_required(ROLE_CUSTOMER)
 def subscription_checkout_preview(request: Any):
     """Preview how current subscription affects booking checkout totals."""
     payload, status_code = subscription.preview_checkout_for_customer(request)

@@ -214,6 +214,30 @@ def vendor_wallet_withdraw(request: Any):
     return Response(payload, status=status_code)
 
 
+@api_view(["POST"])
+@vendor_required
+def vendor_payout_profile(request: Any):
+    """Create or update the vendor payout destination and payout policy."""
+    payload, status_code = services.update_vendor_payout_profile(request)
+    return Response(payload, status=status_code)
+
+
+@api_view(["POST"])
+@vendor_required
+def vendor_payout_profile_request_verification(request: Any):
+    """Request an OTP to verify the vendor payout destination."""
+    payload, status_code = services.request_vendor_payout_destination_verification(request)
+    return Response(payload, status=status_code)
+
+
+@api_view(["POST"])
+@vendor_required
+def vendor_payout_profile_verify(request: Any):
+    """Verify the vendor payout destination using an OTP."""
+    payload, status_code = services.verify_vendor_payout_destination(request)
+    return Response(payload, status=status_code)
+
+
 @api_view(["GET"])
 @vendor_required
 def vendor_wallet_transactions(request: Any):
@@ -251,6 +275,18 @@ def admin_withdrawal_reject(request: Any, transaction_id: int):
         return Response({"message": "Withdrawal request not found."}, status=status.HTTP_404_NOT_FOUND)
 
     payload, status_code = services.reject_admin_withdrawal_request(request, withdrawal_txn)
+    return Response(payload, status=status_code)
+
+
+@api_view(["POST"])
+@admin_required
+def admin_withdrawal_retry(request: Any, transaction_id: int):
+    """Retry a failed withdrawal settlement."""
+    withdrawal_txn = Transaction.objects.filter(id=transaction_id).first()
+    if not withdrawal_txn:
+        return Response({"message": "Withdrawal request not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    payload, status_code = services.retry_failed_withdrawal_settlement(request, withdrawal_txn)
     return Response(payload, status=status_code)
 
 

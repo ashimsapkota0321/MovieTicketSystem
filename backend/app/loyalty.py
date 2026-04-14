@@ -28,6 +28,8 @@ from .utils import coalesce, get_payload, parse_bool, parse_datetime_utc
 
 LOYALTY_CACHE_KEY_PREFIX = "mt:loyalty:wallet:"
 LOYALTY_CACHE_TTL_SECONDS = 60 * 5
+LOYALTY_REDEEM_ATTEMPT_CACHE_PREFIX = "mt:loyalty:redeem:attempts:"
+LOYALTY_REDEEM_ATTEMPT_CACHE_TTL_SECONDS = 60 * 60
 DEFAULT_REWARD_HOLD_DAYS = 30
 
 
@@ -67,10 +69,15 @@ def get_program_config() -> LoyaltyProgramConfig:
             "redemption_value_per_point": Decimal("1.00"),
             "first_booking_bonus": 50,
             "points_expiry_months": 12,
+            "tier_points_window_months": 12,
             "tier_silver_threshold": 0,
             "tier_gold_threshold": 1500,
             "tier_platinum_threshold": 5000,
             "referral_bonus_points": 100,
+            "daily_redemption_points_cap": 2000,
+            "daily_redemption_count_cap": 5,
+            "reward_redeem_cooldown_minutes": 30,
+            "max_redemption_attempts_per_hour": 15,
             "is_active": True,
         },
     )
@@ -83,6 +90,154 @@ def _resolve_wallet_tier(lifetime_points: int, config: LoyaltyProgramConfig) -> 
     if lifetime_points >= int(config.tier_gold_threshold or 0):
         return UserLoyaltyWallet.TIER_GOLD
     return UserLoyaltyWallet.TIER_SILVER
+
+
+def _tier_window_start(config: LoyaltyProgramConfig, *, now: Optional[Any] = None) -> Any:
+    effective_now = now or timezone.now()
+    months = max(int(config.tier_points_window_months or 12), 1)
+    return effective_now - timedelta(days=months * 30)
+
+
+def _rolling_qualified_points(user_id: int, config: LoyaltyProgramConfig, *, now: Optional[Any] = None) -> int:
+    start_at = _tier_window_start(config, now=now)
+    total = (
+        LoyaltyTransaction.objects.filter(
+            user_id=user_id,
+            transaction_type=LoyaltyTransaction.TYPE_EARN,
+            created_at__gte=start_at,
+        ).aggregate(points=Sum("points")).get("points")
+        or 0
+    )
+    return int(total)
+
+
+def _resolve_tier_by_rolling_points(qualified_points: int, config: LoyaltyProgramConfig) -> str:
+    if qualified_points >= int(config.tier_platinum_threshold or 0):
+        return UserLoyaltyWallet.TIER_PLATINUM
+    if qualified_points >= int(config.tier_gold_threshold or 0):
+        return UserLoyaltyWallet.TIER_GOLD
+    return UserLoyaltyWallet.TIER_SILVER
+
+
+def _next_tier_progress(qualified_points: int, config: LoyaltyProgramConfig) -> dict[str, Any]:
+    gold_threshold = int(config.tier_gold_threshold or 0)
+    platinum_threshold = int(config.tier_platinum_threshold or 0)
+    if qualified_points >= platinum_threshold:
+        return {
+            "next_tier": UserLoyaltyWallet.TIER_PLATINUM,
+            "points_to_next_tier": 0,
+        }
+    if qualified_points >= gold_threshold:
+        return {
+            "next_tier": UserLoyaltyWallet.TIER_PLATINUM,
+            "points_to_next_tier": max(platinum_threshold - qualified_points, 0),
+        }
+    return {
+        "next_tier": UserLoyaltyWallet.TIER_GOLD,
+        "points_to_next_tier": max(gold_threshold - qualified_points, 0),
+    }
+
+
+def _tier_valid_until(user_id: int, config: LoyaltyProgramConfig) -> Optional[Any]:
+    latest_earn = (
+        LoyaltyTransaction.objects.filter(
+            user_id=user_id,
+            transaction_type=LoyaltyTransaction.TYPE_EARN,
+        )
+        .order_by("-created_at", "-id")
+        .values_list("created_at", flat=True)
+        .first()
+    )
+    if not latest_earn:
+        return None
+    months = max(int(config.tier_points_window_months or 12), 1)
+    return latest_earn + timedelta(days=months * 30)
+
+
+def _redeem_attempt_cache_key(user_id: int) -> str:
+    return f"{LOYALTY_REDEEM_ATTEMPT_CACHE_PREFIX}{int(user_id)}"
+
+
+def _register_redemption_attempt(user_id: int) -> int:
+    key = _redeem_attempt_cache_key(user_id)
+    current = _coerce_int(cache.get(key), 0) + 1
+    cache.set(key, current, timeout=LOYALTY_REDEEM_ATTEMPT_CACHE_TTL_SECONDS)
+    return current
+
+
+def _redemption_usage_today(user_id: int, *, now: Optional[Any] = None) -> tuple[int, int]:
+    effective_now = now or timezone.now()
+    start_of_day = effective_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    points_used = (
+        LoyaltyTransaction.objects.filter(
+            user_id=user_id,
+            transaction_type=LoyaltyTransaction.TYPE_REDEEM,
+            created_at__gte=start_of_day,
+        ).aggregate(points=Sum("points")).get("points")
+        or 0
+    )
+    redemption_count = LoyaltyTransaction.objects.filter(
+        user_id=user_id,
+        transaction_type=LoyaltyTransaction.TYPE_REDEEM,
+        created_at__gte=start_of_day,
+    ).count()
+    return int(points_used), int(redemption_count)
+
+
+def _validate_redemption_policy(
+    *,
+    user_id: int,
+    config: LoyaltyProgramConfig,
+    points_to_use: int,
+    reward_id: Optional[int] = None,
+    now: Optional[Any] = None,
+) -> Optional[dict[str, Any]]:
+    effective_now = now or timezone.now()
+    attempt_count = _register_redemption_attempt(user_id)
+    attempts_cap = max(int(config.max_redemption_attempts_per_hour or 0), 0)
+    if attempts_cap > 0 and attempt_count > attempts_cap:
+        return {
+            "message": "Too many redemption attempts. Please try again later.",
+            "attempts_this_hour": attempt_count,
+            "attempts_cap": attempts_cap,
+        }
+
+    points_today, count_today = _redemption_usage_today(user_id, now=effective_now)
+    points_cap = max(int(config.daily_redemption_points_cap or 0), 0)
+    count_cap = max(int(config.daily_redemption_count_cap or 0), 0)
+
+    if points_cap > 0 and points_today + int(points_to_use or 0) > points_cap:
+        return {
+            "message": "Daily loyalty redemption points cap exceeded.",
+            "daily_points_cap": points_cap,
+            "points_used_today": points_today,
+            "requested_points": int(points_to_use or 0),
+        }
+
+    if count_cap > 0 and count_today + 1 > count_cap:
+        return {
+            "message": "Daily loyalty redemption count cap exceeded.",
+            "daily_count_cap": count_cap,
+            "redemptions_today": count_today,
+        }
+
+    if reward_id:
+        cooldown_minutes = max(int(config.reward_redeem_cooldown_minutes or 0), 0)
+        if cooldown_minutes > 0:
+            cutoff = effective_now - timedelta(minutes=cooldown_minutes)
+            cooldown_hit = RewardRedemption.objects.filter(
+                user_id=user_id,
+                reward_id=reward_id,
+                status__in=[RewardRedemption.STATUS_UNUSED, RewardRedemption.STATUS_USED],
+                created_at__gte=cutoff,
+            ).exists()
+            if cooldown_hit:
+                return {
+                    "message": "Reward redemption cooldown active. Please wait before redeeming this reward again.",
+                    "cooldown_minutes": cooldown_minutes,
+                }
+
+    return None
 
 
 def _tier_multiplier(tier: str) -> Decimal:
@@ -100,12 +255,25 @@ def _ensure_wallet(user: User) -> UserLoyaltyWallet:
 
 
 def _wallet_payload(wallet: UserLoyaltyWallet) -> dict[str, Any]:
+    config = get_program_config()
+    qualified_points = _rolling_qualified_points(wallet.user_id, config)
+    resolved_tier = _resolve_tier_by_rolling_points(qualified_points, config)
+    if wallet.tier != resolved_tier:
+        wallet.tier = resolved_tier
+        wallet.save(update_fields=["tier", "updated_at"])
+    tier_valid_until = _tier_valid_until(wallet.user_id, config)
+    next_progress = _next_tier_progress(qualified_points, config)
     return {
         "user_id": wallet.user_id,
         "total_points": int(wallet.total_points or 0),
         "available_points": int(wallet.available_points or 0),
         "lifetime_points": int(wallet.lifetime_points or 0),
-        "tier": wallet.tier,
+        "tier": resolved_tier,
+        "tier_qualified_points": int(qualified_points),
+        "tier_window_months": int(config.tier_points_window_months or 12),
+        "tier_valid_until": tier_valid_until.isoformat() if tier_valid_until else None,
+        "next_tier": next_progress.get("next_tier"),
+        "points_to_next_tier": int(next_progress.get("points_to_next_tier") or 0),
         "updated_at": wallet.updated_at.isoformat() if wallet.updated_at else None,
     }
 
@@ -215,7 +383,8 @@ def _update_wallet_totals(
     wallet.available_points = next_available
     wallet.total_points = next_available
     wallet.lifetime_points = next_lifetime
-    wallet.tier = _resolve_wallet_tier(next_lifetime, cfg)
+    qualified_points = _rolling_qualified_points(wallet.user_id, cfg)
+    wallet.tier = _resolve_tier_by_rolling_points(qualified_points, cfg)
     wallet.save(update_fields=["available_points", "total_points", "lifetime_points", "tier", "updated_at"])
     clear_wallet_cache(wallet.user_id)
 
@@ -363,6 +532,19 @@ def preview_checkout_redemption(
             "required_points": total_points_to_use,
         }, status.HTTP_400_BAD_REQUEST
 
+    policy_error = _validate_redemption_policy(
+        user_id=user.id,
+        config=config,
+        points_to_use=total_points_to_use,
+        reward_id=reward.id if reward else None,
+    )
+    if policy_error:
+        return None, policy_error, status.HTTP_429_TOO_MANY_REQUESTS
+
+    points_used_today, redemptions_today = _redemption_usage_today(user.id)
+    daily_points_cap = int(config.daily_redemption_points_cap or 0)
+    daily_count_cap = int(config.daily_redemption_count_cap or 0)
+
     total_discount = _quantize_money(reward_discount + direct_discount)
     final_total = subtotal - total_discount
     if final_total < Decimal("0"):
@@ -381,6 +563,15 @@ def preview_checkout_redemption(
         "total_discount": float(total_discount),
         "final_total": float(final_total),
         "available_points": available_points,
+        "caps": {
+            "daily_points_cap": daily_points_cap,
+            "daily_count_cap": daily_count_cap,
+            "points_used_today": points_used_today,
+            "redemptions_today": redemptions_today,
+            "points_remaining_today": max(daily_points_cap - points_used_today, 0) if daily_points_cap > 0 else None,
+            "count_remaining_today": max(daily_count_cap - redemptions_today, 0) if daily_count_cap > 0 else None,
+            "reward_cooldown_minutes": int(config.reward_redeem_cooldown_minutes or 0),
+        },
         "is_valid": True,
     }
     return preview, None, status.HTTP_200_OK
@@ -416,6 +607,15 @@ def consume_checkout_redemption(
                 "available_points": available_points,
                 "required_points": total_points_to_use,
             }, status.HTTP_400_BAD_REQUEST
+
+        policy_error = _validate_redemption_policy(
+            user_id=user.id,
+            config=get_program_config(),
+            points_to_use=total_points_to_use,
+            reward_id=reward_id if reward_id > 0 else None,
+        )
+        if policy_error:
+            return policy_error, status.HTTP_429_TOO_MANY_REQUESTS
 
         reward_obj: Optional[Reward] = None
         redemption: Optional[RewardRedemption] = None
@@ -678,6 +878,7 @@ def get_customer_dashboard(request: Any) -> tuple[dict[str, Any], int]:
         return {"message": "Authentication required."}, status.HTTP_401_UNAUTHORIZED
 
     wallet = get_wallet_snapshot(customer)
+    config = get_program_config()
     aggregates = LoyaltyTransaction.objects.filter(user_id=customer.id).values("transaction_type").annotate(
         points=Sum("points")
     )
@@ -707,6 +908,8 @@ def get_customer_dashboard(request: Any) -> tuple[dict[str, Any], int]:
         status=RewardRedemption.STATUS_UNUSED,
     ).count()
 
+    points_used_today, redemptions_today = _redemption_usage_today(customer.id)
+
     return {
         "wallet": wallet,
         "summary": {
@@ -716,6 +919,26 @@ def get_customer_dashboard(request: Any) -> tuple[dict[str, Any], int]:
             "reversed": summary.get(LoyaltyTransaction.TYPE_REVERSE_EARN, 0),
             "restored": summary.get(LoyaltyTransaction.TYPE_RESTORE, 0),
             "pending_redemptions": pending_redemptions,
+            "points_used_today": points_used_today,
+            "redemptions_today": redemptions_today,
+        },
+        "tier_progress": {
+            "tier": wallet.get("tier"),
+            "qualified_points": int(wallet.get("tier_qualified_points") or 0),
+            "window_months": int(wallet.get("tier_window_months") or 12),
+            "tier_valid_until": wallet.get("tier_valid_until"),
+            "next_tier": wallet.get("next_tier"),
+            "points_to_next_tier": int(wallet.get("points_to_next_tier") or 0),
+        },
+        "redemption_caps": {
+            "daily_points_cap": int(config.daily_redemption_points_cap or 0),
+            "daily_count_cap": int(config.daily_redemption_count_cap or 0),
+            "points_used_today": points_used_today,
+            "redemptions_today": redemptions_today,
+            "points_remaining_today": max(int(config.daily_redemption_points_cap or 0) - points_used_today, 0),
+            "count_remaining_today": max(int(config.daily_redemption_count_cap or 0) - redemptions_today, 0),
+            "reward_cooldown_minutes": int(config.reward_redeem_cooldown_minutes or 0),
+            "max_redemption_attempts_per_hour": int(config.max_redemption_attempts_per_hour or 0),
         },
         "transactions": recent,
     }, status.HTTP_200_OK
@@ -851,6 +1074,15 @@ def redeem_reward_for_customer(request: Any) -> tuple[dict[str, Any], int]:
                 "available_points": available_points,
                 "required_points": required_points,
             }, status.HTTP_400_BAD_REQUEST
+
+        policy_error = _validate_redemption_policy(
+            user_id=customer.id,
+            config=get_program_config(),
+            points_to_use=required_points,
+            reward_id=reward.id,
+        )
+        if policy_error:
+            return policy_error, status.HTTP_429_TOO_MANY_REQUESTS
 
         if reward.stock_limit is not None and int(reward.redeemed_count or 0) >= int(reward.stock_limit):
             return {"message": "Reward stock is exhausted."}, status.HTTP_400_BAD_REQUEST
@@ -1177,10 +1409,15 @@ def _serialize_program_config(config: LoyaltyProgramConfig) -> dict[str, Any]:
         "redemption_value_per_point": float(_to_decimal(config.redemption_value_per_point, Decimal("1"))),
         "first_booking_bonus": int(config.first_booking_bonus or 0),
         "points_expiry_months": int(config.points_expiry_months or 0),
+        "tier_points_window_months": int(config.tier_points_window_months or 0),
         "tier_silver_threshold": int(config.tier_silver_threshold or 0),
         "tier_gold_threshold": int(config.tier_gold_threshold or 0),
         "tier_platinum_threshold": int(config.tier_platinum_threshold or 0),
         "referral_bonus_points": int(config.referral_bonus_points or 0),
+        "daily_redemption_points_cap": int(config.daily_redemption_points_cap or 0),
+        "daily_redemption_count_cap": int(config.daily_redemption_count_cap or 0),
+        "reward_redeem_cooldown_minutes": int(config.reward_redeem_cooldown_minutes or 0),
+        "max_redemption_attempts_per_hour": int(config.max_redemption_attempts_per_hour or 0),
         "is_active": bool(config.is_active),
         "updated_at": config.updated_at.isoformat() if config.updated_at else None,
     }
@@ -1219,10 +1456,15 @@ def update_admin_loyalty_rule(request: Any) -> tuple[dict[str, Any], int]:
     for field in [
         "first_booking_bonus",
         "points_expiry_months",
+        "tier_points_window_months",
         "tier_silver_threshold",
         "tier_gold_threshold",
         "tier_platinum_threshold",
         "referral_bonus_points",
+        "daily_redemption_points_cap",
+        "daily_redemption_count_cap",
+        "reward_redeem_cooldown_minutes",
+        "max_redemption_attempts_per_hour",
     ]:
         if field in payload:
             value = _coerce_int(payload.get(field), -1)

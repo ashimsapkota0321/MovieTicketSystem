@@ -196,6 +196,22 @@ def _env_non_negative_int(name: str, default: int) -> int:
     except (TypeError, ValueError):
         parsed = int(default)
     return max(parsed, 0)
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, str(default))
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _env_str(name: str, default: str) -> str:
+    value = str(os.environ.get(name, default) or "").strip()
+    return value if value else str(default)
+
+
+CORS_ALLOW_CREDENTIALS = _env_bool("CORS_ALLOW_CREDENTIALS", True)
     
 # Ticket validation API rate limiting (per minute)
 TICKET_VALIDATION_SCAN_RATE_LIMIT_STAFF_PER_MINUTE = _env_non_negative_int(
@@ -213,6 +229,56 @@ TICKET_VALIDATION_MONITOR_RATE_LIMIT_STAFF_PER_MINUTE = _env_non_negative_int(
 TICKET_VALIDATION_MONITOR_RATE_LIMIT_IP_PER_MINUTE = _env_non_negative_int(
     "TICKET_VALIDATION_MONITOR_RATE_LIMIT_IP_PER_MINUTE",
     240,
+)
+
+
+# Cache backend configuration (Redis in scale environments).
+_cache_backend = str(os.environ.get("CACHE_BACKEND", "redis")).strip().lower()
+_redis_url = str(os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/1")).strip() or "redis://127.0.0.1:6379/1"
+_cache_timeout = max(_env_int("CACHE_DEFAULT_TIMEOUT_SECONDS", 300), 30)
+if _cache_backend in {"redis", "django-redis"}:
+    try:
+        import redis  # noqa: F401
+    except Exception:
+        _cache_backend = "locmem"
+
+if _cache_backend in {"redis", "django-redis"}:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": _redis_url,
+            "TIMEOUT": _cache_timeout,
+            "KEY_PREFIX": str(os.environ.get("CACHE_KEY_PREFIX", "mt")).strip() or "mt",
+        }
+    }
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "mero-ticket-local-cache",
+            "TIMEOUT": _cache_timeout,
+            "KEY_PREFIX": str(os.environ.get("CACHE_KEY_PREFIX", "mt")).strip() or "mt",
+        }
+    }
+
+
+# Cookie-based auth session configuration.
+APP_AUTH_COOKIE_ENABLED = _env_bool("APP_AUTH_COOKIE_ENABLED", True)
+APP_AUTH_ACCESS_COOKIE_NAME = _env_str("APP_AUTH_ACCESS_COOKIE_NAME", "mt_access_token")
+APP_AUTH_REFRESH_COOKIE_NAME = _env_str("APP_AUTH_REFRESH_COOKIE_NAME", "mt_refresh_token")
+APP_AUTH_COOKIE_PATH = _env_str("APP_AUTH_COOKIE_PATH", "/")
+_auth_cookie_domain = str(os.environ.get("APP_AUTH_COOKIE_DOMAIN", "")).strip()
+APP_AUTH_COOKIE_DOMAIN = _auth_cookie_domain or None
+APP_AUTH_COOKIE_SECURE = _env_bool("APP_AUTH_COOKIE_SECURE", not DEBUG)
+_auth_cookie_samesite = _env_str("APP_AUTH_COOKIE_SAMESITE", "Lax").capitalize()
+APP_AUTH_COOKIE_SAMESITE = _auth_cookie_samesite if _auth_cookie_samesite in {"Lax", "Strict", "None"} else "Lax"
+APP_AUTH_ACCESS_TOKEN_MAX_AGE_SECONDS = max(
+    _env_int("APP_AUTH_ACCESS_TOKEN_MAX_AGE_SECONDS", 60 * 15),
+    60,
+)
+APP_AUTH_REFRESH_TOKEN_MAX_AGE_SECONDS = max(
+    _env_int("APP_AUTH_REFRESH_TOKEN_MAX_AGE_SECONDS", 60 * 60 * 24 * 30),
+    60,
 )
 
 
@@ -244,18 +310,6 @@ DEFAULT_FROM_EMAIL = (
     or EMAIL_HOST_USER
     or "noreply@meroticket.local"
 )
-
-# Resend email provider configuration
-RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "").strip()
-RESEND_FROM_EMAIL = os.environ.get(
-    "RESEND_FROM_EMAIL",
-    "Mero Ticket <onboarding@resend.dev>",
-).strip() or "Mero Ticket <onboarding@resend.dev>"
-RESEND_API_BASE_URL = os.environ.get(
-    "RESEND_API_BASE_URL",
-    "https://api.resend.com",
-).strip() or "https://api.resend.com"
-
 
 LOGGING = {
     "version": 1,

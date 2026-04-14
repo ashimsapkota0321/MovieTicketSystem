@@ -1078,6 +1078,12 @@ def _confirm_booking_after_payment(
             **ticket_security_fields,
         )
 
+    try:
+        services.send_ticket_confirmation_email(ticket)
+    except Exception:
+        # Keep the booking success response even if email delivery fails.
+        pass
+
     if booking_instance and linked_show:
         try:
             services._notify_payment_success(booking_instance, linked_show)
@@ -1442,6 +1448,12 @@ def user_wallet_booking_pay(request: Any):
             payload=ticket_payload,
             **ticket_security_fields,
         )
+
+    try:
+        services.send_ticket_confirmation_email(ticket)
+    except Exception:
+        # Keep the booking success response even if email delivery fails.
+        pass
 
     if booking_instance and linked_show:
         try:

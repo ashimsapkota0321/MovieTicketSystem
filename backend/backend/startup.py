@@ -150,11 +150,6 @@ def _validate_required_env_settings() -> None:
             if not str(getattr(settings, "EMAIL_HOST_PASSWORD", "") or "").strip():
                 errors.append("EMAIL_HOST_PASSWORD is required in production when SMTP backend is enabled")
 
-    resend_key = str(getattr(settings, "RESEND_API_KEY", "") or "").strip()
-    resend_from = str(getattr(settings, "RESEND_FROM_EMAIL", "") or "").strip()
-    if resend_key and not resend_from:
-        errors.append("RESEND_FROM_EMAIL is required when RESEND_API_KEY is set")
-
     if not settings.DEBUG:
         secret_key = str(getattr(settings, "SECRET_KEY", "") or "").strip()
         if not secret_key or "django-insecure" in secret_key:

@@ -34,6 +34,17 @@ DEFAULT_ACCESS_TOKEN_MAX_AGE_SECONDS = 60 * 15
 DEFAULT_REFRESH_TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24 * 30
 
 
+def _auth_cookie_enabled() -> bool:
+    """Return whether auth cookies are enabled in settings."""
+    return bool(getattr(settings, "APP_AUTH_COOKIE_ENABLED", True))
+
+
+def _access_cookie_name() -> str:
+    """Return configured access-token cookie name."""
+    name = str(getattr(settings, "APP_AUTH_ACCESS_COOKIE_NAME", "mt_access_token") or "").strip()
+    return name or "mt_access_token"
+
+
 def _access_token_max_age_seconds() -> int:
     """Return the configured auth access token max age in seconds."""
     configured = getattr(
@@ -154,21 +165,24 @@ def _session_payload_matches(session: AuthSession, token_payload: dict[str, Any]
 
 
 def _extract_bearer_token(request: Any) -> str:
-    """Extract Bearer token from Authorization header."""
+    """Extract access token from Authorization header or auth cookie."""
     header = ""
     if hasattr(request, "META"):
         header = str(request.META.get("HTTP_AUTHORIZATION") or "").strip()
     if not header and hasattr(request, "headers"):
         header = str(request.headers.get("Authorization") or "").strip()
-    if not header:
-        return ""
+    if header:
+        parts = header.split(None, 1)
+        if len(parts) == 2 and parts[0].lower() == "bearer":
+            return parts[1].strip()
 
-    parts = header.split(None, 1)
-    if len(parts) != 2:
+    if not _auth_cookie_enabled():
         return ""
-    if parts[0].lower() != "bearer":
+    try:
+        cookies = getattr(request, "COOKIES", {}) or {}
+    except Exception:
         return ""
-    return parts[1].strip()
+    return str(cookies.get(_access_cookie_name()) or "").strip()
 
 
 def _decode_access_token(token: str) -> Optional[dict[str, Any]]:

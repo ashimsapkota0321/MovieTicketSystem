@@ -121,7 +121,12 @@ def movie_reviews(request: Any, movie_id: int):
                 {"message": "You have already reviewed this movie."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        serializer.save(movie=movie)
+        review = serializer.save(movie=movie)
+        try:
+            services.notify_user_feedback_submission(review)
+        except Exception:
+            # Review creation should not fail because notification dispatch fails.
+            pass
     except Exception as exc:
         return Response(
             {"message": "Unable to save review", "error": str(exc)},

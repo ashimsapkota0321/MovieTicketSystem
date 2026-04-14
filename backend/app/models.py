@@ -1326,11 +1326,13 @@ class SubscriptionPlan(models.Model):
 
 class UserSubscription(models.Model):
     STATUS_ACTIVE = "ACTIVE"
+    STATUS_PAUSED = "PAUSED"
     STATUS_CANCELLED = "CANCELLED"
     STATUS_EXPIRED = "EXPIRED"
     STATUS_PENDING_PAYMENT = "PENDING_PAYMENT"
     STATUS_CHOICES = [
         (STATUS_ACTIVE, "Active"),
+        (STATUS_PAUSED, "Paused"),
         (STATUS_CANCELLED, "Cancelled"),
         (STATUS_EXPIRED, "Expired"),
         (STATUS_PENDING_PAYMENT, "Pending Payment"),
@@ -1354,6 +1356,8 @@ class UserSubscription(models.Model):
     end_at = models.DateTimeField()
     cancel_at_period_end = models.BooleanField(default=False)
     cancelled_at = models.DateTimeField(blank=True, null=True)
+    paused_at = models.DateTimeField(blank=True, null=True)
+    paused_remaining_seconds = models.PositiveIntegerField(default=0)
     upgraded_from = models.ForeignKey(
         "self",
         on_delete=models.SET_NULL,
@@ -1391,6 +1395,8 @@ class SubscriptionTransaction(models.Model):
     TYPE_FREE_TICKET_APPLIED = "FREE_TICKET_APPLIED"
     TYPE_REFUND = "REFUND"
     TYPE_CANCEL = "CANCEL"
+    TYPE_PAUSE = "PAUSE"
+    TYPE_RESUME = "RESUME"
     TYPE_EXPIRE = "EXPIRE"
     TYPE_CHOICES = [
         (TYPE_PURCHASE, "Purchase"),
@@ -1401,6 +1407,8 @@ class SubscriptionTransaction(models.Model):
         (TYPE_FREE_TICKET_APPLIED, "Free Ticket Applied"),
         (TYPE_REFUND, "Refund"),
         (TYPE_CANCEL, "Cancel"),
+        (TYPE_PAUSE, "Pause"),
+        (TYPE_RESUME, "Resume"),
         (TYPE_EXPIRE, "Expire"),
     ]
 
@@ -2063,6 +2071,9 @@ class PrivateScreeningRequest(models.Model):
     hall_preference = models.CharField(max_length=80, blank=True, null=True)
     special_requirements = models.TextField(blank=True, null=True)
     estimated_budget = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True)
+    invoice_total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    amount_paid = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    settlement_status = models.CharField(max_length=20, default="UNSETTLED")
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
     vendor = models.ForeignKey(
         Vendor,
@@ -2110,8 +2121,14 @@ class BulkTicketBatch(models.Model):
     show_date = models.DateField(blank=True, null=True)
     show_time = models.TimeField(blank=True, null=True)
     valid_until = models.DateField(blank=True, null=True)
+    seat_hold_count = models.PositiveIntegerField(default=0)
+    seat_hold_expires_at = models.DateTimeField(blank=True, null=True)
     unit_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    invoice_number = models.CharField(max_length=40, blank=True, null=True)
+    invoice_total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    amount_paid = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    settlement_status = models.CharField(max_length=20, default="UNSETTLED")
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_GENERATED)
     notes = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -2426,6 +2443,8 @@ class Notification(models.Model):
     EVENT_BOOKING_RESUME_PENDING = "BOOKING_RESUME_PENDING"
     EVENT_BOOKING_CANCELLED = "BOOKING_CANCELLED"
     EVENT_REFUND_PROCESSED = "REFUND_PROCESSED"
+    EVENT_CUSTOM_MESSAGE = "CUSTOM_MESSAGE"
+    EVENT_USER_FEEDBACK = "USER_FEEDBACK"
     EVENT_SUBSCRIPTION_EXPIRING = "SUBSCRIPTION_EXPIRING"
     EVENT_SUBSCRIPTION_EXPIRED = "SUBSCRIPTION_EXPIRED"
     EVENT_CHOICES = [
@@ -2437,6 +2456,8 @@ class Notification(models.Model):
         (EVENT_BOOKING_RESUME_PENDING, "Booking Resume Pending"),
         (EVENT_BOOKING_CANCELLED, "Booking Cancelled"),
         (EVENT_REFUND_PROCESSED, "Refund Processed"),
+        (EVENT_CUSTOM_MESSAGE, "Custom Message"),
+        (EVENT_USER_FEEDBACK, "User Feedback"),
         (EVENT_SUBSCRIPTION_EXPIRING, "Subscription Expiring"),
         (EVENT_SUBSCRIPTION_EXPIRED, "Subscription Expired"),
     ]
@@ -2477,6 +2498,9 @@ class BackgroundJob(models.Model):
     TYPE_GATEWAY_STATUS_CHECK = "GATEWAY_STATUS_CHECK"
     TYPE_FINANCIAL_SUMMARY_ROLLUP = "FINANCIAL_SUMMARY_ROLLUP"
     TYPE_WITHDRAWAL_SETTLEMENT = "WITHDRAWAL_SETTLEMENT"
+    TYPE_STALE_PENDING_CLEANUP = "STALE_PENDING_CLEANUP"
+    TYPE_DATA_RECONCILIATION = "DATA_RECONCILIATION"
+    TYPE_ANALYTICS_ROLLUP = "ANALYTICS_ROLLUP"
     TYPE_CHOICES = [
         (TYPE_NOTIFICATION_EMAIL, "Notification Email"),
         (TYPE_NOTIFICATION_EMAIL_RETRY, "Notification Email Retry"),
@@ -2484,6 +2508,9 @@ class BackgroundJob(models.Model):
         (TYPE_GATEWAY_STATUS_CHECK, "Gateway Status Check"),
         (TYPE_FINANCIAL_SUMMARY_ROLLUP, "Financial Summary Rollup"),
         (TYPE_WITHDRAWAL_SETTLEMENT, "Withdrawal Settlement"),
+        (TYPE_STALE_PENDING_CLEANUP, "Stale Pending Cleanup"),
+        (TYPE_DATA_RECONCILIATION, "Data Reconciliation"),
+        (TYPE_ANALYTICS_ROLLUP, "Analytics Rollup"),
     ]
 
     STATUS_PENDING = "PENDING"
@@ -2775,6 +2802,54 @@ class VendorWallet(Wallet):
         proxy = True
         verbose_name = "Vendor Wallet"
         verbose_name_plural = "Vendor Wallets"
+
+
+class VendorPayoutProfile(models.Model):
+    SCHEDULE_DAILY = "DAILY"
+    SCHEDULE_WEEKLY = "WEEKLY"
+    SCHEDULE_MONTHLY = "MONTHLY"
+    SCHEDULE_CHOICES = [
+        (SCHEDULE_DAILY, "Daily"),
+        (SCHEDULE_WEEKLY, "Weekly"),
+        (SCHEDULE_MONTHLY, "Monthly"),
+    ]
+
+    DESTINATION_BANK = "BANK"
+    DESTINATION_UPI = "UPI"
+    DESTINATION_EWALLET = "EWALLET"
+    DESTINATION_MOBILE = "MOBILE"
+    DESTINATION_CHOICES = [
+        (DESTINATION_BANK, "Bank Account"),
+        (DESTINATION_UPI, "UPI"),
+        (DESTINATION_EWALLET, "E-Wallet"),
+        (DESTINATION_MOBILE, "Mobile Wallet"),
+    ]
+
+    vendor = models.OneToOneField(Vendor, on_delete=models.CASCADE, related_name="payout_profile")
+    destination_type = models.CharField(max_length=20, choices=DESTINATION_CHOICES, default=DESTINATION_BANK)
+    destination_name = models.CharField(max_length=120, blank=True, null=True)
+    destination_reference = models.CharField(max_length=120, blank=True, null=True)
+    account_holder_name = models.CharField(max_length=120, blank=True, null=True)
+    bank_name = models.CharField(max_length=120, blank=True, null=True)
+    branch_name = models.CharField(max_length=120, blank=True, null=True)
+    minimum_withdrawal_amount = models.DecimalField(max_digits=12, decimal_places=2, default=500)
+    payout_schedule = models.CharField(max_length=20, choices=SCHEDULE_CHOICES, default=SCHEDULE_WEEKLY)
+    payout_schedule_days = models.JSONField(default=list, blank=True)
+    payout_schedule_time = models.TimeField(blank=True, null=True)
+    failed_retry_limit = models.PositiveIntegerField(default=3)
+    retry_backoff_minutes = models.PositiveIntegerField(default=60)
+    is_destination_verified = models.BooleanField(default=False)
+    destination_verified_at = models.DateTimeField(blank=True, null=True)
+    verification_requested_at = models.DateTimeField(blank=True, null=True)
+    verification_metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "vendor_payout_profiles"
+
+    def __str__(self):
+        return f"VendorPayoutProfile {self.vendor_id}"
 
 
 class PlatformRevenueConfig(models.Model):
@@ -3112,6 +3187,7 @@ class ReferralTransaction(models.Model):
     reason = models.CharField(max_length=40, choices=REASON_CHOICES)
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     remaining_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    available_at = models.DateTimeField(blank=True, null=True)
     expires_at = models.DateTimeField(blank=True, null=True)
     processed_at = models.DateTimeField(blank=True, null=True)
     metadata = models.JSONField(default=dict, blank=True)
@@ -3137,6 +3213,7 @@ class ReferralPolicy(models.Model):
     key = models.CharField(max_length=20, unique=True, default="default")
     referrer_reward_amount = models.DecimalField(max_digits=12, decimal_places=2, default=100)
     referred_reward_amount = models.DecimalField(max_digits=12, decimal_places=2, default=50)
+    reward_hold_period_days = models.PositiveIntegerField(default=7)
     reward_expiry_days = models.PositiveIntegerField(default=90)
     wallet_cap_percent = models.DecimalField(
         max_digits=5,
@@ -3494,10 +3571,15 @@ class LoyaltyProgramConfig(models.Model):
     )
     first_booking_bonus = models.PositiveIntegerField(default=50)
     points_expiry_months = models.PositiveIntegerField(default=12)
+    tier_points_window_months = models.PositiveIntegerField(default=12)
     tier_silver_threshold = models.PositiveIntegerField(default=0)
     tier_gold_threshold = models.PositiveIntegerField(default=1500)
     tier_platinum_threshold = models.PositiveIntegerField(default=5000)
     referral_bonus_points = models.PositiveIntegerField(default=100)
+    daily_redemption_points_cap = models.PositiveIntegerField(default=2000)
+    daily_redemption_count_cap = models.PositiveIntegerField(default=5)
+    reward_redeem_cooldown_minutes = models.PositiveIntegerField(default=30)
+    max_redemption_attempts_per_hour = models.PositiveIntegerField(default=15)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

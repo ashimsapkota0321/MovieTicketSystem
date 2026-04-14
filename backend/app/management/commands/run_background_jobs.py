@@ -47,8 +47,16 @@ class Command(BaseCommand):
                 BackgroundJob.TYPE_GATEWAY_STATUS_CHECK,
                 BackgroundJob.TYPE_FINANCIAL_SUMMARY_ROLLUP,
                 BackgroundJob.TYPE_WITHDRAWAL_SETTLEMENT,
+                BackgroundJob.TYPE_STALE_PENDING_CLEANUP,
+                BackgroundJob.TYPE_DATA_RECONCILIATION,
+                BackgroundJob.TYPE_ANALYTICS_ROLLUP,
             ],
             help="Optional job type filter (can be passed multiple times).",
+        )
+        parser.add_argument(
+            "--disable-maintenance-enqueue",
+            action="store_true",
+            help="Disable periodic enqueue of maintenance jobs while polling.",
         )
 
     def handle(self, *args: Any, **options: Any) -> None:
@@ -56,8 +64,12 @@ class Command(BaseCommand):
         batch_size = max(int(options.get("batch_size") or 20), 1)
         poll_interval = max(float(options.get("poll_interval") or 2.0), 0.2)
         job_types = options.get("job_type") or None
+        enqueue_maintenance = not bool(options.get("disable_maintenance_enqueue"))
 
         while True:
+            if enqueue_maintenance:
+                services.enqueue_scheduled_maintenance_jobs()
+
             summary = services.process_background_jobs(
                 batch_size=batch_size,
                 job_types=job_types,

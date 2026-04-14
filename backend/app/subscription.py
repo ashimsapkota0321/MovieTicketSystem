@@ -25,7 +25,10 @@ from .permissions import ADMIN_REQUIRED_MESSAGE, is_admin_request
 from .subscription_serializers import (
     SubscriptionCancelSerializer,
     SubscriptionCheckoutPreviewSerializer,
+    SubscriptionPauseSerializer,
     SubscriptionPlanWriteSerializer,
+    SubscriptionRenewSerializer,
+    SubscriptionResumeSerializer,
     SubscriptionSubscribeSerializer,
     SubscriptionUpgradeSerializer,
 )
@@ -151,6 +154,8 @@ def _serialize_user_subscription(item: UserSubscription, *, now: Optional[Any] =
         "end_at": item.end_at.isoformat() if item.end_at else None,
         "cancel_at_period_end": bool(item.cancel_at_period_end),
         "cancelled_at": item.cancelled_at.isoformat() if item.cancelled_at else None,
+        "paused_at": item.paused_at.isoformat() if item.paused_at else None,
+        "paused_remaining_seconds": int(item.paused_remaining_seconds or 0),
         "remaining_free_tickets": int(item.remaining_free_tickets or 0),
         "used_free_tickets": int(item.used_free_tickets or 0),
         "total_discount_used": float(_quantize_money(item.total_discount_used)),
@@ -160,6 +165,7 @@ def _serialize_user_subscription(item: UserSubscription, *, now: Optional[Any] =
             and item.end_at
             and item.end_at > current
         ),
+        "is_paused": bool(item.status == UserSubscription.STATUS_PAUSED),
         "metadata": item.metadata if isinstance(item.metadata, dict) else {},
         "plan": _serialize_plan(item.plan, now=current) if item.plan else None,
         "created_at": item.created_at.isoformat() if item.created_at else None,
@@ -592,12 +598,20 @@ def get_customer_dashboard(request: Any) -> tuple[dict[str, Any], int]:
         return {"message": "Customer not found."}, status.HTTP_404_NOT_FOUND
 
     vendor_id = _coerce_int(coalesce(request.query_params, "vendor_id", "vendorId"))
+    notify_hours = max(_coerce_int(coalesce(request.query_params, "notify_hours", "notifyHours"), default=DEFAULT_EXPIRY_NOTIFY_HOURS) or DEFAULT_EXPIRY_NOTIFY_HOURS, 1)
     expire_subscriptions(user_id=user.id)
+    reminder_stats = notify_expiring_subscriptions(user_id=user.id, notify_hours=notify_hours)
 
     active_subscription = get_active_subscription_for_user(
         user.id,
         vendor_id=vendor_id,
         use_cache=False,
+    )
+    paused_subscription = (
+        UserSubscription.objects.select_related("plan", "vendor")
+        .filter(user_id=user.id, status=UserSubscription.STATUS_PAUSED)
+        .order_by("-updated_at", "-id")
+        .first()
     )
 
     subscriptions = (
@@ -617,6 +631,17 @@ def get_customer_dashboard(request: Any) -> tuple[dict[str, Any], int]:
             if active_subscription
             else None
         ),
+        "paused_subscription": (
+            _serialize_user_subscription(paused_subscription)
+            if paused_subscription
+            else None
+        ),
+        "renewal_reminder": {
+            "enabled": bool(active_subscription),
+            "notify_hours": int(notify_hours),
+            "notifications_created": int(reminder_stats.get("expiring_notifications") or 0),
+            "days_remaining": int((_serialize_user_subscription(active_subscription).get("days_remaining") if active_subscription else 0) or 0),
+        },
         "subscriptions": [_serialize_user_subscription(item) for item in subscriptions],
         "transactions": [_serialize_transaction(item) for item in transactions],
     }, status.HTTP_200_OK
@@ -1012,6 +1037,257 @@ def cancel_customer_subscription(request: Any) -> tuple[dict[str, Any], int]:
     }, status.HTTP_200_OK
 
 
+def renew_customer_subscription(request: Any) -> tuple[dict[str, Any], int]:
+    user = resolve_customer(request)
+    if not user:
+        return {"message": "Customer not found."}, status.HTTP_404_NOT_FOUND
+
+    payload = get_payload(request)
+    serializer = SubscriptionRenewSerializer(data=payload)
+    if not serializer.is_valid():
+        return {
+            "message": "Invalid renewal payload.",
+            "errors": serializer.errors,
+        }, status.HTTP_400_BAD_REQUEST
+
+    method = _payment_method(payload)
+    fail_payment = _payment_failed(payload)
+    now = timezone.now()
+
+    with transaction.atomic():
+        expire_subscriptions(user_id=user.id, now=now)
+        current = get_active_subscription_for_user(
+            user.id,
+            use_cache=False,
+            lock_for_update=True,
+        )
+        if not current or not current.plan:
+            return {
+                "message": "No active subscription found to renew.",
+            }, status.HTTP_404_NOT_FOUND
+
+        if fail_payment:
+            tx = SubscriptionTransaction.objects.create(
+                user_id=user.id,
+                subscription=current,
+                plan=current.plan,
+                transaction_type=SubscriptionTransaction.TYPE_RENEWAL,
+                status=SubscriptionTransaction.STATUS_FAILED,
+                amount=_quantize_money(current.plan.price),
+                currency=current.plan.currency,
+                metadata={
+                    "payment_method": method,
+                    "failure_reason": "PAYMENT_FAILED",
+                },
+            )
+            return {
+                "message": "Subscription renewal failed.",
+                "transaction": _serialize_transaction(tx),
+            }, status.HTTP_402_PAYMENT_REQUIRED
+
+        previous_end = current.end_at
+        renewal_start = max(current.end_at, now)
+        current.end_at = renewal_start + timedelta(days=max(int(current.plan.duration_days or 1), 1))
+        current.cancel_at_period_end = False
+        current.metadata = {
+            **(current.metadata or {}),
+            "renewed_at": now.isoformat(),
+            "renewed_from_end_at": previous_end.isoformat() if previous_end else None,
+        }
+        current.save(update_fields=["end_at", "cancel_at_period_end", "metadata", "updated_at"])
+
+        tx = SubscriptionTransaction.objects.create(
+            user_id=user.id,
+            subscription=current,
+            plan=current.plan,
+            transaction_type=SubscriptionTransaction.TYPE_RENEWAL,
+            status=SubscriptionTransaction.STATUS_SUCCESS,
+            amount=_quantize_money(current.plan.price),
+            currency=current.plan.currency,
+            metadata={
+                "payment_method": method,
+                "renewal_start": renewal_start.isoformat(),
+                "previous_end": previous_end.isoformat() if previous_end else None,
+                "new_end": current.end_at.isoformat() if current.end_at else None,
+            },
+        )
+
+    _clear_user_active_subscription_cache(user.id)
+    return {
+        "message": "Subscription renewed successfully.",
+        "subscription": _serialize_user_subscription(current),
+        "transaction": _serialize_transaction(tx),
+    }, status.HTTP_200_OK
+
+
+def pause_customer_subscription(request: Any) -> tuple[dict[str, Any], int]:
+    user = resolve_customer(request)
+    if not user:
+        return {"message": "Customer not found."}, status.HTTP_404_NOT_FOUND
+
+    payload = get_payload(request)
+    serializer = SubscriptionPauseSerializer(data=payload)
+    if not serializer.is_valid():
+        return {
+            "message": "Invalid pause payload.",
+            "errors": serializer.errors,
+        }, status.HTTP_400_BAD_REQUEST
+
+    reason = str(serializer.validated_data.get("reason") or "").strip()
+    now = timezone.now()
+
+    with transaction.atomic():
+        expire_subscriptions(user_id=user.id, now=now)
+        paused_exists = UserSubscription.objects.select_for_update().filter(
+            user_id=user.id,
+            status=UserSubscription.STATUS_PAUSED,
+        ).exists()
+        if paused_exists:
+            return {
+                "message": "A subscription is already paused.",
+            }, status.HTTP_409_CONFLICT
+
+        current = get_active_subscription_for_user(
+            user.id,
+            use_cache=False,
+            lock_for_update=True,
+        )
+        if not current or not current.end_at:
+            return {
+                "message": "No active subscription found to pause.",
+            }, status.HTTP_404_NOT_FOUND
+
+        remaining_seconds = max(int((current.end_at - now).total_seconds()), 0)
+        if remaining_seconds <= 0:
+            return {
+                "message": "Subscription is already at expiry boundary and cannot be paused.",
+            }, status.HTTP_400_BAD_REQUEST
+
+        current.status = UserSubscription.STATUS_PAUSED
+        current.paused_at = now
+        current.paused_remaining_seconds = remaining_seconds
+        current.cancel_at_period_end = False
+        current.end_at = now
+        current.metadata = {
+            **(current.metadata or {}),
+            "pause_reason": reason,
+            "paused_at": now.isoformat(),
+        }
+        current.save(
+            update_fields=[
+                "status",
+                "paused_at",
+                "paused_remaining_seconds",
+                "cancel_at_period_end",
+                "end_at",
+                "metadata",
+                "updated_at",
+            ]
+        )
+
+        tx = SubscriptionTransaction.objects.create(
+            user_id=user.id,
+            subscription=current,
+            plan=current.plan,
+            transaction_type=SubscriptionTransaction.TYPE_PAUSE,
+            status=SubscriptionTransaction.STATUS_SUCCESS,
+            amount=Decimal("0.00"),
+            currency=current.plan.currency if current.plan else "NPR",
+            metadata={
+                "reason": reason,
+                "remaining_seconds": remaining_seconds,
+            },
+        )
+
+    _clear_user_active_subscription_cache(user.id)
+    return {
+        "message": "Subscription paused.",
+        "subscription": _serialize_user_subscription(current),
+        "transaction": _serialize_transaction(tx),
+    }, status.HTTP_200_OK
+
+
+def resume_customer_subscription(request: Any) -> tuple[dict[str, Any], int]:
+    user = resolve_customer(request)
+    if not user:
+        return {"message": "Customer not found."}, status.HTTP_404_NOT_FOUND
+
+    payload = get_payload(request)
+    serializer = SubscriptionResumeSerializer(data=payload)
+    if not serializer.is_valid():
+        return {
+            "message": "Invalid resume payload.",
+            "errors": serializer.errors,
+        }, status.HTTP_400_BAD_REQUEST
+
+    reason = str(serializer.validated_data.get("reason") or "").strip()
+    now = timezone.now()
+
+    with transaction.atomic():
+        paused = (
+            UserSubscription.objects.select_for_update()
+            .select_related("plan", "vendor")
+            .filter(user_id=user.id, status=UserSubscription.STATUS_PAUSED)
+            .order_by("-updated_at", "-id")
+            .first()
+        )
+        if not paused:
+            return {
+                "message": "No paused subscription found.",
+            }, status.HTTP_404_NOT_FOUND
+
+        remaining_seconds = int(paused.paused_remaining_seconds or 0)
+        if remaining_seconds <= 0:
+            paused.status = UserSubscription.STATUS_EXPIRED
+            paused.save(update_fields=["status", "updated_at"])
+            return {
+                "message": "Paused subscription has no remaining time and was marked expired.",
+            }, status.HTTP_409_CONFLICT
+
+        paused.status = UserSubscription.STATUS_ACTIVE
+        paused.start_at = now
+        paused.end_at = now + timedelta(seconds=remaining_seconds)
+        paused.paused_at = None
+        paused.paused_remaining_seconds = 0
+        paused.metadata = {
+            **(paused.metadata or {}),
+            "resumed_at": now.isoformat(),
+            "resume_reason": reason,
+        }
+        paused.save(
+            update_fields=[
+                "status",
+                "start_at",
+                "end_at",
+                "paused_at",
+                "paused_remaining_seconds",
+                "metadata",
+                "updated_at",
+            ]
+        )
+
+        tx = SubscriptionTransaction.objects.create(
+            user_id=user.id,
+            subscription=paused,
+            plan=paused.plan,
+            transaction_type=SubscriptionTransaction.TYPE_RESUME,
+            status=SubscriptionTransaction.STATUS_SUCCESS,
+            amount=Decimal("0.00"),
+            currency=paused.plan.currency if paused.plan else "NPR",
+            metadata={
+                "reason": reason,
+                "restored_seconds": remaining_seconds,
+            },
+        )
+
+    _clear_user_active_subscription_cache(user.id)
+    return {
+        "message": "Subscription resumed.",
+        "subscription": _serialize_user_subscription(paused),
+        "transaction": _serialize_transaction(tx),
+    }, status.HTTP_200_OK
+
+
 def preview_checkout_subscription(
     user_id: int,
     payload: dict[str, Any],
@@ -1065,9 +1341,9 @@ def preview_checkout_subscription(
             "message": "This subscription is not valid for the selected vendor.",
         }, status.HTTP_400_BAD_REQUEST
 
-    coupon_applied = bool(data.get("coupon_applied"))
+    coupon_applied = bool(data.get("coupon_applied")) or bool(str(data.get("coupon_code") or "").strip())
     loyalty_applied = bool(data.get("loyalty_applied"))
-    referral_wallet_applied = bool(data.get("referral_wallet_applied"))
+    referral_wallet_applied = bool(data.get("referral_wallet_applied")) or _parse_money(data.get("referral_wallet_amount")) > Decimal("0")
 
     if coupon_applied and not plan.is_stackable_with_coupon:
         return None, {
@@ -1152,6 +1428,14 @@ def preview_checkout_subscription(
             int(subscription.remaining_free_tickets or 0) - int(free_tickets_to_use),
             0,
         ),
+        "compatibility": {
+            "coupon_applied": bool(coupon_applied),
+            "loyalty_applied": bool(loyalty_applied),
+            "referral_wallet_applied": bool(referral_wallet_applied),
+            "plan_allows_coupon": bool(plan.is_stackable_with_coupon),
+            "plan_allows_loyalty": bool(plan.is_stackable_with_loyalty),
+            "plan_allows_referral_wallet": bool(plan.is_stackable_with_referral_wallet),
+        },
         "plan": _serialize_plan(plan),
         "subscription": _serialize_user_subscription(subscription),
     }
@@ -1210,6 +1494,15 @@ def consume_checkout_subscription(
         )
         if not subscription:
             return {"message": "Active subscription was not found."}, status.HTTP_404_NOT_FOUND
+
+        compatibility = preview.get("compatibility") if isinstance(preview, dict) else {}
+        if isinstance(compatibility, dict):
+            if bool(compatibility.get("coupon_applied")) and not bool(subscription.plan and subscription.plan.is_stackable_with_coupon):
+                return {"message": "Subscription cannot be combined with coupon discounts."}, status.HTTP_409_CONFLICT
+            if bool(compatibility.get("loyalty_applied")) and not bool(subscription.plan and subscription.plan.is_stackable_with_loyalty):
+                return {"message": "Subscription cannot be combined with loyalty redemption."}, status.HTTP_409_CONFLICT
+            if bool(compatibility.get("referral_wallet_applied")) and not bool(subscription.plan and subscription.plan.is_stackable_with_referral_wallet):
+                return {"message": "Subscription cannot be combined with referral wallet credits."}, status.HTTP_409_CONFLICT
 
         total_discount = _parse_money(coalesce(preview, "total_discount", "discount_amount"))
         free_tickets_to_use = max(_coerce_int(preview.get("free_tickets_to_use"), default=0) or 0, 0)

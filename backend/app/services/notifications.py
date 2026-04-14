@@ -734,6 +734,14 @@ def _queue_notification_email(*, subject: str, message: str, recipient_email: Op
     from . import enqueue_notification_email_retry_job
     from . import _send_notification_email
 
+    if _send_notification_email(
+        subject=subject,
+        message=message,
+        recipient_email=recipient_email,
+        html_message=None,
+    ):
+        return
+
     queued_job = _enqueue_background_job(
         job_type=BackgroundJob.TYPE_NOTIFICATION_EMAIL,
         payload={
@@ -756,10 +764,3 @@ def _queue_notification_email(*, subject: str, message: str, recipient_email: Op
     )
     if retry_job:
         return
-
-    _send_notification_email(
-        subject=subject,
-        message=message,
-        recipient_email=recipient_email,
-        html_message=None,
-    )

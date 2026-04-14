@@ -644,11 +644,12 @@ def create_group_booking_session(request: Any) -> tuple[dict[str, Any], int]:
     split_mode = data.get("split_mode") or GroupBookingSession.SPLIT_EQUAL
 
     with transaction.atomic():
-        expire_group_booking_sessions()
+        services.enqueue_stale_pending_cleanup_job(
+            metadata={"source": "group_booking_create", "user_id": customer.id}
+        )
 
         hall = str(data.get("hall") or show.hall or "").strip() or None
         screen, showtime = services._get_or_create_showtime_for_context(show, hall)
-        services._prune_expired_reservations(showtime)
 
         lock_until = timezone.now() + timedelta(minutes=expiry_minutes)
         conflicts = {"sold": [], "unavailable": [], "reserved": [], "invalid": []}
@@ -756,7 +757,9 @@ def list_group_booking_sessions(request: Any) -> tuple[dict[str, Any], int]:
     if error_payload:
         return error_payload, status_code
 
-    expire_group_booking_sessions()
+    services.enqueue_stale_pending_cleanup_job(
+        metadata={"source": "group_booking_list", "user_id": customer.id}
+    )
     query_params = getattr(request, "query_params", {})
     status_filter = str(query_params.get("status") or "").strip().upper()
 
@@ -778,7 +781,9 @@ def get_group_booking_session_by_invite(request: Any, invite_code: str) -> tuple
     if error_payload:
         return error_payload, status_code
 
-    expire_group_booking_sessions()
+    services.enqueue_stale_pending_cleanup_job(
+        metadata={"source": "group_booking_by_invite", "user_id": customer.id}
+    )
     session = _session_query_for_read().filter(invite_code__iexact=str(invite_code).strip()).first()
     if not session:
         return {"message": "Group booking session not found."}, status.HTTP_404_NOT_FOUND
@@ -1244,6 +1249,12 @@ def _confirm_group_session_locked(session: GroupBookingSession) -> dict[str, Any
             payload=ticket_payload,
             **ticket_security,
         )
+
+        try:
+            services.send_ticket_confirmation_email(ticket)
+        except Exception:
+            # Do not block group booking completion if email delivery fails.
+            pass
         qr_payload = services.build_ticket_qr_payload(ticket)
 
         participant.metadata = _update_metadata(
@@ -1667,7 +1678,13 @@ def get_group_booking_session_by_id(request: Any, session_id: int) -> tuple[dict
     if error_payload:
         return error_payload, status_code
 
-    expire_group_booking_sessions(session_id=session_id)
+    services.enqueue_stale_pending_cleanup_job(
+        metadata={
+            "source": "group_booking_by_id",
+            "user_id": customer.id,
+            "session_id": session_id,
+        }
+    )
     session = _session_query_for_read().filter(id=session_id).first()
     if not session:
         return {"message": "Group booking session not found."}, status.HTTP_404_NOT_FOUND
