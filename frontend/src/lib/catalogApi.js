@@ -960,6 +960,30 @@ export async function cancelSubscription(payload = {}) {
   return data || {};
 }
 
+export async function renewSubscription(payload = {}) {
+  const data = await request("/api/subscriptions/renew/", {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
+export async function pauseSubscription(payload = {}) {
+  const data = await request("/api/subscriptions/pause/", {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
+export async function resumeSubscription(payload = {}) {
+  const data = await request("/api/subscriptions/resume/", {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
 export async function fetchVendorSubscriptionPlans() {
   const data = await request("/api/vendor/subscriptions/plans/");
   return data?.plans || [];
@@ -1364,6 +1388,46 @@ export async function fetchVendorWalletTransactions(params = {}) {
   const query = new URLSearchParams(params).toString();
   const data = await request(`/api/vendor/wallet/transactions/${query ? `?${query}` : ""}`);
   return data?.transactions || [];
+}
+
+export async function updateVendorPayoutProfile(payload = {}) {
+  const data = await request("/api/vendor/wallet/payout-profile/", {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
+export async function requestVendorPayoutProfileVerification() {
+  const data = await request("/api/vendor/wallet/payout-profile/request-verification/", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  return data || {};
+}
+
+export async function verifyVendorPayoutProfile(payload = {}) {
+  const data = await request("/api/vendor/wallet/payout-profile/verify/", {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
+export async function requestVendorWithdrawal(payload = {}) {
+  const data = await request("/api/vendor/wallet/withdraw/", {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  return data || {};
+}
+
+export async function retryAdminWithdrawal(transactionId) {
+  const data = await request(`/api/admin/withdrawals/${transactionId}/retry/`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  return data || {};
 }
 
 export async function fetchAdminRevenueConfig() {

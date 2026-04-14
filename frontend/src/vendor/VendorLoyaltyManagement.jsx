@@ -11,6 +11,7 @@ import {
   updateVendorLoyaltyReward,
   updateVendorLoyaltyRule,
 } from "../lib/catalogApi";
+import { useVendorToast } from "./VendorToastContext";
 
 const rewardTypes = ["DISCOUNT", "FREE_TICKET", "CASHBACK"];
 const promoTypes = ["FESTIVAL", "DAILY", "WEEKLY", "REFERRAL"];
@@ -48,8 +49,7 @@ function emptyPromotionForm() {
 
 export default function VendorLoyaltyManagement() {
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
+  const { pushToast } = useVendorToast();
 
   const [rule, setRule] = useState(null);
   const [savingRule, setSavingRule] = useState(false);
@@ -76,7 +76,6 @@ export default function VendorLoyaltyManagement() {
 
   const loadData = async () => {
     setLoading(true);
-    setError("");
     try {
       const [ruleData, rewardData, promotionData] = await Promise.all([
         fetchVendorLoyaltyRule(),
@@ -87,7 +86,11 @@ export default function VendorLoyaltyManagement() {
       setRewards(Array.isArray(rewardData) ? rewardData : []);
       setPromotions(Array.isArray(promotionData) ? promotionData : []);
     } catch (err) {
-      setError(err.message || "Unable to load loyalty configuration.");
+      pushToast({
+        tone: "error",
+        title: "Loyalty load failed",
+        message: err.message || "Unable to load loyalty configuration.",
+      });
     } finally {
       setLoading(false);
     }
@@ -100,8 +103,6 @@ export default function VendorLoyaltyManagement() {
   const handleRuleSave = async () => {
     if (!rule) return;
     setSavingRule(true);
-    setError("");
-    setNotice("");
     try {
       const data = await updateVendorLoyaltyRule({
         is_active: Boolean(rule.is_active),
@@ -110,9 +111,13 @@ export default function VendorLoyaltyManagement() {
         bonus_multiplier: Number(rule.bonus_multiplier || 1),
       });
       setRule(data || rule);
-      setNotice("Loyalty earning rule updated.");
+      pushToast({ tone: "success", title: "Rule updated", message: "Loyalty earning rule updated." });
     } catch (err) {
-      setError(err.message || "Unable to update vendor loyalty rule.");
+      pushToast({
+        tone: "error",
+        title: "Rule update failed",
+        message: err.message || "Unable to update vendor loyalty rule.",
+      });
     } finally {
       setSavingRule(false);
     }
@@ -121,8 +126,6 @@ export default function VendorLoyaltyManagement() {
   const handleRewardSubmit = async (event) => {
     event.preventDefault();
     setSavingReward(true);
-    setError("");
-    setNotice("");
 
     try {
       const payload = {
@@ -138,16 +141,20 @@ export default function VendorLoyaltyManagement() {
 
       if (editingRewardId) {
         await updateVendorLoyaltyReward(editingRewardId, payload);
-        setNotice("Reward updated.");
+        pushToast({ tone: "success", title: "Reward updated", message: "Reward updated." });
       } else {
         await createVendorLoyaltyReward(payload);
-        setNotice("Reward created.");
+        pushToast({ tone: "success", title: "Reward created", message: "Reward created." });
       }
       setEditingRewardId(null);
       setRewardForm(emptyRewardForm());
       await loadData();
     } catch (err) {
-      setError(err.message || "Unable to save reward.");
+      pushToast({
+        tone: "error",
+        title: "Reward save failed",
+        message: err.message || "Unable to save reward.",
+      });
     } finally {
       setSavingReward(false);
     }
@@ -173,26 +180,26 @@ export default function VendorLoyaltyManagement() {
 
   const deleteReward = async (item) => {
     if (!window.confirm(`Delete reward ${item.title}?`)) return;
-    setError("");
-    setNotice("");
     try {
       await deleteVendorLoyaltyReward(item.id);
       if (editingRewardId === item.id) {
         setEditingRewardId(null);
         setRewardForm(emptyRewardForm());
       }
-      setNotice("Reward deleted.");
+      pushToast({ tone: "success", title: "Reward deleted", message: "Reward deleted." });
       await loadData();
     } catch (err) {
-      setError(err.message || "Unable to delete reward.");
+      pushToast({
+        tone: "error",
+        title: "Reward delete failed",
+        message: err.message || "Unable to delete reward.",
+      });
     }
   };
 
   const handlePromotionSubmit = async (event) => {
     event.preventDefault();
     setSavingPromotion(true);
-    setError("");
-    setNotice("");
 
     try {
       const payload = {
@@ -205,16 +212,20 @@ export default function VendorLoyaltyManagement() {
 
       if (editingPromotionId) {
         await updateVendorLoyaltyPromotion(editingPromotionId, payload);
-        setNotice("Promotion updated.");
+        pushToast({ tone: "success", title: "Promotion updated", message: "Promotion updated." });
       } else {
         await createVendorLoyaltyPromotion(payload);
-        setNotice("Promotion created.");
+        pushToast({ tone: "success", title: "Promotion created", message: "Promotion created." });
       }
       setEditingPromotionId(null);
       setPromotionForm(emptyPromotionForm());
       await loadData();
     } catch (err) {
-      setError(err.message || "Unable to save promotion.");
+      pushToast({
+        tone: "error",
+        title: "Promotion save failed",
+        message: err.message || "Unable to save promotion.",
+      });
     } finally {
       setSavingPromotion(false);
     }
@@ -238,18 +249,20 @@ export default function VendorLoyaltyManagement() {
 
   const deletePromotion = async (item) => {
     if (!window.confirm(`Delete promotion ${item.title}?`)) return;
-    setError("");
-    setNotice("");
     try {
       await deleteVendorLoyaltyPromotion(item.id);
       if (editingPromotionId === item.id) {
         setEditingPromotionId(null);
         setPromotionForm(emptyPromotionForm());
       }
-      setNotice("Promotion deleted.");
+      pushToast({ tone: "success", title: "Promotion deleted", message: "Promotion deleted." });
       await loadData();
     } catch (err) {
-      setError(err.message || "Unable to delete promotion.");
+      pushToast({
+        tone: "error",
+        title: "Promotion delete failed",
+        message: err.message || "Unable to delete promotion.",
+      });
     }
   };
 
@@ -273,8 +286,6 @@ export default function VendorLoyaltyManagement() {
           </div>
         </div>
 
-        {error ? <div className="alert alert-danger">{error}</div> : null}
-        {notice ? <div className="alert alert-success">{notice}</div> : null}
         {loading ? <div className="text-muted">Loading loyalty settings...</div> : null}
 
         {rule ? (

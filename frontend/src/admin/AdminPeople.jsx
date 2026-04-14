@@ -21,6 +21,7 @@ export default function AdminPeople() {
   const [loading, setLoading] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [editingPerson, setEditingPerson] = useState(null);
+  const [isReadOnlyMode, setIsReadOnlyMode] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [personToDelete, setPersonToDelete] = useState(null);
   const [form, setForm] = useState(buildEmptyPerson());
@@ -74,17 +75,22 @@ export default function AdminPeople() {
 
   const openAdd = () => {
     setEditingPerson(null);
+    setIsReadOnlyMode(false);
     setForm(buildEmptyPerson());
     setShowModal(true);
   };
 
-  const openEdit = (person) => {
+  const openEdit = (person, { readOnly = false } = {}) => {
     setEditingPerson(person);
+    setIsReadOnlyMode(Boolean(readOnly));
     setForm(buildFormFromPerson(person));
     setShowModal(true);
   };
 
   const handleSave = async () => {
+    if (isReadOnlyMode) {
+      return;
+    }
     if (!form.full_name.trim()) {
       pushToast({ title: "Missing name", message: "Please enter a full name." });
       return;
@@ -182,7 +188,7 @@ export default function AdminPeople() {
                         type="button"
                         className="btn btn-outline-light btn-sm"
                         title="View details"
-                        onClick={() => openEdit(person)}
+                        onClick={() => openEdit(person, { readOnly: true })}
                       >
                         <Eye size={16} />
                       </button>
@@ -221,19 +227,32 @@ export default function AdminPeople() {
 
       <AdminModal
         show={showModal}
-        title={editingPerson ? "Edit Person" : "Add Person"}
-        onClose={() => setShowModal(false)}
+        title={editingPerson ? (isReadOnlyMode ? "View Person" : "Edit Person") : "Add Person"}
+        onClose={() => {
+          setShowModal(false);
+          setIsReadOnlyMode(false);
+        }}
         footer={
           <>
-            <button type="button" className="btn btn-outline-light" onClick={() => setShowModal(false)}>
-              Cancel
+            <button
+              type="button"
+              className="btn btn-outline-light"
+              onClick={() => {
+                setShowModal(false);
+                setIsReadOnlyMode(false);
+              }}
+            >
+              {isReadOnlyMode ? "Close" : "Cancel"}
             </button>
-            <button type="button" className="btn btn-primary" onClick={handleSave}>
-              Save
-            </button>
+            {!isReadOnlyMode ? (
+              <button type="button" className="btn btn-primary" onClick={handleSave}>
+                Save
+              </button>
+            ) : null}
           </>
         }
       >
+        <fieldset disabled={isReadOnlyMode}>
         <div className="row g-3">
           <div className="col-md-6">
             <label className="form-label">Full name</label>
@@ -302,6 +321,7 @@ export default function AdminPeople() {
             />
           </div>
         </div>
+        </fieldset>
       </AdminModal>
 
       <ConfirmModal

@@ -15,10 +15,12 @@ const ForgotPasswordPage = () => {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [otpStatusNote, setOtpStatusNote] = useState("");
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [otpTimer, setOtpTimer] = useState(0);
   const [resendTimer, setResendTimer] = useState(0);
+  const [resendCount, setResendCount] = useState(0);
 
   // hero images array
   const heroImages = [HeroImage1, HeroImage2, HeroImage3, HeroImage4];
@@ -55,6 +57,7 @@ const ForgotPasswordPage = () => {
     e.preventDefault();
     setError("");
     setSuccess("");
+    setOtpStatusNote("");
 
     if (!email) {
       setError("Email is required");
@@ -94,7 +97,8 @@ const ForgotPasswordPage = () => {
         throw new Error(message || "Failed to send OTP");
       }
 
-      setSuccess(data?.message || "OTP sent to your email");
+      setSuccess(`OTP request complete for ${maskEmail(email)}.`);
+      setOtpStatusNote(data?.message || "OTP sent to your email");
       setStep(2);
       setOtpTimer(240);
       setResendTimer(60);
@@ -106,15 +110,59 @@ const ForgotPasswordPage = () => {
   };
 
   const handleResendOtp = async () => {
-    if (resendTimer > 0 || loading) return;
-    // call the same request handler without a DOM event
-    await handleRequestOtp({ preventDefault: () => {} });
+    if (loading) return;
+    setError("");
+    setSuccess("");
+    setOtpStatusNote("");
+    setLoading(true);
+
+    try {
+      const response = await fetch(
+        `${API_BASE}/api/auth/forgot-password/`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({ email }),
+        }
+      );
+
+      const text = await response.text();
+      let data = {};
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = { error: text };
+      }
+
+      if (!response.ok) {
+        const message = data?.message || data?.error || `Server error: ${response.status}`;
+        throw new Error(message || "Failed to resend OTP");
+      }
+
+      const nowLabel = new Date().toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+      setResendCount((prev) => prev + 1);
+      setSuccess(`New OTP sent at ${nowLabel} for ${maskEmail(email)}.`);
+      setOtpStatusNote(data?.message || "OTP sent to your email");
+      setOtpTimer(240);
+      setResendTimer(60);
+    } catch (err) {
+      setError(err.message || "An error occurred while resending OTP");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleVerifyOtp = async (e) => {
     e.preventDefault();
     setError("");
     setSuccess("");
+    setOtpStatusNote("");
 
     if (!otp) {
       setError("OTP is required");
@@ -150,6 +198,7 @@ const ForgotPasswordPage = () => {
       }
 
       setSuccess("OTP verified successfully");
+      setOtpStatusNote("You can now reset your password.");
       setStep(3);
       setOtpTimer(0);
     } catch (err) {
@@ -242,7 +291,7 @@ const ForgotPasswordPage = () => {
           </p>
 
           {step === 1 && (
-            <form className="mt-form" onSubmit={handleRequestOtp}>
+            <form className="mt-form" onSubmit={handleRequestOtp} noValidate>
               <label className="mt-label">
                 Email Address *
                 <div className="mt-input-wrapper">
@@ -262,13 +311,10 @@ const ForgotPasswordPage = () => {
 
               {error && <div className="mt-error">{error}</div>}
               {success && <div className="mt-success">{success}</div>}
+              {otpStatusNote && <div className="mt-otp-note">{otpStatusNote}</div>}
 
-              <button
-                type="submit"
-                className="mt-primary-btn"
-                disabled={loading}
-              >
-                {loading ? "Sending OTP..." : "Send OTP"}
+              <button type="submit" className="mt-primary-btn" disabled={loading}>
+                {loading ? "Generating and sending OTP..." : "Generate & Send OTP"}
               </button>
 
               <div className="mt-footer-text">
@@ -287,7 +333,7 @@ const ForgotPasswordPage = () => {
 
           {/* STEP 2: OTP */}
           {step === 2 && (
-            <form className="mt-form" onSubmit={handleVerifyOtp}>
+            <form className="mt-form" onSubmit={handleVerifyOtp} noValidate>
               <label className="mt-label">
                 Enter OTP *
                 <div className="mt-input-wrapper">
@@ -306,23 +352,23 @@ const ForgotPasswordPage = () => {
                 </div>
               </label>
 
-              {resendTimer > 0 ? (
-                <p className="mt-otp-resend">Resend available in: {resendTimer}s</p>
-              ) : (
-                <div className="mt-footer-text">
-                  <button
-                    type="button"
-                    className="mt-link-btn"
-                    onClick={handleResendOtp}
-                    disabled={loading}
-                  >
-                    Resend OTP
-                  </button>
-                </div>
+              <div className="mt-footer-text">
+                <button type="button" className="mt-link-btn" onClick={handleResendOtp} disabled={loading}>
+                  Send New OTP
+                </button>
+              </div>
+
+              {resendTimer > 0 && (
+                <p className="mt-otp-resend">You can resend again in: {resendTimer}s</p>
+              )}
+
+              {resendCount > 0 && (
+                <p className="mt-otp-resend">Resent {resendCount} time{resendCount > 1 ? "s" : ""}.</p>
               )}
 
               {error && <div className="mt-error">{error}</div>}
               {success && <div className="mt-success">{success}</div>}
+              {otpStatusNote && <div className="mt-otp-note">{otpStatusNote}</div>}
 
               <button
                 type="submit"
@@ -352,7 +398,7 @@ const ForgotPasswordPage = () => {
 
           {/* STEP 3: NEW PASSWORD */}
           {step === 3 && (
-            <form className="mt-form" onSubmit={handleResetPassword}>
+            <form className="mt-form" onSubmit={handleResetPassword} noValidate>
               <label className="mt-label">
                 New Password *
                 <div className="mt-input-wrapper">
@@ -401,6 +447,7 @@ const ForgotPasswordPage = () => {
 
               {error && <div className="mt-error">{error}</div>}
               {success && <div className="mt-success">{success}</div>}
+              {otpStatusNote && <div className="mt-otp-note">{otpStatusNote}</div>}
 
               <button
                 type="submit"
@@ -456,3 +503,15 @@ const ForgotPasswordPage = () => {
 };
 
 export default ForgotPasswordPage;
+
+function maskEmail(value) {
+  const email = String(value || "").trim();
+  const atIndex = email.indexOf("@");
+  if (atIndex <= 1) return email;
+
+  const localPart = email.slice(0, atIndex);
+  const domainPart = email.slice(atIndex);
+  const visiblePrefix = localPart.slice(0, 2);
+  const maskedMiddle = "*".repeat(Math.max(localPart.length - 2, 3));
+  return `${visiblePrefix}${maskedMiddle}${domainPart}`;
+}

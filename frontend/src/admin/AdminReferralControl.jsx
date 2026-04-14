@@ -53,6 +53,7 @@ export default function AdminReferralControl() {
       const payload = {
         referrer_reward_amount: Number(policy.referrer_reward_amount || 0),
         referred_reward_amount: Number(policy.referred_reward_amount || 0),
+        reward_hold_period_days: Number(policy.reward_hold_period_days || 0),
         reward_expiry_days: Number(policy.reward_expiry_days || 0),
         wallet_cap_percent: Number(policy.wallet_cap_percent || 0),
         max_signups_per_ip_per_day: Number(policy.max_signups_per_ip_per_day || 1),
@@ -148,6 +149,11 @@ export default function AdminReferralControl() {
               onChange={(value) =>
                 setPolicy((prev) => ({ ...prev, referred_reward_amount: value }))
               }
+            />
+            <NumberInput
+              label="Reward Hold Days"
+              value={policy.reward_hold_period_days}
+              onChange={(value) => setPolicy((prev) => ({ ...prev, reward_hold_period_days: value }))}
             />
             <NumberInput
               label="Expiry Days"

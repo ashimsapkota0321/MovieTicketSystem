@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Outlet } from "react-router-dom";
 import VendorSidebar from "./VendorSidebar";
 import VendorTopbar from "./VendorTopbar";
+import { VendorToastProvider } from "./VendorToastContext";
 
 const VENDOR_THEME_KEY = "mt_vendor_theme";
 
@@ -37,30 +38,32 @@ export default function VendorLayout() {
   }, [theme]);
 
   return (
-    <div
-      className={`vendor-shell theme-${theme} ${sidebarOpen ? "sidebar-open" : ""} ${
-        sidebarCollapsed ? "sidebar-collapsed" : ""
-      }`}
-    >
-      <VendorSidebar onNavigate={handleNavigate} />
-      <div className="vendor-main">
-        <VendorTopbar
-          onToggleSidebar={handleToggleSidebar}
-          onToggleTheme={() => setTheme((prev) => (prev === "dark" ? "light" : "dark"))}
-          theme={theme}
-        />
-        <main className="vendor-content">
-          <Outlet />
-        </main>
+    <VendorToastProvider>
+      <div
+        className={`vendor-shell theme-${theme} ${sidebarOpen ? "sidebar-open" : ""} ${
+          sidebarCollapsed ? "sidebar-collapsed" : ""
+        }`}
+      >
+        <VendorSidebar onNavigate={handleNavigate} />
+        <div className="vendor-main">
+          <VendorTopbar
+            onToggleSidebar={handleToggleSidebar}
+            onToggleTheme={() => setTheme((prev) => (prev === "dark" ? "light" : "dark"))}
+            theme={theme}
+          />
+          <main className="vendor-content">
+            <Outlet />
+          </main>
+        </div>
+        {sidebarOpen ? (
+          <button
+            type="button"
+            aria-label="Close sidebar"
+            className="vendor-backdrop"
+            onClick={() => setSidebarOpen(false)}
+          />
+        ) : null}
       </div>
-      {sidebarOpen ? (
-        <button
-          type="button"
-          aria-label="Close sidebar"
-          className="vendor-backdrop"
-          onClick={() => setSidebarOpen(false)}
-        />
-      ) : null}
-    </div>
+    </VendorToastProvider>
   );
 }

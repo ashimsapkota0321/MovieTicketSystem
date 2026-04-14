@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useMemo, useState } from "react";
 
-const AdminToastContext = createContext(null);
+const VendorToastContext = createContext(null);
 
 function normalizeTone(value) {
   const tone = String(value || "").trim().toLowerCase();
@@ -27,7 +27,7 @@ function toneIcon(tone) {
   return "i";
 }
 
-export function AdminToastProvider({ children }) {
+export function VendorToastProvider({ children }) {
   const [toasts, setToasts] = useState([]);
 
   const removeToast = useCallback((id) => {
@@ -39,31 +39,31 @@ export function AdminToastProvider({ children }) {
     const tone = inferTone(toast);
     const next = {
       id,
-      title: toast.title || "Action completed",
-      message: toast.message || "Your request has been queued.",
+      title: toast?.title || "Action completed",
+      message: toast?.message || "Your request has been queued.",
       tone,
       icon: toneIcon(tone),
     };
     setToasts((prev) => [...prev, next]);
-    setTimeout(() => removeToast(id), toast.duration || 3200);
+    setTimeout(() => removeToast(id), toast?.duration || 3200);
   }, [removeToast]);
 
   const value = useMemo(() => ({ pushToast }), [pushToast]);
 
   return (
-    <AdminToastContext.Provider value={value}>
+    <VendorToastContext.Provider value={value}>
       {children}
-      <div className="admin-toast-stack">
+      <div className="vendor-toast-stack">
         {toasts.map((toast) => (
-          <div className={`admin-toast admin-toast-${toast.tone}`} key={toast.id} role="status" aria-live="polite">
-            <span className="admin-toast-icon" aria-hidden="true">{toast.icon}</span>
-            <div className="admin-toast-content">
-              <div className="admin-toast-title">{toast.title}</div>
-              <div className="admin-toast-message">{toast.message}</div>
+          <div className={`vendor-toast vendor-toast-${toast.tone}`} key={toast.id} role="status" aria-live="polite">
+            <span className="vendor-toast-icon" aria-hidden="true">{toast.icon}</span>
+            <div className="vendor-toast-content">
+              <div className="vendor-toast-title">{toast.title}</div>
+              <div className="vendor-toast-message">{toast.message}</div>
             </div>
             <button
               type="button"
-              className="admin-toast-close"
+              className="vendor-toast-close"
               aria-label="Dismiss notification"
               onClick={() => removeToast(toast.id)}
             >
@@ -72,12 +72,12 @@ export function AdminToastProvider({ children }) {
           </div>
         ))}
       </div>
-    </AdminToastContext.Provider>
+    </VendorToastContext.Provider>
   );
 }
 
-export function useAdminToast() {
-  const context = useContext(AdminToastContext);
+export function useVendorToast() {
+  const context = useContext(VendorToastContext);
   if (!context) {
     return { pushToast: () => {} };
   }

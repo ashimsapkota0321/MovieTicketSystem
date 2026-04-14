@@ -8,16 +8,16 @@ import {
   fetchVendorBookings,
   refundVendorBooking,
 } from "../lib/catalogApi";
+import { useVendorToast } from "./VendorToastContext";
 
 export default function VendorBookings() {
   const [bookings, setBookings] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
   const [selected, setSelected] = useState(null);
   const [query, setQuery] = useState("");
   const [busyActionId, setBusyActionId] = useState(null);
   const [searchParams] = useSearchParams();
+  const { pushToast } = useVendorToast();
   const queryFromUrl = String(searchParams.get("q") || "");
 
   useEffect(() => {
@@ -26,12 +26,15 @@ export default function VendorBookings() {
 
   const loadBookings = async () => {
     setIsLoading(true);
-    setError("");
     try {
       const list = await fetchVendorBookings();
       setBookings(Array.isArray(list) ? list : []);
     } catch (err) {
-      setError(err.message || "Unable to load bookings.");
+      pushToast({
+        tone: "error",
+        title: "Bookings failed",
+        message: err.message || "Unable to load bookings.",
+      });
       setBookings([]);
     } finally {
       setIsLoading(false);
@@ -62,7 +65,6 @@ export default function VendorBookings() {
 
   const openDetail = async (booking) => {
     if (!booking?.id) return;
-    setNotice("");
     try {
       const detail = await fetchVendorBooking(booking.id);
       setSelected(detail || booking);
@@ -77,8 +79,6 @@ export default function VendorBookings() {
     if (!booking?.id) return;
     const ok = window.confirm(`Cancel booking #${booking.id}?`);
     if (!ok) return;
-    setError("");
-    setNotice("");
     setBusyActionId(booking.id);
     try {
       const res = await cancelVendorBooking(booking.id);
@@ -87,9 +87,17 @@ export default function VendorBookings() {
         const detail = await fetchVendorBooking(booking.id).catch(() => null);
         setSelected(detail || null);
       }
-      setNotice(res?.message || `Booking #${booking.id} updated.`);
+      pushToast({
+        tone: "success",
+        title: "Booking updated",
+        message: res?.message || `Booking #${booking.id} updated.`,
+      });
     } catch (err) {
-      setError(err.message || "Unable to cancel booking.");
+      pushToast({
+        tone: "error",
+        title: "Cancel failed",
+        message: err.message || "Unable to cancel booking.",
+      });
     } finally {
       setBusyActionId(null);
     }
@@ -99,8 +107,6 @@ export default function VendorBookings() {
     if (!booking?.id) return;
     const ok = window.confirm(`Refund booking #${booking.id}?`);
     if (!ok) return;
-    setError("");
-    setNotice("");
     setBusyActionId(booking.id);
     try {
       const res = await refundVendorBooking(booking.id);
@@ -109,9 +115,17 @@ export default function VendorBookings() {
         const detail = await fetchVendorBooking(booking.id).catch(() => null);
         setSelected(detail || null);
       }
-      setNotice(res?.message || `Booking #${booking.id} refunded.`);
+      pushToast({
+        tone: "success",
+        title: "Refund processed",
+        message: res?.message || `Booking #${booking.id} refunded.`,
+      });
     } catch (err) {
-      setError(err.message || "Unable to refund booking.");
+      pushToast({
+        tone: "error",
+        title: "Refund failed",
+        message: err.message || "Unable to refund booking.",
+      });
     } finally {
       setBusyActionId(null);
     }
@@ -121,8 +135,6 @@ export default function VendorBookings() {
     if (!booking?.id) return;
     const ok = window.confirm(`Delete booking #${booking.id}? This cannot be undone.`);
     if (!ok) return;
-    setError("");
-    setNotice("");
     setBusyActionId(booking.id);
     try {
       const res = await deleteVendorBooking(booking.id);
@@ -130,9 +142,17 @@ export default function VendorBookings() {
       if (selected?.id === booking.id) {
         setSelected(null);
       }
-      setNotice(res?.message || `Booking #${booking.id} deleted.`);
+      pushToast({
+        tone: "success",
+        title: "Booking deleted",
+        message: res?.message || `Booking #${booking.id} deleted.`,
+      });
     } catch (err) {
-      setError(err.message || "Unable to delete booking.");
+      pushToast({
+        tone: "error",
+        title: "Delete failed",
+        message: err.message || "Unable to delete booking.",
+      });
     } finally {
       setBusyActionId(null);
     }
@@ -160,9 +180,6 @@ export default function VendorBookings() {
             {isLoading ? "Loading..." : `${filteredBookings.length} bookings`}
           </div>
         </div>
-
-        {error ? <div className="alert alert-danger">{error}</div> : null}
-        {notice ? <div className="alert alert-success">{notice}</div> : null}
 
         <div className="vendor-table-wrap">
           <table className="vendor-table">
@@ -251,39 +268,7 @@ export default function VendorBookings() {
           <div className="vendor-card-header">
             <div>
               <h3>Booking #{selected.id}</h3>
-              <p>Booking details for this vendor only.</p>
-            </div>
-            <div className="vendor-actionRow" aria-label="Actions">
-              <button
-                type="button"
-                className="vendor-icon-btn"
-                onClick={() => handleRefund(selected)}
-                disabled={isActionBusy(selected.id)}
-                title="Refund booking"
-                aria-label="Refund booking"
-              >
-                <ReceiptText size={16} />
-              </button>
-              <button
-                type="button"
-                className="vendor-icon-btn"
-                onClick={() => handleCancel(selected)}
-                disabled={isActionBusy(selected.id)}
-                title="Cancel booking"
-                aria-label="Cancel booking"
-              >
-                <XCircle size={16} />
-              </button>
-              <button
-                type="button"
-                className="vendor-icon-btn"
-                onClick={() => handleDelete(selected)}
-                disabled={isActionBusy(selected.id)}
-                title="Delete booking"
-                aria-label="Delete booking"
-              >
-                <Trash2 size={16} />
-              </button>
+              <p>Read-only booking details for this vendor.</p>
             </div>
           </div>
           <div className="row g-2">

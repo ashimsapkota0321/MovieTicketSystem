@@ -26,6 +26,68 @@ const LoginPage = () => {
   const [rememberMe, setRememberMe] = useState(true);
   const ctx = safeUseAppContext();
 
+  const handleAuthenticatedResponse = (data) => {
+    setSuccess((data && data.message) || "Login successful!");
+    setEmailOrPhone("");
+    setPassword("");
+
+    const isAdminLogin = data && (data.role === "admin" || data.admin);
+    if (isAdminLogin) {
+      const scope = rememberMe ? "local" : "session";
+      storeAuthSession("admin", data?.access_token || "", { scope });
+      if (data.admin) storeRoleData("admin", data.admin, { scope });
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("mt:admin-updated"));
+      }
+      setTimeout(() => {
+        navigate("/admin", { replace: true });
+      }, 1500);
+      return true;
+    }
+
+    const isVendorLogin = data && (data.role === "vendor" || data.vendor);
+    if (isVendorLogin) {
+      const scope = rememberMe ? "local" : "session";
+      const vendorPayload = {
+        ...(data.vendor || {}),
+        vendor_staff: data?.vendor_staff || null,
+        staff: data?.vendor_staff || null,
+        staff_role: String(data?.vendor_staff?.role || "").toUpperCase() || null,
+        is_owner: !data?.vendor_staff,
+      };
+      storeAuthSession("vendor", data?.access_token || "", { scope });
+      if (data.vendor) storeRoleData("vendor", vendorPayload, { scope });
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("mt:vendor-updated"));
+      }
+      setTimeout(() => {
+        navigate("/vendor", { replace: true });
+      }, 1500);
+      return true;
+    }
+
+    if (data && data.user) {
+      const existingGlobalUser = getStoredRoleData("customer", { scope: "local" });
+      const existingKey = getAccountKey(existingGlobalUser);
+      const nextKey = getAccountKey(data.user);
+      const scopeByAccountIsolation =
+        existingKey && nextKey && existingKey !== nextKey ? "session" : "local";
+      const scope = rememberMe ? scopeByAccountIsolation : "session";
+
+      storeAuthSession("customer", data?.access_token || "", { scope });
+      storeRoleData("customer", data.user, { scope });
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("mt:user-updated"));
+      }
+      setTimeout(() => {
+        navigate("/", { replace: true });
+      }, 1500);
+      return true;
+    }
+
+    return false;
+  };
+
   const heroSlides = useMemo(() => {
     const dynamicSlides = buildAuthHeroSlides(ctx?.movies, ctx?.showtimes, {
       nowLimit: 5,
@@ -148,62 +210,7 @@ const LoginPage = () => {
         throw new Error(errorMessage);
       }
 
-      setSuccess((data && data.message) || "Login successful!");
-      setEmailOrPhone("");
-      setPassword("");
-
-      const isAdminLogin = data && (data.role === "admin" || data.admin);
-      if (isAdminLogin) {
-        const scope = rememberMe ? "local" : "session";
-        storeAuthSession("admin", data?.access_token || "", { scope });
-        if (data.admin) storeRoleData("admin", data.admin, { scope });
-        if (typeof window !== "undefined") {
-          window.dispatchEvent(new Event("mt:admin-updated"));
-        }
-        setTimeout(() => {
-          navigate("/admin", { replace: true });
-        }, 1500);
-        return;
-      }
-
-      const isVendorLogin = data && (data.role === "vendor" || data.vendor);
-      if (isVendorLogin) {
-        const scope = rememberMe ? "local" : "session";
-        const vendorPayload = {
-          ...(data.vendor || {}),
-          vendor_staff: data?.vendor_staff || null,
-          staff: data?.vendor_staff || null,
-          staff_role: String(data?.vendor_staff?.role || "").toUpperCase() || null,
-          is_owner: !data?.vendor_staff,
-        };
-        storeAuthSession("vendor", data?.access_token || "", { scope });
-        if (data.vendor) storeRoleData("vendor", vendorPayload, { scope });
-        if (typeof window !== "undefined") {
-          window.dispatchEvent(new Event("mt:vendor-updated"));
-        }
-        setTimeout(() => {
-          navigate("/vendor", { replace: true });
-        }, 1500);
-        return;
-      }
-
-      if (data && data.user) {
-        const existingGlobalUser = getStoredRoleData("customer", { scope: "local" });
-        const existingKey = getAccountKey(existingGlobalUser);
-        const nextKey = getAccountKey(data.user);
-        const scopeByAccountIsolation =
-          existingKey && nextKey && existingKey !== nextKey ? "session" : "local";
-        const scope = rememberMe ? scopeByAccountIsolation : "session";
-
-        storeAuthSession("customer", data?.access_token || "", { scope });
-        storeRoleData("customer", data.user, { scope });
-        if (typeof window !== "undefined") {
-          window.dispatchEvent(new Event("mt:user-updated"));
-        }
-        setTimeout(() => {
-          navigate("/", { replace: true });
-        }, 1500);
-      }
+      handleAuthenticatedResponse(data);
     } catch (err) {
       console.error("Login error:", err);
       setError(err.message || "An unexpected error occurred");

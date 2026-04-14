@@ -19,6 +19,7 @@ export default function AdminMovies() {
 
   const [showModal, setShowModal] = useState(false);
   const [editingMovie, setEditingMovie] = useState(null);
+  const [isReadOnlyMode, setIsReadOnlyMode] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [movieToDelete, setMovieToDelete] = useState(null);
   const [form, setForm] = useState(() => buildEmptyMovie());
@@ -88,13 +89,15 @@ export default function AdminMovies() {
 
   const openAdd = () => {
     setEditingMovie(null);
+    setIsReadOnlyMode(false);
     setForm(buildEmptyMovie());
     setFormLoading(false);
     setShowModal(true);
   };
 
-  const openEdit = async (movie) => {
+  const openEdit = async (movie, { readOnly = false } = {}) => {
     setEditingMovie(movie);
+    setIsReadOnlyMode(Boolean(readOnly));
     setForm(buildEmptyMovie());
     setShowModal(true);
     if (!movie?.id) return;
@@ -113,6 +116,9 @@ export default function AdminMovies() {
   };
 
   const handleSave = async () => {
+    if (isReadOnlyMode) {
+      return;
+    }
     if (!form.title.trim()) {
       pushToast({ title: "Missing title", message: "Please enter a movie title." });
       return;
@@ -289,7 +295,7 @@ export default function AdminMovies() {
                       <button
                         type="button"
                         className="btn btn-outline-light btn-sm"
-                        onClick={() => openEdit(movie)}
+                        onClick={() => openEdit(movie, { readOnly: true })}
                       >
                         <Eye size={16} />
                       </button>
@@ -363,22 +369,34 @@ export default function AdminMovies() {
 
       <AdminModal
         show={showModal}
-        title={editingMovie ? "Edit Movie" : "Add Movie"}
-        onClose={() => setShowModal(false)}
+        title={editingMovie ? (isReadOnlyMode ? "View Movie" : "Edit Movie") : "Add Movie"}
+        onClose={() => {
+          setShowModal(false);
+          setIsReadOnlyMode(false);
+        }}
         footer={
           <>
-            <button type="button" className="btn btn-outline-light" onClick={() => setShowModal(false)}>
-              Cancel
+            <button
+              type="button"
+              className="btn btn-outline-light"
+              onClick={() => {
+                setShowModal(false);
+                setIsReadOnlyMode(false);
+              }}
+            >
+              {isReadOnlyMode ? "Close" : "Cancel"}
             </button>
-            <button type="button" className="btn btn-primary" onClick={handleSave} disabled={formLoading}>
-              Save Movie
-            </button>
+            {!isReadOnlyMode ? (
+              <button type="button" className="btn btn-primary" onClick={handleSave} disabled={formLoading}>
+                Save Movie
+              </button>
+            ) : null}
           </>
         }
       >
         <MovieForm
           value={form}
-          loading={formLoading}
+          loading={formLoading || isReadOnlyMode}
           onChange={setForm}
           onEditPerson={(personId) => {
             if (!personId) return;

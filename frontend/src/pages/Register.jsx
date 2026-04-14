@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import "../css/register.css";
 import HeroImage1 from "../images/gharjwai.jpg";
 import HeroImage2 from "../images/balidan.jpg";
@@ -10,6 +11,8 @@ import { buildAuthHeroSlides } from "../lib/authHeroSlides";
 import { API_BASE } from "../lib/apiBase";
 
 const RegisterPage = () => {
+  const navigate = useNavigate();
+  const location = useLocation();
   const initialReferralCode = getReferralCodeFromQuery();
   const [formData, setFormData] = useState({
     first_name: "",
@@ -25,6 +28,10 @@ const RegisterPage = () => {
 
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [otpCode, setOtpCode] = useState("");
+  const [otpVerified, setOtpVerified] = useState(false);
+  const [otpStatus, setOtpStatus] = useState("");
+  const [otpLoading, setOtpLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const ctx = safeUseAppContext();
@@ -93,7 +100,14 @@ const RegisterPage = () => {
   }, [heroSlides.length]);
 
   const handleChange = (e) => {
-    setFormData((prev) => ({ ...prev, [e.target.name]: e.target.value }));
+    const { name, value } = e.target;
+    setFormData((prev) => ({ ...prev, [name]: value }));
+    if (name === "email") {
+      // Changing the email invalidates previous OTP verification.
+      setOtpVerified(false);
+      setOtpCode("");
+      setOtpStatus("");
+    }
   };
 
   const validateForm = () => {
@@ -119,7 +133,84 @@ const RegisterPage = () => {
       return false;
     }
 
+    if (!otpVerified) {
+      setError("Please verify your email OTP before creating account");
+      return false;
+    }
+
     return true;
+  };
+
+  const handleSendOtp = async () => {
+    const email = String(formData.email || "").trim().toLowerCase();
+    setError("");
+    setSuccess("");
+    setOtpStatus("");
+
+    if (!email) {
+      setError("Enter your email first to receive OTP");
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setError("Invalid email format");
+      return;
+    }
+
+    setOtpLoading(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/auth/register/request-otp/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to send OTP");
+      }
+      setOtpVerified(false);
+      setOtpCode("");
+      setOtpStatus(data.message || "OTP sent to your email");
+    } catch (err) {
+      setError(err.message || "Failed to send OTP");
+    } finally {
+      setOtpLoading(false);
+    }
+  };
+
+  const handleVerifyOtp = async () => {
+    const email = String(formData.email || "").trim().toLowerCase();
+    const otp = String(otpCode || "").trim();
+    setError("");
+    setSuccess("");
+
+    if (!email) {
+      setError("Enter your email first");
+      return;
+    }
+    if (!otp) {
+      setError("Enter OTP to verify your email");
+      return;
+    }
+
+    setOtpLoading(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/auth/register/verify-otp/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, otp }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.message || "OTP verification failed");
+      }
+      setOtpVerified(true);
+      setOtpStatus(data.message || "Email verified successfully");
+    } catch (err) {
+      setOtpVerified(false);
+      setError(err.message || "OTP verification failed");
+    } finally {
+      setOtpLoading(false);
+    }
   };
 
   const handleSubmit = async (e) => {
@@ -164,7 +255,7 @@ const RegisterPage = () => {
         confirm_password: "",
       });
 
-      setTimeout(() => { window.location.href = "/login"; }, 1500);
+      setTimeout(() => { navigate("/login", { replace: true }); }, 1500);
     } catch (err) {
       setError(err.message || "Unexpected error");
     } finally {
@@ -179,7 +270,9 @@ const RegisterPage = () => {
         <div className="mt-login-left">
           <img src={Logo} alt="Mero Ticket Logo" className="mt-logo" />
           <h2 className="mt-title">Create Account</h2>
-          <p className="mt-subtitle">Fill in your details to register</p>
+          <p className="mt-subtitle">
+            Fill in your details to register
+          </p>
 
           <form className="mt-form" onSubmit={handleSubmit}>
             {/* Phone */}
@@ -214,6 +307,42 @@ const RegisterPage = () => {
                   required
                 />
               </div>
+              <div className="mt-otp-row">
+                <button
+                  type="button"
+                  className="mt-secondary-btn"
+                  onClick={handleSendOtp}
+                  disabled={loading || otpLoading}
+                >
+                  {otpLoading ? "Sending..." : "Send OTP"}
+                </button>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={6}
+                  className="mt-box-input mt-otp-input"
+                  placeholder="Enter OTP"
+                  value={otpCode}
+                  onChange={(e) => {
+                    setOtpCode(e.target.value.replace(/[^0-9]/g, ""));
+                    setOtpVerified(false);
+                  }}
+                  disabled={loading || otpLoading}
+                />
+                <button
+                  type="button"
+                  className="mt-secondary-btn"
+                  onClick={handleVerifyOtp}
+                  disabled={loading || otpLoading}
+                >
+                  {otpLoading ? "Verifying..." : "Verify"}
+                </button>
+              </div>
+              {otpStatus && (
+                <div className={`mt-otp-status ${otpVerified ? "verified" : ""}`}>
+                  {otpStatus}
+                </div>
+              )}
             </label>
 
             {/* Date of Birth */}
@@ -337,13 +466,13 @@ const RegisterPage = () => {
             {error && <div className="mt-error">{error}</div>}
             {success && <div className="mt-success">{success}</div>}
 
-            <button type="submit" className="mt-primary-btn" disabled={loading}>
-              {loading ? "Creating account..." : "Sign Up"}
+            <button type="submit" className="mt-primary-btn" disabled={loading || !otpVerified}>
+              {loading ? "Creating account..." : otpVerified ? "Sign Up" : "Verify OTP to Sign Up"}
             </button>
 
             <div className="mt-footer-text">
               Already have an account?{" "}
-              <button type="button" className="mt-cta" onClick={() => (window.location.href = "/login")}>
+              <button type="button" className="mt-cta" onClick={() => navigate("/login")}>
                 Sign In
               </button>
             </div>

@@ -104,10 +104,15 @@ export default function AdminLoyaltyControl() {
         redemption_value_per_point: Number(rule.redemption_value_per_point || 0),
         first_booking_bonus: Number(rule.first_booking_bonus || 0),
         points_expiry_months: Number(rule.points_expiry_months || 0),
+        tier_points_window_months: Number(rule.tier_points_window_months || 0),
         tier_silver_threshold: Number(rule.tier_silver_threshold || 0),
         tier_gold_threshold: Number(rule.tier_gold_threshold || 0),
         tier_platinum_threshold: Number(rule.tier_platinum_threshold || 0),
         referral_bonus_points: Number(rule.referral_bonus_points || 0),
+        daily_redemption_points_cap: Number(rule.daily_redemption_points_cap || 0),
+        daily_redemption_count_cap: Number(rule.daily_redemption_count_cap || 0),
+        reward_redeem_cooldown_minutes: Number(rule.reward_redeem_cooldown_minutes || 0),
+        max_redemption_attempts_per_hour: Number(rule.max_redemption_attempts_per_hour || 0),
       };
       const updated = await updateAdminLoyaltyRule(payload);
       setRule(updated || rule);
@@ -320,6 +325,11 @@ export default function AdminLoyaltyControl() {
               onChange={(value) => setRule((prev) => ({ ...prev, points_expiry_months: value }))}
             />
             <FieldNumber
+              label="Tier Window (Months)"
+              value={rule.tier_points_window_months}
+              onChange={(value) => setRule((prev) => ({ ...prev, tier_points_window_months: value }))}
+            />
+            <FieldNumber
               label="Silver Threshold"
               value={rule.tier_silver_threshold}
               onChange={(value) => setRule((prev) => ({ ...prev, tier_silver_threshold: value }))}
@@ -338,6 +348,26 @@ export default function AdminLoyaltyControl() {
               label="Referral Bonus Points"
               value={rule.referral_bonus_points}
               onChange={(value) => setRule((prev) => ({ ...prev, referral_bonus_points: value }))}
+            />
+            <FieldNumber
+              label="Daily Points Redemption Cap"
+              value={rule.daily_redemption_points_cap}
+              onChange={(value) => setRule((prev) => ({ ...prev, daily_redemption_points_cap: value }))}
+            />
+            <FieldNumber
+              label="Daily Redemption Count Cap"
+              value={rule.daily_redemption_count_cap}
+              onChange={(value) => setRule((prev) => ({ ...prev, daily_redemption_count_cap: value }))}
+            />
+            <FieldNumber
+              label="Reward Cooldown (Minutes)"
+              value={rule.reward_redeem_cooldown_minutes}
+              onChange={(value) => setRule((prev) => ({ ...prev, reward_redeem_cooldown_minutes: value }))}
+            />
+            <FieldNumber
+              label="Max Redemption Attempts / Hour"
+              value={rule.max_redemption_attempts_per_hour}
+              onChange={(value) => setRule((prev) => ({ ...prev, max_redemption_attempts_per_hour: value }))}
             />
 
             <div className="col-md-4 d-flex align-items-center">

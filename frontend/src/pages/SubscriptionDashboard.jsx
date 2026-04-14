@@ -3,6 +3,9 @@ import { useNavigate } from "react-router-dom";
 import {
   cancelSubscription,
   fetchSubscriptionDashboard,
+  pauseSubscription,
+  renewSubscription,
+  resumeSubscription,
 } from "../lib/catalogApi";
 import "../css/customerPages.css";
 
@@ -13,6 +16,7 @@ export default function SubscriptionDashboard() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [cancelling, setCancelling] = useState(false);
+  const [updatingLifecycle, setUpdatingLifecycle] = useState(false);
 
   const loadDashboard = async (active = true) => {
     setLoading(true);
@@ -39,8 +43,64 @@ export default function SubscriptionDashboard() {
   }, []);
 
   const activeSubscription = dashboard?.active_subscription || null;
+  const pausedSubscription = dashboard?.paused_subscription || null;
+  const renewalReminder = dashboard?.renewal_reminder || null;
   const subscriptions = Array.isArray(dashboard?.subscriptions) ? dashboard.subscriptions : [];
   const transactions = Array.isArray(dashboard?.transactions) ? dashboard.transactions : [];
+
+  const handlePause = async () => {
+    if (!activeSubscription?.id || updatingLifecycle) return;
+    if (!window.confirm("Pause this subscription now and resume later with remaining time?")) return;
+
+    setUpdatingLifecycle(true);
+    setError("");
+    setNotice("");
+    try {
+      const response = await pauseSubscription({ reason: "Customer requested pause" });
+      setNotice(response?.message || "Subscription paused.");
+      await loadDashboard(true);
+    } catch (err) {
+      setError(err.message || "Unable to pause subscription.");
+    } finally {
+      setUpdatingLifecycle(false);
+    }
+  };
+
+  const handleResume = async () => {
+    if (!pausedSubscription?.id || updatingLifecycle) return;
+    if (!window.confirm("Resume your paused subscription now?")) return;
+
+    setUpdatingLifecycle(true);
+    setError("");
+    setNotice("");
+    try {
+      const response = await resumeSubscription({ reason: "Customer requested resume" });
+      setNotice(response?.message || "Subscription resumed.");
+      await loadDashboard(true);
+    } catch (err) {
+      setError(err.message || "Unable to resume subscription.");
+    } finally {
+      setUpdatingLifecycle(false);
+    }
+  };
+
+  const handleRenew = async () => {
+    if (!activeSubscription?.id || updatingLifecycle) return;
+    if (!window.confirm("Renew this subscription for one more cycle?")) return;
+
+    setUpdatingLifecycle(true);
+    setError("");
+    setNotice("");
+    try {
+      const response = await renewSubscription({ payment_method: "ESEWA" });
+      setNotice(response?.message || "Subscription renewed.");
+      await loadDashboard(true);
+    } catch (err) {
+      setError(err.message || "Unable to renew subscription.");
+    } finally {
+      setUpdatingLifecycle(false);
+    }
+  };
 
   const handleCancel = async (immediate) => {
     if (!activeSubscription?.id || cancelling) return;
@@ -95,17 +155,23 @@ export default function SubscriptionDashboard() {
       <div className="wf2-customerStats">
         <div className="wf2-customerStatCard">
           <span>Current plan</span>
-          <strong>{activeSubscription?.plan_name || "No active plan"}</strong>
+          <strong>{activeSubscription?.plan_name || pausedSubscription?.plan_name || "No active plan"}</strong>
         </div>
         <div className="wf2-customerStatCard">
-          <span>Tier</span>
-          <strong>{toLabel(activeSubscription?.tier || "-")}</strong>
+          <span>Status</span>
+          <strong>{toLabel(activeSubscription?.status || pausedSubscription?.status || "-")}</strong>
         </div>
         <div className="wf2-customerStatCard">
           <span>Days remaining</span>
-          <strong>{Number(activeSubscription?.days_remaining || 0).toLocaleString()}</strong>
+          <strong>{Number(activeSubscription?.days_remaining || pausedSubscription?.days_remaining || 0).toLocaleString()}</strong>
         </div>
       </div>
+
+      {renewalReminder?.enabled ? (
+        <div className="wf2-customerSuccess" style={{ marginBottom: 14 }}>
+          Renewal reminder: {Number(renewalReminder?.days_remaining || 0)} day(s) remaining.
+        </div>
+      ) : null}
 
       <div className="wf2-customerStats">
         <div className="wf2-customerStatCard">
@@ -130,6 +196,22 @@ export default function SubscriptionDashboard() {
             <button
               type="button"
               className="wf2-customerPageAction"
+              disabled={updatingLifecycle}
+              onClick={handleRenew}
+            >
+              {updatingLifecycle ? "Processing..." : "Renew Now"}
+            </button>
+            <button
+              type="button"
+              className="wf2-customerPageAction"
+              disabled={updatingLifecycle || cancelling}
+              onClick={handlePause}
+            >
+              {updatingLifecycle ? "Processing..." : "Pause"}
+            </button>
+            <button
+              type="button"
+              className="wf2-customerPageAction"
               disabled={cancelling || Boolean(activeSubscription?.cancel_at_period_end)}
               onClick={() => handleCancel(false)}
             >
@@ -142,6 +224,21 @@ export default function SubscriptionDashboard() {
               onClick={() => handleCancel(true)}
             >
               {cancelling ? "Processing..." : "Cancel Immediately"}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {pausedSubscription ? (
+        <div className="wf2-customerTableWrap" style={{ marginBottom: 16 }}>
+          <div style={{ padding: 16, display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              className="wf2-customerPageAction"
+              disabled={updatingLifecycle}
+              onClick={handleResume}
+            >
+              {updatingLifecycle ? "Processing..." : "Resume Subscription"}
             </button>
           </div>
         </div>

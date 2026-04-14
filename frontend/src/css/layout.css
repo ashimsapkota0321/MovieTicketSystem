@@ -6,6 +6,13 @@
   padding-right: 16px;
 }
 
+@media (max-width: 768px) {
+  .wf2-container {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+}
+
 main {
   position: relative;
   background: transparent;
@@ -1601,6 +1608,102 @@ main > *{
 
   .wf2-footerLinksWrap{
     grid-template-columns: repeat(2, minmax(130px, 1fr));
+  }
+}
+
+@media (max-width:768px){
+  .wf2-headerTop,
+  .wf2-headerBottom{
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .wf2-headerTop{
+    gap: 10px;
+  }
+
+  .wf2-headerLeft,
+  .wf2-headerNav,
+  .wf2-bookingBar,
+  .wf2-bookingControls{
+    width: 100%;
+  }
+
+  .wf2-headerLeft,
+  .wf2-headerNav,
+  .wf2-bookingBar,
+  .wf2-bookingControls,
+  .wf2-notificationToolbar,
+  .wf2-notificationActions{
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .wf2-brandImg{
+    width: 140px;
+    height: 62px;
+    margin-left: 0;
+  }
+
+  .wf2-locationBtn,
+  .wf2-searchBtn,
+  .wf2-buyNowBtn,
+  .wf2-pillTop,
+  .wf2-bookingTab,
+  .wf2-selectTrigger,
+  .wf2-selectOption{
+    width: 100%;
+  }
+
+  .wf2-searchArea,
+  .wf2-controlGroup,
+  .wf2-selectWrap{
+    width: 100%;
+    min-width: 0;
+  }
+
+  .wf2-searchPanel{
+    width: calc(100vw - 24px);
+    max-width: none;
+    left: 50%;
+    transform: translateX(-50%);
+    top: 112px;
+  }
+
+  .wf2-searchCard{
+    grid-template-columns: 88px minmax(0, 1fr);
+  }
+
+  .wf2-bookingLabel,
+  .wf2-bookingTab,
+  .wf2-selectTrigger,
+  .wf2-selectOption{
+    font-size: 15px;
+  }
+
+  .wf2-bookingLabel{
+    white-space: normal;
+  }
+
+  .wf2-selectMenu,
+  .wf2-dropdownMenu{
+    width: 100%;
+    left: 0;
+    transform: none;
+  }
+
+  .wf2-locationModal{
+    width: min(100%, 100vw - 24px);
+    padding: 20px 16px 18px;
+  }
+
+  .wf2-footerShell{
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .wf2-footerLinksWrap{
+    grid-template-columns: 1fr;
   }
 }
 

@@ -94,6 +94,69 @@
   color: rgba(234, 240, 255, 0.85);
 }
 
+.mt-google-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: rgba(214, 224, 246, 0.58);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.mt-google-divider::before,
+.mt-google-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.mt-google-wrap {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+}
+
+.mt-google-button-slot {
+  width: 100%;
+  min-height: 44px;
+  display: flex;
+  justify-content: center;
+}
+
+.mt-google-missing {
+  padding: 12px 16px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(234, 240, 255, 0.88);
+  font-size: 13px;
+}
+
+.mt-google-summary {
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  margin-bottom: 6px;
+}
+
+.mt-google-summary-title {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(214, 224, 246, 0.7);
+}
+
+.mt-google-summary-text {
+  margin-top: 6px;
+  font-size: 14px;
+  color: #ffffff;
+  word-break: break-word;
+}
+
 .mt-inline-label {
   font-size: 14px;
   font-weight: 600;
@@ -208,6 +271,52 @@
   background: #4f46e5;
 }
 
+.mt-secondary-btn {
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(99, 102, 241, 0.45);
+  background: rgba(99, 102, 241, 0.18);
+  color: #eaf0ff;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.mt-secondary-btn:hover {
+  background: rgba(99, 102, 241, 0.32);
+}
+
+.mt-secondary-btn:disabled,
+.mt-primary-btn:disabled {
+  opacity: 0.62;
+  cursor: not-allowed;
+}
+
+.mt-otp-row {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.mt-otp-input {
+  height: 40px;
+}
+
+.mt-otp-status {
+  margin-top: 8px;
+  font-size: 12px;
+  color: rgba(214, 224, 246, 0.8);
+}
+
+.mt-otp-status.verified {
+  color: #34d399;
+  font-weight: 700;
+}
+
 /* ==================== FOOTER ==================== */
 .mt-footer-text {
   text-align: center;
@@ -299,5 +408,8 @@
   }
   .mt-subtitle {
     font-size: 14px;
+  }
+  .mt-otp-row {
+    grid-template-columns: 1fr;
   }
 }

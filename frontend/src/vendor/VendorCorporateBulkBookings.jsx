@@ -45,6 +45,9 @@ export default function VendorCorporateBulkBookings() {
     valid_until: "",
     ticket_count: 50,
     unit_price: "0",
+    seat_hold_count: 50,
+    invoice_total_amount: "",
+    amount_paid: "0",
     notes: "",
   });
 
@@ -264,6 +267,8 @@ export default function VendorCorporateBulkBookings() {
         quoted_amount: current.quoted_amount,
         counter_offer_amount: current.counter_offer_amount,
         invoice_number: current.invoice_number,
+        invoice_total_amount: current.invoice_total_amount,
+        amount_paid: current.amount_paid,
         vendor_notes: current.vendor_notes,
         invoice_notes: current.invoice_notes,
       });
@@ -327,6 +332,10 @@ export default function VendorCorporateBulkBookings() {
         show_id: selectedShow?.id,
         ticket_count: Number(batchForm.ticket_count || 0),
         unit_price: Number(batchForm.unit_price || 0),
+        seat_hold_count: Number(batchForm.seat_hold_count || batchForm.ticket_count || 0),
+        invoice_total_amount:
+          batchForm.invoice_total_amount === "" ? undefined : Number(batchForm.invoice_total_amount || 0),
+        amount_paid: Number(batchForm.amount_paid || 0),
       });
       setNotice("Bulk ticket batch generated.");
       setBatchForm((prev) => ({
@@ -335,6 +344,8 @@ export default function VendorCorporateBulkBookings() {
         contact_person: "",
         contact_email: "",
         notes: "",
+        invoice_total_amount: "",
+        amount_paid: "0",
       }));
       await loadData();
     } catch (err) {
@@ -505,6 +516,30 @@ export default function VendorCorporateBulkBookings() {
                             setActionState((prev) => ({
                               ...prev,
                               [item.id]: { ...action, invoice_number: event.target.value },
+                            }))
+                          }
+                        />
+                        <input
+                          className="form-control form-control-sm"
+                          placeholder="Invoice total"
+                          style={{ maxWidth: 110 }}
+                          value={action.invoice_total_amount || ""}
+                          onChange={(event) =>
+                            setActionState((prev) => ({
+                              ...prev,
+                              [item.id]: { ...action, invoice_total_amount: event.target.value },
+                            }))
+                          }
+                        />
+                        <input
+                          className="form-control form-control-sm"
+                          placeholder="Paid"
+                          style={{ maxWidth: 90 }}
+                          value={action.amount_paid || ""}
+                          onChange={(event) =>
+                            setActionState((prev) => ({
+                              ...prev,
+                              [item.id]: { ...action, amount_paid: event.target.value },
                             }))
                           }
                         />
@@ -705,6 +740,60 @@ export default function VendorCorporateBulkBookings() {
           </div>
 
           <div className="col-md-4 col-xl-2">
+            <label className="form-label mb-1" htmlFor="bulk-seat-hold-count">
+              Seat hold count
+            </label>
+            <input
+              id="bulk-seat-hold-count"
+              className="form-control"
+              type="number"
+              min="0"
+              max="2000"
+              placeholder="50"
+              value={batchForm.seat_hold_count}
+              onChange={(event) =>
+                setBatchForm((prev) => ({ ...prev, seat_hold_count: event.target.value }))
+              }
+            />
+          </div>
+
+          <div className="col-md-4 col-xl-2">
+            <label className="form-label mb-1" htmlFor="bulk-invoice-total">
+              Invoice total
+            </label>
+            <input
+              id="bulk-invoice-total"
+              className="form-control"
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder={String(estimatedBatchAmount || "0")}
+              value={batchForm.invoice_total_amount}
+              onChange={(event) =>
+                setBatchForm((prev) => ({ ...prev, invoice_total_amount: event.target.value }))
+              }
+            />
+          </div>
+
+          <div className="col-md-4 col-xl-2">
+            <label className="form-label mb-1" htmlFor="bulk-amount-paid">
+              Amount paid
+            </label>
+            <input
+              id="bulk-amount-paid"
+              className="form-control"
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder="0"
+              value={batchForm.amount_paid}
+              onChange={(event) =>
+                setBatchForm((prev) => ({ ...prev, amount_paid: event.target.value }))
+              }
+            />
+          </div>
+
+          <div className="col-md-4 col-xl-2">
             <label className="form-label mb-1" htmlFor="bulk-show-date">
               Show date
             </label>
@@ -793,8 +882,20 @@ export default function VendorCorporateBulkBookings() {
                   <strong>{Number(batchForm.ticket_count || 0)}</strong>
                 </div>
                 <div className="vendor-corporate-detail-item">
+                  <span>Seat Hold Count</span>
+                  <strong>{Number(batchForm.seat_hold_count || batchForm.ticket_count || 0)}</strong>
+                </div>
+                <div className="vendor-corporate-detail-item">
                   <span>Estimated Total</span>
                   <strong>{formatCurrency(estimatedBatchAmount)}</strong>
+                </div>
+                <div className="vendor-corporate-detail-item">
+                  <span>Invoice Total</span>
+                  <strong>{formatCurrency(batchForm.invoice_total_amount || estimatedBatchAmount)}</strong>
+                </div>
+                <div className="vendor-corporate-detail-item">
+                  <span>Amount Paid</span>
+                  <strong>{formatCurrency(batchForm.amount_paid)}</strong>
                 </div>
               </div>
             </div>

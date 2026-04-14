@@ -20,6 +20,7 @@ import {
   updateVendorPromoCode,
 } from "../lib/catalogApi";
 import { useAppContext } from "../context/Appcontext";
+import { useVendorToast } from "./VendorToastContext";
 
 const seatScopes = ["ALL", "NORMAL", "EXECUTIVE", "PREMIUM", "VIP"];
 const discountTypes = ["PERCENTAGE", "FIXED", "BOGO"];
@@ -117,8 +118,7 @@ export default function VendorCampaignPromos() {
   const [editingPromoId, setEditingPromoId] = useState(null);
   const [promoForm, setPromoForm] = useState(emptyPromoForm);
   const [campaignForm, setCampaignForm] = useState(emptyCampaignForm);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
+  const { pushToast } = useVendorToast();
 
   const activePromos = useMemo(
     () => promos.filter((item) => item.is_active).length,
@@ -139,7 +139,6 @@ export default function VendorCampaignPromos() {
 
   const loadData = async () => {
     setLoading(true);
-    setError("");
     try {
       const [promoData, campaignData] = await Promise.all([
         fetchVendorPromoCodes(),
@@ -148,7 +147,11 @@ export default function VendorCampaignPromos() {
       setPromos(Array.isArray(promoData) ? promoData : []);
       setCampaigns(Array.isArray(campaignData) ? campaignData : []);
     } catch (err) {
-      setError(err.message || "Failed to load campaigns and promo codes.");
+      pushToast({
+        tone: "error",
+        title: "Data load failed",
+        message: err.message || "Failed to load campaigns and promo codes.",
+      });
     } finally {
       setLoading(false);
     }
@@ -169,11 +172,13 @@ export default function VendorCampaignPromos() {
 
   const handlePromoSubmit = async (event) => {
     event.preventDefault();
-    setError("");
-    setNotice("");
 
     if (!String(promoForm.code || "").trim() || !String(promoForm.title || "").trim()) {
-      setError("Promo code and title are required.");
+      pushToast({
+        tone: "warning",
+        title: "Missing fields",
+        message: "Promo code and title are required.",
+      });
       return;
     }
 
@@ -196,15 +201,19 @@ export default function VendorCampaignPromos() {
     try {
       if (editingPromoId) {
         await updateVendorPromoCode(editingPromoId, payload);
-        setNotice("Promo code updated.");
+        pushToast({ tone: "success", title: "Promo updated", message: "Promo code updated." });
       } else {
         await createVendorPromoCode(payload);
-        setNotice("Promo code created.");
+        pushToast({ tone: "success", title: "Promo created", message: "Promo code created." });
       }
       resetPromoForm();
       await loadData();
     } catch (err) {
-      setError(err.message || "Failed to save promo code.");
+      pushToast({
+        tone: "error",
+        title: "Promo save failed",
+        message: err.message || "Failed to save promo code.",
+      });
     } finally {
       setSavingPromo(false);
     }
@@ -235,25 +244,29 @@ export default function VendorCampaignPromos() {
   const handleDeletePromo = async (promo) => {
     if (!window.confirm(`Delete promo code ${promo.code}?`)) return;
 
-    setError("");
-    setNotice("");
     try {
       await deleteVendorPromoCode(promo.id);
       if (editingPromoId === promo.id) resetPromoForm();
-      setNotice("Promo code deleted.");
+      pushToast({ tone: "success", title: "Promo deleted", message: "Promo code deleted." });
       await loadData();
     } catch (err) {
-      setError(err.message || "Failed to delete promo code.");
+      pushToast({
+        tone: "error",
+        title: "Promo delete failed",
+        message: err.message || "Failed to delete promo code.",
+      });
     }
   };
 
   const handleCampaignSubmit = async (event) => {
     event.preventDefault();
-    setError("");
-    setNotice("");
 
     if (!String(campaignForm.name || "").trim()) {
-      setError("Campaign name is required.");
+      pushToast({
+        tone: "warning",
+        title: "Missing campaign name",
+        message: "Campaign name is required.",
+      });
       return;
     }
 
@@ -274,11 +287,19 @@ export default function VendorCampaignPromos() {
     setSavingCampaign(true);
     try {
       await createVendorCampaign(payload);
-      setNotice(campaignForm.run_now ? "Campaign created and dispatched." : "Campaign created.");
+      pushToast({
+        tone: "success",
+        title: campaignForm.run_now ? "Campaign dispatched" : "Campaign created",
+        message: campaignForm.run_now ? "Campaign created and dispatched." : "Campaign created.",
+      });
       resetCampaignForm();
       await loadData();
     } catch (err) {
-      setError(err.message || "Failed to create campaign.");
+      pushToast({
+        tone: "error",
+        title: "Campaign create failed",
+        message: err.message || "Failed to create campaign.",
+      });
     } finally {
       setSavingCampaign(false);
     }
@@ -286,30 +307,38 @@ export default function VendorCampaignPromos() {
 
   const handleRunCampaign = async (campaignId) => {
     setRunningCampaignId(campaignId);
-    setError("");
-    setNotice("");
     try {
       const result = await runVendorCampaign(campaignId);
       const sent = Number(result?.dispatch?.sent_count || 0);
       const failed = Number(result?.dispatch?.failed_count || 0);
-      setNotice(`Campaign dispatched. Sent: ${sent}, Failed: ${failed}.`);
+      pushToast({
+        tone: failed > 0 ? "warning" : "success",
+        title: "Campaign run complete",
+        message: `Campaign dispatched. Sent: ${sent}, Failed: ${failed}.`,
+      });
       await loadData();
     } catch (err) {
-      setError(err.message || "Failed to run campaign.");
+      pushToast({
+        tone: "error",
+        title: "Campaign run failed",
+        message: err.message || "Failed to run campaign.",
+      });
     } finally {
       setRunningCampaignId(null);
     }
   };
 
   const handleCampaignStatusChange = async (campaignId, statusValue) => {
-    setError("");
-    setNotice("");
     try {
       await updateVendorCampaign(campaignId, { status: statusValue });
-      setNotice("Campaign status updated.");
+      pushToast({ tone: "info", title: "Status updated", message: "Campaign status updated." });
       await loadData();
     } catch (err) {
-      setError(err.message || "Failed to update campaign status.");
+      pushToast({
+        tone: "error",
+        title: "Status update failed",
+        message: err.message || "Failed to update campaign status.",
+      });
     }
   };
 
@@ -355,9 +384,6 @@ export default function VendorCampaignPromos() {
           </p>
         </div>
       </div>
-
-      {error ? <div className="alert alert-danger">{error}</div> : null}
-      {notice ? <div className="alert alert-success">{notice}</div> : null}
 
       <section className="vendor-card mb-3">
         <div className="vendor-card-header">

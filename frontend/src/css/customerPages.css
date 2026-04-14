@@ -371,7 +371,7 @@
 @media (max-width: 640px) {
   .wf2-customerPage {
     margin: 12px auto 18px;
-    padding-top: 18px;
+    padding: 18px 12px 24px;
     border-radius: 16px;
   }
 
@@ -389,5 +389,33 @@
 
   .wf2-notificationActions {
     width: 100%;
+  }
+
+  .wf2-customerPageHead h1 {
+    font-size: 24px;
+  }
+
+  .wf2-customerPageHead p {
+    font-size: 13px;
+  }
+
+  .wf2-customerPageAction,
+  .wf2-notificationFilter,
+  .wf2-notificationReadBtn,
+  .wf2-notificationDownloadBtn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .wf2-customerTableWrap {
+    border-radius: 12px;
+  }
+
+  .wf2-customerTable {
+    min-width: 640px;
+  }
+
+  .wf2-notificationMeta {
+    grid-template-columns: 1fr;
   }
 }

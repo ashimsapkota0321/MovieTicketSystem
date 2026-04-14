@@ -41,6 +41,8 @@ export default function LoyaltyDashboard() {
 
   const wallet = dashboard?.wallet || {};
   const summary = dashboard?.summary || {};
+  const tierProgress = dashboard?.tier_progress || {};
+  const redemptionCaps = dashboard?.redemption_caps || {};
   const transactions = Array.isArray(dashboard?.transactions) ? dashboard.transactions : [];
 
   const tierLabel = useMemo(() => {
@@ -107,6 +109,10 @@ export default function LoyaltyDashboard() {
           <span>Tier</span>
           <strong>{tierLabel}</strong>
         </div>
+        <div className="wf2-customerStatCard">
+          <span>Points to next tier</span>
+          <strong>{Number(tierProgress?.points_to_next_tier || wallet?.points_to_next_tier || 0).toLocaleString()}</strong>
+        </div>
       </div>
 
       <div className="wf2-customerStats">
@@ -121,6 +127,23 @@ export default function LoyaltyDashboard() {
         <div className="wf2-customerStatCard">
           <span>Pending redemptions</span>
           <strong>{Number(summary?.pending_redemptions || 0).toLocaleString()}</strong>
+        </div>
+        <div className="wf2-customerStatCard">
+          <span>Daily points cap left</span>
+          <strong>{Number(redemptionCaps?.points_remaining_today || 0).toLocaleString()}</strong>
+        </div>
+      </div>
+
+      <div className="wf2-customerTableWrap" style={{ marginBottom: 16 }}>
+        <div style={{ padding: 16 }}>
+          <div style={{ fontWeight: 700, marginBottom: 8 }}>Tier and Redemption Policy</div>
+          <div style={{ color: "rgba(190, 207, 236, 0.92)", fontSize: 13 }}>
+            Tier valid until: {formatDateTime(tierProgress?.tier_valid_until || wallet?.tier_valid_until)} | 
+            Tier window: {Number(tierProgress?.window_months || wallet?.tier_window_months || 0)} month(s) | 
+            Qualified points: {Number(tierProgress?.qualified_points || wallet?.tier_qualified_points || 0).toLocaleString()} | 
+            Redemption count left today: {Number(redemptionCaps?.count_remaining_today || 0).toLocaleString()} | 
+            Cooldown per reward: {Number(redemptionCaps?.reward_cooldown_minutes || 0).toLocaleString()} min
+          </div>
         </div>
       </div>
 

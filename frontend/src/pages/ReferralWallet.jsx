@@ -166,6 +166,10 @@ export default function ReferralWallet() {
           <strong>NPR {Number(wallet?.spendable_balance || 0).toLocaleString()}</strong>
         </div>
         <div className="wf2-customerStatCard">
+          <span>Locked by hold</span>
+          <strong>NPR {Number(wallet?.locked_balance || 0).toLocaleString()}</strong>
+        </div>
+        <div className="wf2-customerStatCard">
           <span>Total credited</span>
           <strong>NPR {Number(wallet?.total_credited || 0).toLocaleString()}</strong>
         </div>
@@ -215,6 +219,7 @@ export default function ReferralWallet() {
           <div style={{ color: "rgba(190, 207, 236, 0.92)", fontSize: 13 }}>
             Referrer reward: NPR {Number(rewardPolicy?.referrer_reward_amount || 0).toLocaleString()} | 
             Referred reward: NPR {Number(rewardPolicy?.referred_reward_amount || 0).toLocaleString()} | 
+            Hold: {Number(rewardPolicy?.hold_days || 0).toLocaleString()} days |
             Credit expiry: {Number(rewardPolicy?.expiry_days || 90)} days | 
             Checkout cap: {Number(wallet?.cap_percent || 0).toLocaleString()}%
           </div>

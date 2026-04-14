@@ -24,6 +24,7 @@ export default function AdminBanners() {
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editingBanner, setEditingBanner] = useState(null);
+  const [isReadOnlyMode, setIsReadOnlyMode] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [bannerToDelete, setBannerToDelete] = useState(null);
   const [form, setForm] = useState(() => buildEmptyBanner());
@@ -81,12 +82,14 @@ export default function AdminBanners() {
 
   const openAdd = () => {
     setEditingBanner(null);
+    setIsReadOnlyMode(false);
     resetForm();
     setShowModal(true);
   };
 
-  const openEdit = (banner) => {
+  const openEdit = (banner, { readOnly = false } = {}) => {
     setEditingBanner(banner);
+    setIsReadOnlyMode(Boolean(readOnly));
     setForm(mapBannerToForm(banner));
     setImageFile(null);
     setImagePreview(banner?.image || "");
@@ -105,6 +108,9 @@ export default function AdminBanners() {
   };
 
   const handleSave = async () => {
+    if (isReadOnlyMode) {
+      return;
+    }
     if (form.banner_type === "MOVIE" && !form.movie_id) {
       pushToast({
         title: "Movie required",
@@ -243,7 +249,7 @@ export default function AdminBanners() {
                       <button
                         type="button"
                         className="btn btn-outline-light btn-sm"
-                        onClick={() => openEdit(banner)}
+                        onClick={() => openEdit(banner, { readOnly: true })}
                       >
                         <Eye size={16} />
                       </button>
@@ -280,9 +286,10 @@ export default function AdminBanners() {
 
       <AdminModal
         show={showModal}
-        title={editingBanner ? "Edit Banner" : "Add Banner"}
+        title={editingBanner ? (isReadOnlyMode ? "View Banner" : "Edit Banner") : "Add Banner"}
         onClose={() => {
           setShowModal(false);
+          setIsReadOnlyMode(false);
           resetForm();
         }}
         footer={
@@ -292,17 +299,21 @@ export default function AdminBanners() {
               className="btn btn-outline-light"
               onClick={() => {
                 setShowModal(false);
+                setIsReadOnlyMode(false);
                 resetForm();
               }}
             >
-              Cancel
+              {isReadOnlyMode ? "Close" : "Cancel"}
             </button>
-            <button type="button" className="btn btn-primary" onClick={handleSave}>
-              Save Banner
-            </button>
+            {!isReadOnlyMode ? (
+              <button type="button" className="btn btn-primary" onClick={handleSave}>
+                Save Banner
+              </button>
+            ) : null}
           </>
         }
       >
+        <fieldset disabled={isReadOnlyMode}>
         <div className="row g-3">
           <div className="col-12">
             <label className="form-label">Banner type</label>
@@ -380,6 +391,7 @@ export default function AdminBanners() {
             </select>
           </div>
         </div>
+        </fieldset>
       </AdminModal>
 
       <ConfirmModal

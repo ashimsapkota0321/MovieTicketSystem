@@ -19,7 +19,6 @@ env==0.1.0
 executing==2.2.1
 filelock==3.18.0
 fonttools==4.59.1
-google==3.0.0
 idna==3.10
 ipykernel==7.1.0
 ipython==9.9.0
@@ -66,6 +65,7 @@ pywin32==311
 pyzmq==27.1.0
 regex==2025.7.34
 requests==2.32.4
+redis==5.2.1
 rich==14.1.0
 six==1.17.0
 soupsieve==2.7
