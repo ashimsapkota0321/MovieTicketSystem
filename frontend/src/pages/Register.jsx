@@ -10,6 +10,10 @@ import { useAppContext } from "../context/Appcontext";
 import { buildAuthHeroSlides } from "../lib/authHeroSlides";
 import { API_BASE } from "../lib/apiBase";
 
+const SUPER_ADMIN_EMAIL = "asimsapkota2005@gmail.com";
+const SUPER_ADMIN_PHONE = "+977-9826633701";
+const VENDOR_REGISTRATION_EMAIL = "asimsapkota2005@gmail.com";
+
 const RegisterPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -34,6 +38,8 @@ const RegisterPage = () => {
   const [otpLoading, setOtpLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const [showTermsModal, setShowTermsModal] = useState(false);
   const ctx = safeUseAppContext();
 
   const heroSlides = useMemo(() => {
@@ -130,6 +136,11 @@ const RegisterPage = () => {
 
     if (password !== confirm_password) {
       setError("Passwords do not match");
+      return false;
+    }
+
+    if (!acceptedTerms) {
+      setError("Please accept terms and conditions");
       return false;
     }
 
@@ -254,6 +265,7 @@ const RegisterPage = () => {
         password: "",
         confirm_password: "",
       });
+      setAcceptedTerms(false);
 
       setTimeout(() => { navigate("/login", { replace: true }); }, 1500);
     } catch (err) {
@@ -269,6 +281,16 @@ const RegisterPage = () => {
         {/* LEFT FORM */}
         <div className="mt-login-left">
           <img src={Logo} alt="Mero Ticket Logo" className="mt-logo" />
+          <button
+            type="button"
+            className="mt-terms-launch-btn"
+            aria-label="Open terms and conditions"
+            onClick={() => setShowTermsModal(true)}
+          >
+            <span className="mt-terms-launch-icon" aria-hidden="true">
+              i
+            </span>
+          </button>
           <h2 className="mt-title">Create Account</h2>
           <p className="mt-subtitle">
             Fill in your details to register
@@ -466,7 +488,17 @@ const RegisterPage = () => {
             {error && <div className="mt-error">{error}</div>}
             {success && <div className="mt-success">{success}</div>}
 
-            <button type="submit" className="mt-primary-btn" disabled={loading || !otpVerified}>
+            <label className="mt-terms-check">
+              <input
+                type="checkbox"
+                checked={acceptedTerms}
+                onChange={(event) => setAcceptedTerms(event.target.checked)}
+                disabled={loading}
+              />
+              <span>I agree to the Terms & Conditions (click i icon to read).</span>
+            </label>
+
+            <button type="submit" className="mt-primary-btn" disabled={loading || !otpVerified || !acceptedTerms}>
               {loading ? "Creating account..." : otpVerified ? "Sign Up" : "Verify OTP to Sign Up"}
             </button>
 
@@ -505,6 +537,48 @@ const RegisterPage = () => {
           </div>
         </div>
       </div>
+
+      {showTermsModal ? (
+        <div
+          className="mt-terms-modal-backdrop"
+          onClick={() => setShowTermsModal(false)}
+          role="presentation"
+        >
+          <div
+            className="mt-terms-modal"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Terms and Conditions"
+          >
+            <button
+              type="button"
+              className="mt-terms-modal-close"
+              onClick={() => setShowTermsModal(false)}
+            >
+              Close
+            </button>
+
+            <h3 className="mt-terms-modal-title">Terms & Conditions</h3>
+            <p className="mt-terms-modal-text">
+              Customer signup is available here. Vendor registration is handled manually.
+            </p>
+            <p className="mt-terms-modal-text">
+              Vendors must email{" "}
+              <a href={`mailto:${VENDOR_REGISTRATION_EMAIL}`}>{VENDOR_REGISTRATION_EMAIL}</a>{" "}
+              for account registration and approval.
+            </p>
+            <p className="mt-terms-modal-text">
+              Super admin contact:{" "}
+              <a href={`mailto:${SUPER_ADMIN_EMAIL}`}>{SUPER_ADMIN_EMAIL}</a>{" "}
+              |{" "}
+              <a href={`tel:${SUPER_ADMIN_PHONE.replace(/[^+\d]/g, "")}`}>
+                {SUPER_ADMIN_PHONE}
+              </a>
+            </p>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 };

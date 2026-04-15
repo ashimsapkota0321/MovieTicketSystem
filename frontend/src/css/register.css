@@ -62,6 +62,34 @@
   box-shadow: none;
 }
 
+.mt-terms-launch-btn {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  border: 1px solid #d6dae8;
+  background: #ffffff;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.28);
+}
+
+.mt-terms-launch-btn:hover {
+  transform: translateY(-1px);
+}
+
+.mt-terms-launch-icon {
+  color: #d28b00;
+  font-size: 26px;
+  font-family: "Times New Roman", serif;
+  font-weight: 700;
+  line-height: 1;
+}
+
 /* Titles */
 .mt-title {
   font-size: 32px;
@@ -317,12 +345,83 @@
   font-weight: 700;
 }
 
+.mt-terms-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  color: rgba(234, 240, 255, 0.88);
+}
+
+.mt-terms-check input[type="checkbox"] {
+  margin-top: 2px;
+  width: 16px;
+  height: 16px;
+  accent-color: #6366f1;
+}
+
 /* ==================== FOOTER ==================== */
 .mt-footer-text {
   text-align: center;
   font-size: 14px;
   color: rgba(214, 224, 246, 0.75);
   margin-top: 20px;
+}
+
+.mt-terms-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(2, 6, 23, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+}
+
+.mt-terms-modal {
+  width: min(560px, 100%);
+  background: #f9fafb;
+  border-radius: 16px;
+  padding: 18px 18px 16px;
+  color: #111827;
+  position: relative;
+}
+
+.mt-terms-modal-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #111827;
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.mt-terms-modal-title {
+  margin: 0 56px 10px 0;
+  font-size: 18px;
+  color: #111827;
+}
+
+.mt-terms-modal-text {
+  margin: 0 0 10px;
+  color: #374151;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.mt-terms-modal-text a {
+  color: #1f4ed8;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.mt-terms-modal-text a:hover {
+  text-decoration: underline;
 }
 
 .mt-cta {
@@ -398,6 +497,15 @@
     left: 16px;
     padding: 0;
     border-radius: 0;
+  }
+  .mt-terms-launch-btn {
+    top: 16px;
+    right: 16px;
+    width: 30px;
+    height: 30px;
+  }
+  .mt-terms-launch-icon {
+    font-size: 23px;
   }
   .mt-login-left {
     padding: 32px 24px;

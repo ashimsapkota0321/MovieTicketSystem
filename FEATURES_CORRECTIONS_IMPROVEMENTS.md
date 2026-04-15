@@ -5,13 +5,7 @@
 
 ## 2. Missing Real-World Logic
 
-- No settlement lifecycle for vendor payouts.
-- No chargeback/dispute handling.
-- No enforced manual-review gate for risky bookings.
-- No audit log for admin changes to commission, movies, or wallet adjustments.
-- No periodic reconciliation job to detect payment/gateway mismatches.
-- No KYC or bank-account validation for vendor withdrawals.
-- No clear payout failure/retry flow.
+
 
 ## 3. Improvements
 
@@ -33,13 +27,10 @@
 
 ## 4. Feature Suggestions
 
-- Wallet and withdrawal system: payout schedule, minimum withdrawal threshold, payout history, failed payout retries, and destination verification.
 - Loyalty system: tier expiry, redemption caps, anti-abuse checks, and better reward visibility.
-- Referral system: self-referral detection, device/IP heuristics, hold period before rewards become spendable.
 - Dynamic pricing: admin preview, explainability, and rule simulation before publishing.
-- Subscription plans: renewal reminders, pause/resume, expiry handling, and compatibility rules with coupons/referrals.
-- Corporate booking: invoices, bulk seat holds, organization-level billing, and partial payment settlement.
-- Vendor analytics dashboard: revenue by show, occupancy by slot, cancellation rate, refund rate, and payout pending.
+
+
 - AI recommendations: use for discovery and personalization only, not for settlement or risk decisions.
 
 ## 5. Earnings & Payment Logic Review

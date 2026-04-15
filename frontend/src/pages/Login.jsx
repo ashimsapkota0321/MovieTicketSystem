@@ -15,6 +15,10 @@ import {
 } from "../lib/authSession";
 import { API_BASE } from "../lib/apiBase";
 
+const SUPER_ADMIN_EMAIL = "asimsapkota2005@gmail.com";
+const SUPER_ADMIN_PHONE = "+977-9826633701";
+const VENDOR_REGISTRATION_EMAIL = "asimsapkota2005@gmail.com";
+
 const LoginPage = () => {
   const navigate = useNavigate();
   const [emailOrPhone, setEmailOrPhone] = useState("");
@@ -24,6 +28,7 @@ const LoginPage = () => {
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
+  const [showTermsModal, setShowTermsModal] = useState(false);
   const ctx = safeUseAppContext();
 
   const handleAuthenticatedResponse = (data) => {
@@ -229,6 +234,16 @@ const LoginPage = () => {
             alt="Mero Ticket Logo"
             className="mt-logo"
           />
+          <button
+            type="button"
+            className="mt-terms-launch-btn"
+            aria-label="Open terms and conditions"
+            onClick={() => setShowTermsModal(true)}
+          >
+            <span className="mt-terms-launch-icon" aria-hidden="true">
+              i
+            </span>
+          </button>
 
           <h2 className="mt-title">Welcome to Mero Ticket</h2>
           <p className="mt-subtitle">
@@ -362,6 +377,48 @@ const LoginPage = () => {
           </div>
         </div>
       </div>
+
+      {showTermsModal ? (
+        <div
+          className="mt-terms-modal-backdrop"
+          onClick={() => setShowTermsModal(false)}
+          role="presentation"
+        >
+          <div
+            className="mt-terms-modal"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Terms and Conditions"
+          >
+            <button
+              type="button"
+              className="mt-terms-modal-close"
+              onClick={() => setShowTermsModal(false)}
+            >
+              Close
+            </button>
+
+            <h3 className="mt-terms-modal-title">Terms & Conditions</h3>
+            <p className="mt-terms-modal-text">
+              By signing in, you agree to Mero Ticket terms and policies.
+            </p>
+            <p className="mt-terms-modal-text">
+              Vendor registration is handled manually by super admin.
+              Please email{" "}
+              <a href={`mailto:${VENDOR_REGISTRATION_EMAIL}`}>{VENDOR_REGISTRATION_EMAIL}</a>.
+            </p>
+            <p className="mt-terms-modal-text">
+              Super admin contact:{" "}
+              <a href={`mailto:${SUPER_ADMIN_EMAIL}`}>{SUPER_ADMIN_EMAIL}</a>{" "}
+              |{" "}
+              <a href={`tel:${SUPER_ADMIN_PHONE.replace(/[^+\d]/g, "")}`}>
+                {SUPER_ADMIN_PHONE}
+              </a>
+            </p>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 };
