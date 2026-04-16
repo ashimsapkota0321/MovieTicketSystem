@@ -237,10 +237,13 @@ def ensure_schema_ready() -> None:
             "Startup aborted because database schema is not up-to-date. "
             "Apply migrations before serving traffic."
         ) from exc
+    except RuntimeError:
+        # Preserve explicit startup validation errors (env/schema checks) as-is.
+        raise
     except Exception as exc:
         raise RuntimeError(
             "Startup aborted while applying/verifying migrations. "
-            "Fix migration/database issues before starting the server."
+            f"Fix migration/database issues before starting the server. Root cause: {exc}"
         ) from exc
 
     _SCHEMA_READY = True

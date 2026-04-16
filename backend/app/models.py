@@ -308,7 +308,13 @@ class AuthSession(models.Model):
         (ROLE_CUSTOMER, "Customer"),
     ]
 
-    session_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False, db_index=True)
+    session_id = models.CharField(
+        max_length=36,
+        default=uuid.uuid4,
+        unique=True,
+        editable=False,
+        db_index=True,
+    )
     role = models.CharField(max_length=20, choices=ROLE_CHOICES)
     user_id = models.PositiveIntegerField(db_index=True)
     staff_id = models.PositiveIntegerField(blank=True, null=True, db_index=True)
