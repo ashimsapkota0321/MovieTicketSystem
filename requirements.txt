@@ -7,3 +7,4 @@ redis
 requests
 sqlparse
 whitenoise==6.6.0
+gunicorn==22.0.0
