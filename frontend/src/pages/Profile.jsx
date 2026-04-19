@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import Pagination from "../components/Pagination";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import {
@@ -135,6 +136,8 @@ export default function Profile() {
   const [removeAvatar, setRemoveAvatar] = useState(false);
   const [isImageOpen, setImageOpen] = useState(false);
   const [bookingHistory, setBookingHistory] = useState([]);
+  const [historyPage, setHistoryPage] = useState(1);
+  const HISTORY_PAGE_SIZE = 10;
   const [bookingHistoryLoading, setBookingHistoryLoading] = useState(false);
   const [bookingHistoryError, setBookingHistoryError] = useState("");
 
@@ -705,16 +708,18 @@ export default function Profile() {
               </tr>
             </thead>
             <tbody>
-              {bookingHistory.map((booking) => (
-                <tr key={booking.id}>
-                  <td>{booking.movie || "-"}</td>
-                  <td>{formatHistoryDateTime(booking.showTime)}</td>
-                  <td>{booking.seats || "-"}</td>
-                  <td>{formatPaymentCell(booking)}</td>
-                  <td>{booking.status || "Pending"}</td>
-                  <td>{formatCurrency(booking.total)}</td>
-                </tr>
-              ))}
+              {bookingHistory
+                .slice((historyPage - 1) * HISTORY_PAGE_SIZE, historyPage * HISTORY_PAGE_SIZE)
+                .map((booking) => (
+                  <tr key={booking.id}>
+                    <td>{booking.movie || "-"}</td>
+                    <td>{formatHistoryDateTime(booking.showTime)}</td>
+                    <td>{booking.seats || "-"}</td>
+                    <td>{formatPaymentCell(booking)}</td>
+                    <td>{booking.status || "Pending"}</td>
+                    <td>{formatCurrency(booking.total)}</td>
+                  </tr>
+                ))}
               {!bookingHistoryLoading && bookingHistory.length === 0 ? (
                 <tr>
                   <td colSpan="6">No bookings yet.</td>
@@ -727,6 +732,14 @@ export default function Profile() {
               ) : null}
             </tbody>
           </table>
+          {/* Pagination Controls */}
+          {!bookingHistoryLoading && bookingHistory.length > HISTORY_PAGE_SIZE && (
+            <Pagination
+              page={historyPage}
+              totalPages={Math.ceil(bookingHistory.length / HISTORY_PAGE_SIZE) || 1}
+              onPageChange={setHistoryPage}
+            />
+          )}
         </div>
       </section>
 

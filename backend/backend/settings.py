@@ -13,6 +13,15 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 from pathlib import Path
 import os
 
+import pymysql
+
+try:
+    import dj_database_url
+except Exception:
+    dj_database_url = None
+
+pymysql.install_as_MySQLdb()
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 PROJECT_ROOT = BASE_DIR.parent
@@ -53,7 +62,8 @@ for env_file in (
 SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-s%cqxemq154@0f3m&ry8ec5#e^=9s3wpt!tg58wxthkt1!y3^9')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.environ.get('DEBUG', 'True').lower() in ('1', 'true', 'yes', 'on')
+IS_RENDER = bool(str(os.environ.get("RENDER", "")).strip())
+DEBUG = os.environ.get('DEBUG', 'false' if IS_RENDER else 'True').lower() in ('1', 'true', 'yes', 'on')
 
 ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '*').split(',')
 
@@ -75,6 +85,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'app.middleware.RequestIDLoggingMiddleware',
@@ -84,7 +95,6 @@ MIDDLEWARE = [
     'app.middleware.RoleBasedAccessMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'whitenoise.middleware.WhiteNoiseMiddleware'
 ]
 CORS_ALLOW_ALL_ORIGINS = True
 CORS_EXPOSE_HEADERS = ["X-Request-ID"]
@@ -114,7 +124,17 @@ WSGI_APPLICATION = 'backend.wsgi.application'
 
 # MySQL database configuration (values loaded from environment variables).
 
-DATABASES = {
+_database_url = str(os.environ.get("DATABASE_URL", "")).strip()
+if _database_url and dj_database_url is not None:
+    DATABASES = {
+        "default": dj_database_url.parse(
+            _database_url,
+            conn_max_age=600,
+            ssl_require=not DEBUG,
+        )
+    }
+else:
+    DATABASES = {
         'default': {
             'ENGINE': os.environ.get('DB_ENGINE', 'django.db.backends.mysql'),
             'NAME': os.environ.get('DB_NAME', 'moviebooking'),
@@ -278,14 +298,16 @@ APP_AUTH_COOKIE_DOMAIN = _auth_cookie_domain or None
 APP_AUTH_COOKIE_SECURE = _env_bool("APP_AUTH_COOKIE_SECURE", not DEBUG)
 _auth_cookie_samesite = _env_str("APP_AUTH_COOKIE_SAMESITE", "Lax").capitalize()
 APP_AUTH_COOKIE_SAMESITE = _auth_cookie_samesite if _auth_cookie_samesite in {"Lax", "Strict", "None"} else "Lax"
-APP_AUTH_ACCESS_TOKEN_MAX_AGE_SECONDS = max(
-    _env_int("APP_AUTH_ACCESS_TOKEN_MAX_AGE_SECONDS", 60 * 15),
-    60,
-)
+
+# Set session and token expiry to 1 hour (3600 seconds)
+APP_AUTH_ACCESS_TOKEN_MAX_AGE_SECONDS = 60 * 60  # 1 hour
 APP_AUTH_REFRESH_TOKEN_MAX_AGE_SECONDS = max(
     _env_int("APP_AUTH_REFRESH_TOKEN_MAX_AGE_SECONDS", 60 * 60 * 24 * 30),
     60,
 )
+
+# Django session expiry (1 hour)
+SESSION_COOKIE_AGE = 60 * 60  # 1 hour
 
 
 # Email settings (used for OTP/reset and notifications)

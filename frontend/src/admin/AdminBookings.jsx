@@ -56,7 +56,7 @@ export default function AdminBookings() {
     }
 
     if (statusFilter !== "Status") {
-      list = list.filter((booking) => String(booking.status || "") === statusFilter);
+      list = list.filter((booking) => resolveAdminBookingStatus(booking).label === statusFilter);
     }
 
     if (dateFilter) {
@@ -218,73 +218,61 @@ export default function AdminBookings() {
                 <th>Seats</th>
                 <th>Total</th>
                 <th>Status</th>
-                <th>Refund</th>
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {paginatedBookings.map((booking) => (
-                <tr key={booking.id}>
-                  <td>{booking.id}</td>
-                  <td>{booking.user}</td>
-                  <td>{booking.movie}</td>
-                  <td>{booking.showTime}</td>
-                  <td>{booking.seats || "-"}</td>
-                  <td>Rs {typeof booking.total === "number" ? booking.total.toLocaleString() : booking.total || 0}</td>
-                  <td>
-                    <span
-                      className={`badge-soft ${{
-                        Paid: "success",
-                        Pending: "warning",
-                        Cancelled: "danger",
-                        Refunded: "info",
-                      }[booking.status] || "info"}`}
-                    >
-                      {booking.status}
-                    </span>
-                  </td>
-                  <td>
-                    <span className={`badge-soft ${booking.refundStatus === "Refunded" ? "info" : "warning"}`}>
-                      {booking.refundStatus || "N/A"}
-                    </span>
-                  </td>
-                  <td>
-                    <div className="d-flex gap-2">
-                      <button
-                        type="button"
-                        className="btn btn-outline-light btn-sm"
-                        onClick={() => openView(booking)}
-                      >
-                        <Eye size={16} />
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-outline-light btn-sm"
-                        onClick={() => handleRefund(booking)}
-                      >
-                        <ReceiptText size={16} />
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-outline-light btn-sm"
-                        onClick={() => confirmCancel(booking)}
-                      >
-                        <XCircle size={16} />
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-outline-light btn-sm"
-                        onClick={() => confirmDelete(booking)}
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              {paginatedBookings.map((booking) => {
+                const mergedStatus = resolveAdminBookingStatus(booking);
+                return (
+                  <tr key={booking.id}>
+                    <td>{booking.id}</td>
+                    <td>{booking.user}</td>
+                    <td>{booking.movie}</td>
+                    <td>{booking.showTime}</td>
+                    <td>{booking.seats || "-"}</td>
+                    <td>Rs {typeof booking.total === "number" ? booking.total.toLocaleString() : booking.total || 0}</td>
+                    <td>
+                      <span className={`badge-soft ${mergedStatus.tone}`}>{mergedStatus.label}</span>
+                    </td>
+                    <td>
+                      <div className="d-flex gap-2">
+                        <button
+                          type="button"
+                          className="btn btn-outline-light btn-sm"
+                          onClick={() => openView(booking)}
+                        >
+                          <Eye size={16} />
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-outline-light btn-sm"
+                          onClick={() => handleRefund(booking)}
+                        >
+                          <ReceiptText size={16} />
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-outline-light btn-sm"
+                          onClick={() => confirmCancel(booking)}
+                        >
+                          <XCircle size={16} />
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-outline-light btn-sm"
+                          onClick={() => confirmDelete(booking)}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
               {!isLoading && filteredBookings.length === 0 ? (
                 <tr>
-                  <td colSpan="9">No bookings yet.</td>
+                  <td colSpan="8">No bookings yet.</td>
                 </tr>
               ) : null}
             </tbody>
@@ -350,61 +338,61 @@ export default function AdminBookings() {
         onClose={() => setShowView(false)}
       >
         {activeBooking ? (
-          <div className="d-grid gap-2">
-            <div className="d-flex justify-content-between">
-              <strong>Booking ID</strong>
-              <span>{activeBooking.id}</span>
+          <div className="admin-details-view">
+            <div className="admin-details-row">
+              <div className="admin-details-label">Booking ID</div>
+              <div className="admin-details-value">{activeBooking.id}</div>
             </div>
-            <div className="d-flex justify-content-between">
-              <strong>User</strong>
-              <span>{activeBooking.user}</span>
+            <div className="admin-details-row">
+              <div className="admin-details-label">User</div>
+              <div className="admin-details-value">{activeBooking.user}</div>
             </div>
             {activeBooking.userEmail ? (
-              <div className="d-flex justify-content-between">
-                <strong>Email</strong>
-                <span>{activeBooking.userEmail}</span>
+              <div className="admin-details-row">
+                <div className="admin-details-label">Email</div>
+                <div className="admin-details-value">{activeBooking.userEmail}</div>
               </div>
             ) : null}
-            <div className="d-flex justify-content-between">
-              <strong>Movie</strong>
-              <span>{activeBooking.movie || "-"}</span>
+            <div className="admin-details-row">
+              <div className="admin-details-label">Movie</div>
+              <div className="admin-details-value">{activeBooking.movie || "-"}</div>
             </div>
-            <div className="d-flex justify-content-between">
-              <strong>Cinema</strong>
-              <span>{activeBooking.vendor || "-"}</span>
+            <div className="admin-details-row">
+              <div className="admin-details-label">Cinema</div>
+              <div className="admin-details-value">{activeBooking.vendor || "-"}</div>
             </div>
-            <div className="d-flex justify-content-between">
-              <strong>Show Time</strong>
-              <span>{activeBooking.showTime || "-"}</span>
+            <div className="admin-details-row">
+              <div className="admin-details-label">Show Time</div>
+              <div className="admin-details-value">{activeBooking.showTime || "-"}</div>
             </div>
-            <div className="d-flex justify-content-between">
-              <strong>Seats</strong>
-              <span>{activeBooking.seats || "-"}</span>
+            <div className="admin-details-row">
+              <div className="admin-details-label">Seats</div>
+              <div className="admin-details-value">{activeBooking.seats || "-"}</div>
             </div>
-            <div className="d-flex justify-content-between">
-              <strong>Total</strong>
-              <span>Rs {activeBooking.total || 0}</span>
+            <div className="admin-details-row">
+              <div className="admin-details-label">Total</div>
+              <div className="admin-details-value">Rs {activeBooking.total || 0}</div>
             </div>
-            <div className="d-flex justify-content-between">
-              <strong>Status</strong>
-              <span>{activeBooking.status}</span>
+            <div className="admin-details-row">
+              <div className="admin-details-label">Status</div>
+              <div className="admin-details-value">{activeBooking.status}</div>
             </div>
             {Array.isArray(activeBooking.payments) && activeBooking.payments.length ? (
-              <div className="mt-3">
-                <strong>Payments</strong>
+              <div className="admin-details-section">
+                <h4 className="admin-details-title">Payments</h4>
                 {activeBooking.payments.map((payment) => (
-                  <div key={payment.id} className="mt-2">
-                    <div className="d-flex justify-content-between">
-                      <span>Method</span>
-                      <span>{payment.method}</span>
+                  <div key={payment.id}>
+                    <div className="admin-details-row">
+                      <div className="admin-details-label">Method</div>
+                      <div className="admin-details-value">{payment.method}</div>
                     </div>
-                    <div className="d-flex justify-content-between">
-                      <span>Status</span>
-                      <span>{payment.status}</span>
+                    <div className="admin-details-row">
+                      <div className="admin-details-label">Status</div>
+                      <div className="admin-details-value">{payment.status}</div>
                     </div>
-                    <div className="d-flex justify-content-between">
-                      <span>Amount</span>
-                      <span>Rs {payment.amount}</span>
+                    <div className="admin-details-row">
+                      <div className="admin-details-label">Amount</div>
+                      <div className="admin-details-value">Rs {payment.amount}</div>
                     </div>
                   </div>
                 ))}
@@ -417,4 +405,27 @@ export default function AdminBookings() {
       </AdminModal>
     </>
   );
+}
+
+function resolveAdminBookingStatus(booking) {
+  const bookingStatus = String(booking?.status || "").trim().toUpperCase();
+  const refundStatus = String(booking?.refundStatus || booking?.refund_status || "").trim().toUpperCase();
+
+  if (refundStatus === "REFUNDED" || refundStatus === "COMPLETED") {
+    return { label: "Refunded", tone: "info" };
+  }
+  if (refundStatus === "PENDING") {
+    return { label: "Refund Pending", tone: "warning" };
+  }
+  if (bookingStatus === "PAID" || bookingStatus === "SUCCESS" || bookingStatus === "CONFIRMED") {
+    return { label: "Paid", tone: "success" };
+  }
+  if (bookingStatus === "PENDING") {
+    return { label: "Pending", tone: "warning" };
+  }
+  if (bookingStatus === "CANCELLED" || bookingStatus === "FAILED") {
+    return { label: "Cancelled", tone: "danger" };
+  }
+
+  return { label: booking?.status || "Unknown", tone: "info" };
 }

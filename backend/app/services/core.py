@@ -3265,6 +3265,17 @@ def _build_booking_notification_metadata(
         if item.seat
     ]
 
+    ticket_reference = _find_ticket_reference_for_booking(booking.id)
+    ticket_qr_code = None
+    if ticket_reference:
+        ticket = Ticket.objects.filter(reference=ticket_reference).only("id", "payload", "ticket_id").first()
+        if ticket:
+            try:
+                ticket_payload = persist_ticket_render_artifacts(ticket)
+                ticket_qr_code = str(ticket_payload.get("qr_code") or "").strip() or None
+            except Exception:
+                ticket_qr_code = None
+
     metadata: dict[str, Any] = {
         "booking_id": booking.id,
         "booking_status": booking.booking_status,
@@ -3309,7 +3320,8 @@ def _build_booking_notification_metadata(
             if latest_refund and latest_refund.refund_date
             else None,
         },
-        "ticket_reference": _find_ticket_reference_for_booking(booking.id),
+        "ticket_reference": ticket_reference,
+        "ticket_qr_code": ticket_qr_code,
     }
 
     if include_booking_detail:
@@ -4454,18 +4466,152 @@ def get_vendor_wallet_balance(request: Any) -> tuple[dict[str, Any], int]:
 
 
 def create_vendor_withdrawal_request(request: Any) -> tuple[dict[str, Any], int]:
-    """Create a withdrawal request for authenticated vendor."""
+    """Create OTP-gated withdrawal request for authenticated vendor."""
     vendor = resolve_vendor(request)
     if not vendor:
         return {"message": "Vendor not found."}, status.HTTP_404_NOT_FOUND
 
     payload = get_payload(request)
+    wallet = _wallet_for_vendor(vendor)
+    payout_profile = _get_or_create_vendor_payout_profile(vendor)
+    verification_metadata = dict(payout_profile.verification_metadata or {})
+    pending_request = verification_metadata.get("pending_withdrawal_request") if isinstance(verification_metadata, dict) else None
+    otp = str(coalesce(payload, "otp", "verification_otp", "verificationOtp") or "").strip()
+
+    if otp:
+        if not isinstance(pending_request, dict):
+            return {"message": "No pending OTP withdrawal request found. Start withdrawal first."}, status.HTTP_400_BAD_REQUEST
+
+        cutoff = timezone.now() - timedelta(minutes=EMAIL_OTP_TTL_MINUTES)
+        record = OTPVerification.objects.filter(
+            email__iexact=vendor.email,
+            otp=otp,
+            is_verified=False,
+            created_at__gte=cutoff,
+        ).order_by("-created_at").first()
+        if not record:
+            return {"message": "Invalid or expired OTP."}, status.HTTP_400_BAD_REQUEST
+
+        amount = _parse_price_amount(pending_request.get("amount"))
+        if amount is None or amount <= Decimal("0"):
+            return {"message": "Pending withdrawal amount is invalid. Please retry withdrawal."}, status.HTTP_400_BAD_REQUEST
+
+        phone_digits = "".join(ch for ch in str(pending_request.get("phone") or "") if ch.isdigit())
+        if len(phone_digits) > 10 and phone_digits.startswith("977"):
+            phone_digits = phone_digits[-10:]
+        note = str(pending_request.get("note") or "").strip() or None
+
+        with transaction.atomic():
+            locked_wallet = Wallet.objects.select_for_update().filter(id=wallet.id).first()
+            if not locked_wallet:
+                return {"message": "Wallet not found for withdrawal request."}, status.HTTP_404_NOT_FOUND
+
+            _recalculate_vendor_wallet_snapshot(locked_wallet)
+            pending_withdrawal = _pending_withdrawal_total(locked_wallet)
+            available = _quantize_money((locked_wallet.balance or Decimal("0")) - pending_withdrawal)
+            if amount > available:
+                return {
+                    "message": "Insufficient withdrawable balance.",
+                    "available_balance": float(max(available, Decimal("0"))),
+                }, status.HTTP_400_BAD_REQUEST
+
+            payout_profile.destination_type = VendorPayoutProfile.DESTINATION_MOBILE
+            payout_profile.destination_name = "eSewa"
+            if phone_digits:
+                payout_profile.destination_reference = phone_digits
+            payout_profile.is_destination_verified = True
+            payout_profile.destination_verified_at = timezone.now()
+            verification_metadata = dict(payout_profile.verification_metadata or {})
+            verification_metadata["auto_verified_by"] = "vendor_withdrawal_otp"
+            verification_metadata["auto_verified_at"] = timezone.now().isoformat()
+            verification_metadata["last_withdrawal_otp_verified_at"] = timezone.now().isoformat()
+            verification_metadata.pop("pending_withdrawal_request", None)
+            payout_profile.verification_metadata = verification_metadata
+            payout_profile.save(
+                update_fields=[
+                    "destination_type",
+                    "destination_name",
+                    "destination_reference",
+                    "is_destination_verified",
+                    "destination_verified_at",
+                    "verification_metadata",
+                    "updated_at",
+                ]
+            )
+
+            withdrawal_txn = Transaction.objects.create(
+                wallet=locked_wallet,
+                vendor=vendor,
+                transaction_type=Transaction.TYPE_WITHDRAWAL_REQUEST,
+                amount=_quantize_money(amount),
+                commission_amount=Decimal("0.00"),
+                gross_amount=_quantize_money(amount),
+                status=Transaction.STATUS_COMPLETED,
+                description=note or "Withdrawal request (OTP verified)",
+                decision_metadata={
+                    "action": "OTP_VERIFY_AND_APPROVE",
+                    "approved_by": vendor.id,
+                    "approved_at": timezone.now().isoformat(),
+                    "reason": note,
+                    "destination_phone": phone_digits or None,
+                },
+                decision_reason=note,
+                decision_at=timezone.now(),
+            )
+
+            Transaction.objects.create(
+                wallet=locked_wallet,
+                vendor=vendor,
+                transaction_type=Transaction.TYPE_WITHDRAWAL_APPROVED,
+                amount=_quantize_money(amount),
+                commission_amount=Decimal("0.00"),
+                gross_amount=_quantize_money(amount),
+                status=Transaction.STATUS_COMPLETED,
+                description=f"Withdrawal approved via OTP for request #{withdrawal_txn.id}",
+            )
+
+            WithdrawalLedger.objects.create(
+                vendor=vendor,
+                wallet=locked_wallet,
+                withdrawal_transaction=withdrawal_txn,
+                status=WithdrawalLedger.STATUS_APPROVED,
+                amount=_quantize_money(amount),
+                gross_amount=_quantize_money(amount),
+                metadata={"source": "vendor_withdrawal_otp"},
+                decision_metadata={"action": "OTP_VERIFY_AND_APPROVE", "reason": note},
+                decision_reason=note,
+                decision_at=timezone.now(),
+            )
+
+            _recalculate_vendor_wallet_snapshot(locked_wallet)
+
+        record.is_verified = True
+        record.save(update_fields=["is_verified"])
+
+        enqueue_withdrawal_settlement_job(
+            withdrawal_transaction_id=withdrawal_txn.id,
+            payout_reference=f"WSET-{withdrawal_txn.transaction_uuid or withdrawal_txn.id}",
+            metadata={"source": "vendor_otp_approval"},
+        )
+
+        return {
+            "message": "OTP verified. Payment successful.",
+            "payment_success": True,
+            "transaction": {
+                "id": withdrawal_txn.id,
+                "transaction_uuid": withdrawal_txn.transaction_uuid,
+                "type": withdrawal_txn.transaction_type,
+                "status": withdrawal_txn.status,
+                "amount": float(withdrawal_txn.amount),
+                "created_at": withdrawal_txn.created_at.isoformat() if withdrawal_txn.created_at else None,
+                "description": withdrawal_txn.description,
+            },
+        }, status.HTTP_200_OK
+
     amount = _parse_price_amount(coalesce(payload, "amount", "withdraw_amount", "withdrawAmount"))
     if amount is None or amount <= Decimal("0"):
         return {"message": "Valid amount is required."}, status.HTTP_400_BAD_REQUEST
 
-    wallet = _wallet_for_vendor(vendor)
-    payout_profile = _get_or_create_vendor_payout_profile(vendor)
     pending_withdrawal = _pending_withdrawal_total(wallet)
     available = _quantize_money((wallet.balance or Decimal("0")) - pending_withdrawal)
     if amount > available:
@@ -4474,72 +4620,56 @@ def create_vendor_withdrawal_request(request: Any) -> tuple[dict[str, Any], int]
             "available_balance": float(max(available, Decimal("0"))),
         }, status.HTTP_400_BAD_REQUEST
 
-    minimum_withdrawal = _quantize_money(payout_profile.minimum_withdrawal_amount or VENDOR_PAYOUT_DEFAULT_MINIMUM_WITHDRAWAL)
-    if amount < minimum_withdrawal:
-        next_window = _next_vendor_payout_window(payout_profile)
-        return {
-            "message": "Requested amount is below the minimum withdrawal threshold.",
-            "minimum_withdrawal_amount": float(minimum_withdrawal),
-            "next_payout_window": next_window.isoformat() if next_window else None,
-        }, status.HTTP_400_BAD_REQUEST
+    phone_raw = str(coalesce(payload, "phone_number", "phoneNumber", "mobile_number", "mobileNumber") or "").strip()
+    phone_digits = "".join(ch for ch in phone_raw if ch.isdigit())
+    if len(phone_digits) > 10 and phone_digits.startswith("977"):
+        phone_digits = phone_digits[-10:]
 
-    if not payout_profile.is_destination_verified:
-        return {
-            "message": "Your payout destination must be verified before requesting withdrawal.",
-            "payout_profile": _serialize_vendor_payout_profile(payout_profile),
-        }, status.HTTP_409_CONFLICT
-
-    if not _vendor_payout_window_matches(payout_profile, timezone.localtime(timezone.now())):
-        next_window = _next_vendor_payout_window(payout_profile)
-        return {
-            "message": "Withdrawals are only allowed during the configured payout window.",
-            "next_payout_window": next_window.isoformat() if next_window else None,
-            "payout_policy": _vendor_payout_policy_payload(payout_profile),
-        }, status.HTTP_409_CONFLICT
+    if not phone_digits:
+        return {"message": "Phone number is required."}, status.HTTP_400_BAD_REQUEST
+    if len(phone_digits) != 10 or not phone_digits.startswith("9"):
+        return {"message": "Enter a valid Nepali phone number."}, status.HTTP_400_BAD_REQUEST
 
     note = str(coalesce(payload, "note", "description", "remark") or "").strip() or None
-    txn = Transaction.objects.create(
-        wallet=wallet,
-        vendor=vendor,
-        transaction_type=Transaction.TYPE_WITHDRAWAL_REQUEST,
-        amount=_quantize_money(amount),
-        commission_amount=Decimal("0.00"),
-        gross_amount=_quantize_money(amount),
-        status=Transaction.STATUS_PENDING,
-        description=note or "Withdrawal request",
-        decision_metadata={
-            "action": "REQUEST",
-            "requested_by": vendor.id,
-            "requested_at": timezone.now().isoformat(),
-            "reason": note,
-            "payout_profile": _serialize_vendor_payout_profile(payout_profile),
-        },
-        decision_at=timezone.now(),
+    otp_value = f"{random.randint(100000, 999999)}"
+    otp_record = OTPVerification.objects.create(email=vendor.email, otp=otp_value)
+
+    verification_metadata = dict(payout_profile.verification_metadata or {})
+    verification_metadata["pending_withdrawal_request"] = {
+        "amount": str(_quantize_money(amount)),
+        "phone": phone_digits,
+        "note": note,
+        "requested_at": timezone.now().isoformat(),
+    }
+    payout_profile.verification_metadata = verification_metadata
+    payout_profile.save(update_fields=["verification_metadata", "updated_at"])
+
+    sent = _send_notification_email(
+        subject="Vendor withdrawal OTP",
+        message=(
+            "Use this OTP to complete your withdrawal request.\n\n"
+            f"OTP: {otp_value}\n"
+            f"Amount: NPR {float(_quantize_money(amount)):.2f}\n"
+            f"Phone: {phone_digits}\n\n"
+            f"This OTP is valid for {EMAIL_OTP_TTL_MINUTES} minutes."
+        ),
+        recipient_email=vendor.email,
     )
-    WithdrawalLedger.objects.create(
-        vendor=vendor,
-        wallet=wallet,
-        withdrawal_transaction=txn,
-        status=WithdrawalLedger.STATUS_REQUESTED,
-        amount=_quantize_money(amount),
-        gross_amount=_quantize_money(amount),
-        metadata={"source": "vendor_withdrawal_request"},
-        decision_metadata={"action": "REQUEST", "reason": note},
-        decision_reason=note,
-    )
+    if not sent:
+        otp_record.delete()
+        verification_metadata.pop("pending_withdrawal_request", None)
+        payout_profile.verification_metadata = verification_metadata
+        payout_profile.save(update_fields=["verification_metadata", "updated_at"])
+        return {"message": "Failed to send withdrawal OTP."}, status.HTTP_500_INTERNAL_SERVER_ERROR
+
+    if bool(getattr(settings, "DEBUG", False)):
+        print(f"DEBUG WITHDRAW OTP for {vendor.email}: {otp_value}")
 
     return {
-        "message": "Withdrawal request submitted.",
-        "transaction": {
-            "id": txn.id,
-            "transaction_uuid": txn.transaction_uuid,
-            "type": txn.transaction_type,
-            "status": txn.status,
-            "amount": float(txn.amount),
-            "created_at": txn.created_at.isoformat() if txn.created_at else None,
-            "description": txn.description,
-        },
-    }, status.HTTP_201_CREATED
+        "message": "OTP sent to your email. Enter OTP to complete payment.",
+        "requires_otp": True,
+        "otp_ttl_minutes": EMAIL_OTP_TTL_MINUTES,
+    }, status.HTTP_200_OK
 
 
 def update_vendor_payout_profile(request: Any) -> tuple[dict[str, Any], int]:
@@ -6335,9 +6465,15 @@ def _render_vendor_campaign_message(
 
 
 def _get_campaign_audience(campaign: VendorCampaign) -> list[tuple[User, str]]:
-    queryset = Booking.objects.filter(showtime__screen__vendor_id=campaign.vendor_id).exclude(
-        booking_status__iexact="Cancelled"
-    ).select_related("user", "showtime__movie")
+    queryset = (
+        Booking.objects.filter(
+            Q(showtime__vendor_id=campaign.vendor_id)
+            | Q(showtime__screen__vendor_id=campaign.vendor_id),
+            booking_status=Booking.Status.CONFIRMED,
+            user__isnull=False,
+        )
+        .select_related("user", "showtime__movie")
+    )
 
     if campaign.target_movie_id:
         queryset = queryset.filter(showtime__movie_id=campaign.target_movie_id)
@@ -9662,6 +9798,38 @@ def create_movie(request: Any) -> tuple[dict[str, Any], int]:
         except Exception:
             pass
     _sync_movie_credits(request, movie, _extract_credits_payload(payload))
+
+    # Vendor submissions should notify admins for moderation/approval.
+    if vendor_actor:
+        try:
+            vendor_name = str(getattr(vendor_actor, "name", "") or "").strip() or "Vendor"
+            vendor_id = getattr(vendor_actor, "id", None)
+            notification_title = "New movie submitted for approval"
+            notification_message = (
+                f"{vendor_name} submitted '{movie.title}' and it is waiting for admin approval."
+            )
+            notification_metadata = {
+                "movie_id": movie.id,
+                "movie_title": movie.title,
+                "vendor_id": vendor_id,
+                "vendor_name": vendor_name,
+                "approval_status": movie.approval_status,
+                "action": "movie_submission",
+            }
+            for admin in Admin.objects.filter(is_active=True).only("id", "email"):
+                _create_notification(
+                    recipient_role=Notification.ROLE_ADMIN,
+                    recipient_id=admin.id,
+                    recipient_email=admin.email,
+                    event_type=Notification.EVENT_SHOW_UPDATE,
+                    title=notification_title,
+                    message=notification_message,
+                    metadata=notification_metadata,
+                    send_email_too=True,
+                )
+        except Exception:
+            logger.exception("Failed to dispatch vendor movie submission notifications for movie %s", movie.id)
+
     response_builder = build_movie_admin_payload if admin_actor else build_movie_vendor_payload
     return {"movie": response_builder(movie, request=request)}, status.HTTP_201_CREATED
 
@@ -13113,6 +13281,7 @@ def create_vendor_bulk_ticket_batch(request: Any) -> tuple[dict[str, Any], int]:
                 payload=ticket_payload,
                 **ticket_security_fields,
             )
+            persist_ticket_render_artifacts(ticket)
             generated_items.append(
                 BulkTicketItem(
                     batch=batch,
@@ -15829,11 +15998,50 @@ def generate_ticket_qr_token(ticket: Ticket) -> str:
 
 def build_ticket_qr_payload(ticket: Ticket) -> dict[str, Any]:
     """Build secure QR payload with UUID + signed token."""
+    payload = ticket.payload if isinstance(ticket.payload, dict) else {}
+    stored_payload = payload.get("qr_payload") if isinstance(payload, dict) else None
+    if isinstance(stored_payload, dict):
+        stored_token = str(stored_payload.get("token") or "").strip()
+        stored_ticket_id = str(stored_payload.get("ticket_id") or "").strip()
+        if stored_token and stored_ticket_id == str(ticket.ticket_id):
+            return {
+                "ticket_id": stored_ticket_id,
+                "token": stored_token,
+            }
+
     token = generate_ticket_qr_token(ticket)
     return {
         "ticket_id": str(ticket.ticket_id),
         "token": token,
     }
+
+
+def persist_ticket_render_artifacts(ticket: Ticket) -> dict[str, Any]:
+    """Persist ticket QR payload/image so all clients receive stable artifacts."""
+    payload = dict(ticket.payload) if isinstance(ticket.payload, dict) else {}
+    changed = False
+
+    qr_payload = build_ticket_qr_payload(ticket)
+    if payload.get("qr_payload") != qr_payload:
+        payload["qr_payload"] = qr_payload
+        changed = True
+
+    if not str(payload.get("ticket_id") or "").strip():
+        payload["ticket_id"] = str(ticket.ticket_id)
+        changed = True
+
+    qr_code = str(payload.get("qr_code") or "").strip()
+    if not qr_code:
+        qr_image = _build_qr_image(json.dumps(qr_payload, separators=(",", ":")))
+        if qr_image is not None:
+            payload["qr_code"] = _image_to_data_url(qr_image)
+            changed = True
+
+    if changed:
+        ticket.payload = payload
+        ticket.save(update_fields=["payload"])
+
+    return payload
 
 
 def build_ticket_qr_data(ticket: Ticket) -> str:
@@ -16737,8 +16945,13 @@ def build_ticket_download(reference: str) -> Optional[bytes]:
     if not ticket:
         return None
 
-    payload = ticket.payload or {}
-    qr_image = _build_qr_image(build_ticket_qr_data(ticket))
+    payload = persist_ticket_render_artifacts(ticket)
+    qr_image = None
+    qr_payload = payload.get("qr_payload") if isinstance(payload.get("qr_payload"), dict) else None
+    if qr_payload:
+        qr_image = _build_qr_image(json.dumps(qr_payload, separators=(",", ":")))
+    if qr_image is None:
+        qr_image = _build_qr_image(build_ticket_qr_data(ticket))
     render_payload = dict(payload)
     render_payload["ticket_id"] = str(ticket.ticket_id)
     ticket_image = _render_ticket_image(render_payload, qr_image)
@@ -16754,8 +16967,13 @@ def build_ticket_pdf(reference: str) -> Optional[bytes]:
     if not ticket:
         return None
 
-    payload = ticket.payload or {}
-    qr_image = _build_qr_image(build_ticket_qr_data(ticket))
+    payload = persist_ticket_render_artifacts(ticket)
+    qr_image = None
+    qr_payload = payload.get("qr_payload") if isinstance(payload.get("qr_payload"), dict) else None
+    if qr_payload:
+        qr_image = _build_qr_image(json.dumps(qr_payload, separators=(",", ":")))
+    if qr_image is None:
+        qr_image = _build_qr_image(build_ticket_qr_data(ticket))
     render_payload = dict(payload)
     render_payload["ticket_id"] = str(ticket.ticket_id)
     ticket_image = _render_ticket_bundle_image(render_payload, qr_image)

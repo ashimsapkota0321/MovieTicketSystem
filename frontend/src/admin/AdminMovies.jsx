@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Eye, Pencil, Plus, Trash2 } from "lucide-react";
+import { Check, Eye, Pencil, Plus, Power, Trash2, X } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import AdminPageHeader from "./components/AdminPageHeader";
 import AdminModal from "./components/AdminModal";
@@ -22,6 +22,7 @@ export default function AdminMovies() {
   const [isReadOnlyMode, setIsReadOnlyMode] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [movieToDelete, setMovieToDelete] = useState(null);
+  const [busyMovieId, setBusyMovieId] = useState(null);
   const [form, setForm] = useState(() => buildEmptyMovie());
   const [formLoading, setFormLoading] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
@@ -48,7 +49,7 @@ export default function AdminMovies() {
 
     if (statusFilter !== "Status") {
       list = list.filter((movie) => {
-        const label = formatStatusLabel(movie.status);
+        const label = resolveMovieActivityLabel(movie);
         return label === statusFilter;
       });
     }
@@ -166,6 +167,59 @@ export default function AdminMovies() {
     }
   };
 
+  const handleToggleActive = async (movie) => {
+    if (!movie?.id || busyMovieId === movie.id) return;
+    const currentlyActive = isMovieActive(movie);
+    setBusyMovieId(movie.id);
+    try {
+      await updateMovie(movie.id, { is_active: !currentlyActive });
+      await refreshCatalog();
+      pushToast({
+        title: currentlyActive ? "Movie deactivated" : "Movie activated",
+        message: `${movie.title || "Movie"} is now ${currentlyActive ? "inactive" : "active"}.`,
+      });
+    } catch (error) {
+      pushToast({
+        title: "Status update failed",
+        message: error.message || "Unable to update movie activity.",
+      });
+    } finally {
+      setBusyMovieId(null);
+    }
+  };
+
+  const handleReviewDecision = async (movie, decision) => {
+    if (!movie?.id || busyMovieId === movie.id) return;
+    const title = movie.title || "Movie";
+    let approvalReason = "";
+
+    if (decision === "REJECTED") {
+      const input = window.prompt("Rejection reason", movie.approvalReason || "Rejected by admin");
+      if (input === null) return;
+      approvalReason = String(input || "").trim() || "Rejected by admin";
+    }
+
+    setBusyMovieId(movie.id);
+    try {
+      await updateMovie(movie.id, {
+        approval_status: decision,
+        approval_reason: approvalReason,
+      });
+      await refreshCatalog();
+      pushToast({
+        title: decision === "APPROVED" ? "Movie approved" : "Movie rejected",
+        message: `${title} has been ${decision === "APPROVED" ? "approved" : "rejected"}.`,
+      });
+    } catch (error) {
+      pushToast({
+        title: "Review update failed",
+        message: error.message || "Unable to update approval status.",
+      });
+    } finally {
+      setBusyMovieId(null);
+    }
+  };
+
   return (
     <>
       <AdminPageHeader
@@ -204,11 +258,8 @@ export default function AdminMovies() {
               onChange={(event) => setStatusFilter(event.target.value)}
             >
               <option>Status</option>
-              <option>Now Showing</option>
-              <option>Coming Soon</option>
-              <option>Premiere</option>
-              <option>Ending Soon</option>
-              <option>Archived</option>
+              <option>Active</option>
+              <option>Inactive</option>
             </select>
             <select
               className="form-select"
@@ -226,7 +277,21 @@ export default function AdminMovies() {
           </div>
         </div>
         <div className="table-responsive">
-          <table className="table admin-table">
+          <table className="table admin-table admin-movies-table">
+            <colgroup>
+              <col style={{ width: "64px" }} />
+              <col style={{ width: "56px" }} />
+              <col style={{ width: "260px" }} />
+              <col style={{ width: "170px" }} />
+              <col style={{ width: "160px" }} />
+              <col style={{ width: "92px" }} />
+              <col style={{ width: "150px" }} />
+              <col style={{ width: "96px" }} />
+              <col style={{ width: "76px" }} />
+              <col style={{ width: "124px" }} />
+              <col style={{ width: "108px" }} />
+              <col style={{ width: "190px" }} />
+            </colgroup>
             <thead>
               <tr>
                 <th>Poster</th>
@@ -247,9 +312,11 @@ export default function AdminMovies() {
               {paginatedMovies.map((movie) => {
                 const posterUrl = resolveMoviePoster(movie);
                 const posterInitials = getMovieInitials(movie.title);
+                const approvalStatus = String(movie?.approvalStatus || movie?.approval_status || "").trim().toUpperCase();
+                const canModerate = isVendorSubmissionMovie(movie);
                 return (
                   <tr key={movie.id}>
-                    <td>
+                    <td className="movies-col-poster">
                       <div className="admin-poster" style={{ background: movie.posterTone || pickPosterTone() }}>
                         <span className="admin-posterFallback">{posterInitials}</span>
                         {posterUrl ? (
@@ -265,33 +332,33 @@ export default function AdminMovies() {
                         ) : null}
                       </div>
                     </td>
-                    <td>{movie.id}</td>
-                  <td>
-                    <div className="fw-semibold">{movie.title}</div>
-                    {movie.approvalReason ? <div className="text-muted small">{movie.approvalReason}</div> : null}
+                    <td className="movies-col-id">{movie.id}</td>
+                  <td className="movies-col-title">
+                    <div className="fw-semibold movies-title-text">{movie.title}</div>
+                    {movie.approvalReason ? <div className="text-muted small movies-subtext">{movie.approvalReason}</div> : null}
                   </td>
-                  <td>
+                  <td className="movies-col-flow">
                     <span className={`badge-soft ${isVendorSubmissionMovie(movie) ? "warning" : "success"}`}>
                       {isVendorSubmissionMovie(movie) ? "Vendor submission" : "Published catalog"}
                     </span>
                   </td>
-                  <td>
+                  <td className="movies-col-approval">
                     <span className={`badge-soft ${approvalTone(movie.approvalStatus)}`}>
                       {formatApprovalLabel(movie.approvalStatus, movie.isApproved)}
                     </span>
                   </td>
-                  <td>{movie.duration}</td>
-                  <td>{movie.genre}</td>
-                  <td>{movie.language}</td>
-                  <td>{movie.rating}</td>
-                  <td>{movie.releaseDate}</td>
-                  <td>
-                    <span className={`badge-soft ${statusTone(movie.status)}`}>
-                      {formatStatusLabel(movie.status)}
+                  <td className="movies-col-number">{movie.duration}</td>
+                  <td className="movies-col-genre">{movie.genre}</td>
+                  <td className="movies-col-lang">{movie.language}</td>
+                  <td className="movies-col-number">{movie.rating}</td>
+                  <td className="movies-col-date">{movie.releaseDate}</td>
+                  <td className="movies-col-status">
+                    <span className={`badge-soft ${activityTone(movie)}`}>
+                      {resolveMovieActivityLabel(movie)}
                     </span>
                   </td>
-                  <td>
-                    <div className="d-flex gap-2">
+                  <td className="movies-col-actions">
+                    <div className="d-flex gap-2 admin-table-actions">
                       <button
                         type="button"
                         className="btn btn-outline-light btn-sm"
@@ -305,6 +372,40 @@ export default function AdminMovies() {
                         onClick={() => openEdit(movie)}
                       >
                         <Pencil size={16} />
+                      </button>
+                      {canModerate ? (
+                        <>
+                          <button
+                            type="button"
+                            className="btn btn-outline-light btn-sm"
+                            title="Approve"
+                            aria-label="Approve"
+                            disabled={busyMovieId === movie.id || approvalStatus === "APPROVED"}
+                            onClick={() => handleReviewDecision(movie, "APPROVED")}
+                          >
+                            <Check size={16} />
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-outline-light btn-sm"
+                            title="Reject"
+                            aria-label="Reject"
+                            disabled={busyMovieId === movie.id || approvalStatus === "REJECTED"}
+                            onClick={() => handleReviewDecision(movie, "REJECTED")}
+                          >
+                            <X size={16} />
+                          </button>
+                        </>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="btn btn-outline-light btn-sm"
+                        title={isMovieActive(movie) ? "Set inactive" : "Set active"}
+                        aria-label={isMovieActive(movie) ? "Set inactive" : "Set active"}
+                        disabled={busyMovieId === movie.id}
+                        onClick={() => handleToggleActive(movie)}
+                      >
+                        <Power size={16} />
                       </button>
                       <button
                         type="button"
@@ -394,15 +495,70 @@ export default function AdminMovies() {
           </>
         }
       >
-        <MovieForm
-          value={form}
-          loading={formLoading || isReadOnlyMode}
-          onChange={setForm}
-          onEditPerson={(personId) => {
-            if (!personId) return;
-            navigate(`/admin/people?personId=${encodeURIComponent(personId)}`);
-          }}
-        />
+        {isReadOnlyMode ? (
+          <div className="admin-details-view">
+            <div className="admin-details-row">
+              <div className="admin-details-label">Title</div>
+              <div className="admin-details-value">{form.title || "-"}</div>
+            </div>
+            <div className="admin-details-row">
+              <div className="admin-details-label">Status</div>
+              <div className="admin-details-value">{resolveMovieActivityLabel(editingMovie || form)}</div>
+            </div>
+            <div className="admin-details-row">
+              <div className="admin-details-label">Language</div>
+              <div className="admin-details-value">{form.language || "-"}</div>
+            </div>
+            <div className="admin-details-row">
+              <div className="admin-details-label">Genre</div>
+              <div className="admin-details-value">{form.genre || "-"}</div>
+            </div>
+            <div className="admin-details-row">
+              <div className="admin-details-label">Duration</div>
+              <div className="admin-details-value">{form.duration || "-"}</div>
+            </div>
+            <div className="admin-details-row">
+              <div className="admin-details-label">Rating</div>
+              <div className="admin-details-value">{form.rating || "-"}</div>
+            </div>
+            <div className="admin-details-row">
+              <div className="admin-details-label">Release Date</div>
+              <div className="admin-details-value">{form.releaseDate || "-"}</div>
+            </div>
+            <div className="admin-details-row">
+              <div className="admin-details-label">Poster</div>
+              <div className="admin-details-value">
+                {form.posterPreview ? <img className="admin-details-image" src={form.posterPreview} alt={form.title || "Movie"} /> : "-"}
+              </div>
+            </div>
+            <div className="admin-details-row">
+              <div className="admin-details-label">Trailers</div>
+              <div className="admin-details-value">{String(form.trailerUrlsText || "").split(/\r?\n/).filter(Boolean).length}</div>
+            </div>
+            <div className="admin-details-row">
+              <div className="admin-details-label">Cast</div>
+              <div className="admin-details-value">{Array.isArray(form.cast) ? form.cast.length : 0}</div>
+            </div>
+            <div className="admin-details-row">
+              <div className="admin-details-label">Crew</div>
+              <div className="admin-details-value">{Array.isArray(form.crew) ? form.crew.length : 0}</div>
+            </div>
+            <div className="admin-details-row">
+              <div className="admin-details-label">Synopsis</div>
+              <div className="admin-details-value">{form.synopsis || "-"}</div>
+            </div>
+          </div>
+        ) : (
+          <MovieForm
+            value={form}
+            loading={formLoading || isReadOnlyMode}
+            onChange={setForm}
+            onEditPerson={(personId) => {
+              if (!personId) return;
+              navigate(`/admin/people?personId=${encodeURIComponent(personId)}`);
+            }}
+          />
+        )}
       </AdminModal>
 
       <ConfirmModal
@@ -586,10 +742,19 @@ function validateCredits(form) {
   return "";
 }
 
-function formatStatusLabel(status) {
-  if (status === "NOW_SHOWING") return "Now Showing";
-  if (status === "COMING_SOON") return "Coming Soon";
-  return status || "Unknown";
+function isMovieActive(movie) {
+  const direct = movie?.isActive ?? movie?.is_active;
+  if (typeof direct === "boolean") return direct;
+
+  const normalizedStatus = String(movie?.status || "").trim().toUpperCase();
+  if (normalizedStatus === "INACTIVE" || normalizedStatus === "ARCHIVED") {
+    return false;
+  }
+  return true;
+}
+
+function resolveMovieActivityLabel(movie) {
+  return isMovieActive(movie) ? "Active" : "Inactive";
 }
 
 function isVendorSubmissionMovie(movie) {
@@ -614,10 +779,8 @@ function approvalTone(status) {
   return "info";
 }
 
-function statusTone(status) {
-  if (status === "NOW_SHOWING") return "success";
-  if (status === "COMING_SOON") return "info";
-  return "info";
+function activityTone(movie) {
+  return isMovieActive(movie) ? "success" : "danger";
 }
 
 function pickPosterTone() {

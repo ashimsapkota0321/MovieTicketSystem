@@ -7,12 +7,20 @@ import HeroImage4 from "../images/avengers.jpg";
 import Logo from "../images/logo.png";
 import { API_BASE } from "../lib/apiBase";
 
+const REQUIRED_FIELD_MESSAGES = {
+  email: "Please enter your email",
+  otp: "Please enter the OTP",
+  newPassword: "Please enter your new password",
+  confirmPassword: "Please confirm your new password",
+};
+
 const ForgotPasswordPage = () => {
   const [step, setStep] = useState(1); // 1: email, 2: otp, 3: password
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [fieldErrors, setFieldErrors] = useState({});
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [otpStatusNote, setOtpStatusNote] = useState("");
@@ -25,6 +33,8 @@ const ForgotPasswordPage = () => {
   // hero images array
   const heroImages = [HeroImage1, HeroImage2, HeroImage3, HeroImage4];
   const [currentSlide, setCurrentSlide] = useState(0);
+  const passwordRequirements = getPasswordRequirements(newPassword);
+  const passwordMeetsRequirements = passwordRequirements.every((requirement) => requirement.valid);
 
   // auto-slide with infinite loop
   useEffect(() => {
@@ -59,15 +69,16 @@ const ForgotPasswordPage = () => {
     setSuccess("");
     setOtpStatusNote("");
 
-    if (!email) {
-      setError("Email is required");
+    if (!String(email || "").trim()) {
+      setFieldErrors({ email: REQUIRED_FIELD_MESSAGES.email });
       return;
     }
 
-    if (!validateEmail(email)) {
-      setError("Invalid email format");
+    if (!validateEmail(String(email || "").trim())) {
+      setFieldErrors({ email: "Invalid email format" });
       return;
     }
+    setFieldErrors({});
 
     setLoading(true);
 
@@ -100,6 +111,7 @@ const ForgotPasswordPage = () => {
       setSuccess(`OTP request complete for ${maskEmail(email)}.`);
       setOtpStatusNote(data?.message || "OTP sent to your email");
       setStep(2);
+      setFieldErrors({});
       setOtpTimer(240);
       setResendTimer(60);
     } catch (err) {
@@ -164,10 +176,11 @@ const ForgotPasswordPage = () => {
     setSuccess("");
     setOtpStatusNote("");
 
-    if (!otp) {
-      setError("OTP is required");
+    if (!String(otp || "").trim()) {
+      setFieldErrors({ otp: REQUIRED_FIELD_MESSAGES.otp });
       return;
     }
+    setFieldErrors({});
 
     setLoading(true);
 
@@ -200,6 +213,7 @@ const ForgotPasswordPage = () => {
       setSuccess("OTP verified successfully");
       setOtpStatusNote("You can now reset your password.");
       setStep(3);
+      setFieldErrors({});
       setOtpTimer(0);
     } catch (err) {
       setError(err.message || "An error occurred");
@@ -212,19 +226,26 @@ const ForgotPasswordPage = () => {
     e.preventDefault();
     setError("");
     setSuccess("");
+    const nextFieldErrors = {};
 
-    if (!newPassword || !confirmPassword) {
-      setError("All fields are required");
-      return;
+    if (!String(newPassword || "").trim()) {
+      nextFieldErrors.newPassword = REQUIRED_FIELD_MESSAGES.newPassword;
     }
 
-    if (newPassword !== confirmPassword) {
-      setError("Passwords do not match");
-      return;
+    if (!String(confirmPassword || "").trim()) {
+      nextFieldErrors.confirmPassword = REQUIRED_FIELD_MESSAGES.confirmPassword;
     }
 
-    if (newPassword.length < 8) {
-      setError("Password must be at least 8 characters");
+    if (!nextFieldErrors.newPassword && !passwordMeetsRequirements) {
+      nextFieldErrors.newPassword = "Please meet all password requirements below";
+    }
+
+    if (!nextFieldErrors.confirmPassword && newPassword !== confirmPassword) {
+      nextFieldErrors.confirmPassword = "Passwords do not match";
+    }
+
+    setFieldErrors(nextFieldErrors);
+    if (Object.keys(nextFieldErrors).length > 0) {
       return;
     }
 
@@ -265,6 +286,7 @@ const ForgotPasswordPage = () => {
       setOtp("");
       setNewPassword("");
       setConfirmPassword("");
+      setFieldErrors({});
 
       setTimeout(() => {
         window.location.href = "/login";
@@ -294,7 +316,7 @@ const ForgotPasswordPage = () => {
             <form className="mt-form" onSubmit={handleRequestOtp} noValidate>
               <label className="mt-label">
                 Email Address *
-                <div className="mt-input-wrapper">
+                <div className={`mt-input-wrapper ${fieldErrors.email ? "mt-input-invalid" : ""}`}>
                   <span className="mt-icon material-symbols-outlined">
                     email
                   </span>
@@ -302,11 +324,21 @@ const ForgotPasswordPage = () => {
                     type="email"
                     placeholder="Enter your email"
                     value={email}
-                    onChange={(e) => setEmail(e.target.value)}
+                    onChange={(e) => {
+                      setEmail(e.target.value);
+                      setError("");
+                      setFieldErrors((prev) => {
+                        if (!prev.email) return prev;
+                        const next = { ...prev };
+                        delete next.email;
+                        return next;
+                      });
+                    }}
                     disabled={loading}
                     required
                   />
                 </div>
+                {fieldErrors.email ? <div className="mt-field-error">{fieldErrors.email}</div> : null}
               </label>
 
               {error && <div className="mt-error">{error}</div>}
@@ -336,7 +368,7 @@ const ForgotPasswordPage = () => {
             <form className="mt-form" onSubmit={handleVerifyOtp} noValidate>
               <label className="mt-label">
                 Enter OTP *
-                <div className="mt-input-wrapper">
+                <div className={`mt-input-wrapper ${fieldErrors.otp ? "mt-input-invalid" : ""}`}>
                   <span className="mt-icon material-symbols-outlined">
                     lock
                   </span>
@@ -344,12 +376,22 @@ const ForgotPasswordPage = () => {
                     type="text"
                     placeholder="Enter 6-digit OTP"
                     value={otp}
-                    onChange={(e) => setOtp(e.target.value.slice(0, 6))}
+                    onChange={(e) => {
+                      setOtp(e.target.value.slice(0, 6));
+                      setError("");
+                      setFieldErrors((prev) => {
+                        if (!prev.otp) return prev;
+                        const next = { ...prev };
+                        delete next.otp;
+                        return next;
+                      });
+                    }}
                     disabled={loading}
                     maxLength="6"
                     required
                   />
                 </div>
+                {fieldErrors.otp ? <div className="mt-field-error">{fieldErrors.otp}</div> : null}
               </label>
 
               <div className="mt-footer-text">
@@ -387,6 +429,7 @@ const ForgotPasswordPage = () => {
                     setOtp("");
                     setError("");
                     setSuccess("");
+                    setFieldErrors({});
                   }}
                   disabled={loading}
                 >
@@ -401,7 +444,7 @@ const ForgotPasswordPage = () => {
             <form className="mt-form" onSubmit={handleResetPassword} noValidate>
               <label className="mt-label">
                 New Password *
-                <div className="mt-input-wrapper">
+                <div className={`mt-input-wrapper ${fieldErrors.newPassword ? "mt-input-invalid" : ""}`}>
                   <span className="mt-icon material-symbols-outlined">
                     key
                   </span>
@@ -409,7 +452,17 @@ const ForgotPasswordPage = () => {
                     type={showPassword ? "text" : "password"}
                     placeholder="Enter new password"
                     value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
+                    onChange={(e) => {
+                      setNewPassword(e.target.value);
+                      setError("");
+                      setFieldErrors((prev) => {
+                        if (!prev.newPassword && !prev.confirmPassword) return prev;
+                        const next = { ...prev };
+                        delete next.newPassword;
+                        delete next.confirmPassword;
+                        return next;
+                      });
+                    }}
                     disabled={loading}
                     required
                     minLength={8}
@@ -425,11 +478,27 @@ const ForgotPasswordPage = () => {
                     </span>
                   </button>
                 </div>
+                {fieldErrors.newPassword ? (
+                  <div className="mt-field-error">{fieldErrors.newPassword}</div>
+                ) : null}
+                <div className="mt-password-guidance" aria-live="polite">
+                  {passwordRequirements.map((requirement) => (
+                    <div
+                      key={requirement.key}
+                      className={`mt-password-requirement ${requirement.valid ? "is-valid" : ""}`}
+                    >
+                      <span className="material-symbols-outlined" aria-hidden="true">
+                        {requirement.valid ? "check_circle" : "radio_button_unchecked"}
+                      </span>
+                      <span>{requirement.label}</span>
+                    </div>
+                  ))}
+                </div>
               </label>
 
               <label className="mt-label">
                 Confirm Password *
-                <div className="mt-input-wrapper">
+                <div className={`mt-input-wrapper ${fieldErrors.confirmPassword ? "mt-input-invalid" : ""}`}>
                   <span className="mt-icon material-symbols-outlined">
                     key
                   </span>
@@ -437,12 +506,24 @@ const ForgotPasswordPage = () => {
                     type={showPassword ? "text" : "password"}
                     placeholder="Confirm new password"
                     value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    onChange={(e) => {
+                      setConfirmPassword(e.target.value);
+                      setError("");
+                      setFieldErrors((prev) => {
+                        if (!prev.confirmPassword) return prev;
+                        const next = { ...prev };
+                        delete next.confirmPassword;
+                        return next;
+                      });
+                    }}
                     disabled={loading}
                     required
                     minLength={8}
                   />
                 </div>
+                {fieldErrors.confirmPassword ? (
+                  <div className="mt-field-error">{fieldErrors.confirmPassword}</div>
+                ) : null}
               </label>
 
               {error && <div className="mt-error">{error}</div>}
@@ -503,6 +584,15 @@ const ForgotPasswordPage = () => {
 };
 
 export default ForgotPasswordPage;
+
+function getPasswordRequirements(password) {
+  const value = String(password || "");
+  return [
+    { key: "length", label: "At least 8 characters", valid: value.length >= 8 },
+    { key: "letter", label: "1 letter", valid: /[A-Za-z]/.test(value) },
+    { key: "number", label: "1 number", valid: /\d/.test(value) },
+  ];
+}
 
 function maskEmail(value) {
   const email = String(value || "").trim();

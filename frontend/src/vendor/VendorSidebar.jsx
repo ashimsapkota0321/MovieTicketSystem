@@ -11,6 +11,7 @@ import {
   Users,
   Megaphone,
   Gift,
+  Send,
 } from "lucide-react";
 import logo from "../images/logo.png";
 import { canAccessVendorFeature, isVendorOwner } from "../lib/authSession";
@@ -37,6 +38,7 @@ const navItems = [
   { label: "Bookings", icon: Ticket, to: "/vendor/bookings", feature: "bookings" },
   { label: "Corporate & Bulk", icon: Building2, to: "/vendor/corporate-bulk", feature: "corporate-bulk" },
   { label: "Ticket Validation", icon: ShieldCheck, to: "/vendor/ticket-validation", feature: "ticket-validation" },
+  { label: "Withdrawal", icon: Send, to: "/vendor/withdrawal", feature: "dashboard", ownerOnly: true },
   {
     label: "Staff Accounts",
     icon: Users,

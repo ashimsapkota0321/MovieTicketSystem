@@ -53,6 +53,7 @@ import AdminSubscriptionControl from "./admin/AdminSubscriptionControl";
 import AdminReferralControl from "./admin/AdminReferralControl";
 import VendorLayout from "./vendor/VendorLayout";
 import VendorDashboard from "./vendor/VendorDashboard";
+import VendorWithdrawal from "./vendor/VendorWithdrawal";
 import VendorProfile from "./vendor/VendorProfile";
 import VendorShows from "./vendor/VendorShows";
 import VendorFoodItems from "./vendor/VendorFoodItems";
@@ -287,6 +288,7 @@ function App() {
           <Route path="campaigns-promos" element={<RequireVendorFeature feature="campaigns-promos"><VendorCampaignPromos /></RequireVendorFeature>} />
           <Route path="offers" element={<RequireVendorFeature feature="offers"><VendorOffers /></RequireVendorFeature>} />
           <Route path="ticket-validation" element={<RequireVendorFeature feature="ticket-validation"><VendorTicketValidation /></RequireVendorFeature>} />
+          <Route path="withdrawal" element={<RequireVendorFeature feature="dashboard"><VendorWithdrawal /></RequireVendorFeature>} />
           <Route path="staff-accounts" element={<RequireVendorFeature feature="staff-accounts"><VendorStaffAccounts /></RequireVendorFeature>} />
           <Route path="profile" element={<RequireVendorFeature feature="profile"><VendorProfile /></RequireVendorFeature>} />
           <Route path="*" element={<NotFound />} />

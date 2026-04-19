@@ -172,37 +172,18 @@ export default function VendorShows() {
   const handleBookSeats = (show) => {
     if (!show) return;
 
-    const matchedMovie = findMovieForShow(movies, show);
-    const moviePayload = matchedMovie
-      ? {
-          ...matchedMovie,
-          id: matchedMovie.id || show.movieId || show.movie_id,
-          title: matchedMovie.title || show.movie || "Movie",
-        }
-      : {
-          id: show.movieId || show.movie_id || "",
-          title: show.movie || "Movie",
-        };
-
-    navigate("/booking", {
+    navigate("/vendor/seats", {
       state: {
-        movie: moviePayload,
-        vendor: {
-          id: vendorId,
-          name: vendorName,
-        },
         show: {
           id: show.id,
           date: show.date,
           start: show.start,
           hall: show.hall,
           vendorId,
-          movieId: moviePayload.id,
+          movieId: show.movieId || show.movie_id,
         },
-        date: show.date,
-        time: show.start,
-        hall: show.hall,
-        showId: show.id,
+        selectedShowId: show.id,
+        selectedHall: show.hall,
       },
     });
   };

@@ -99,7 +99,7 @@ function emptyCampaignForm() {
     target_movie_id: "",
     recommended_movie_id: "",
     promo_code_id: "",
-    min_days_since_booking: "7",
+    min_days_since_booking: "0",
     scheduled_at: "",
     run_now: false,
   };
@@ -775,7 +775,7 @@ export default function VendorCampaignPromos() {
               className="form-control"
               type="number"
               min="0"
-              placeholder="Min days"
+              placeholder="Min days (0 = all)"
               value={campaignForm.min_days_since_booking}
               onChange={(event) =>
                 setCampaignForm((prev) => ({ ...prev, min_days_since_booking: event.target.value }))

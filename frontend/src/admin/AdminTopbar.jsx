@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Bell, Menu, ChevronDown, User, Moon, Sun } from "lucide-react";
+import { Bell, Menu, ChevronDown, User } from "lucide-react";
 import { clearAuthSession, clearStoredRoleData, getAuthSession } from "../lib/authSession";
 
-export default function AdminTopbar({ onToggleSidebar, onToggleTheme, theme = "light" }) {
+export default function AdminTopbar({ onToggleSidebar, onOpenNotifications }) {
   const navigate = useNavigate();
   const location = useLocation();
   const menuRef = useRef(null);
@@ -90,12 +90,9 @@ export default function AdminTopbar({ onToggleSidebar, onToggleTheme, theme = "l
         <button
           type="button"
           className="admin-icon-btn"
-          title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-          onClick={onToggleTheme}
+          title="Notifications"
+          onClick={onOpenNotifications}
         >
-          {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
-        </button>
-        <button type="button" className="admin-icon-btn" title="Notifications">
           <Bell size={18} />
         </button>
         <div className="admin-profile-menu" ref={menuRef}>

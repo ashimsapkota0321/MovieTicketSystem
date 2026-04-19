@@ -1,28 +1,76 @@
+databases:
+  - name: mero-ticket-db
+    databaseName: meroticket
+    user: meroticket
+
 services:
   - type: web
     name: mero-ticket-backend
     env: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn backend.wsgi:application
+    plan: free
+    autoDeploy: true
+    buildCommand: pip install -r requirements.txt ; cd backend ; python manage.py collectstatic --noinput
+    startCommand: cd backend ; python manage.py migrate --noinput ; gunicorn backend.wsgi:application --log-file -
     envVars:
       - key: DJANGO_SETTINGS_MODULE
         value: backend.settings
       - key: PYTHON_VERSION
         value: 3.10
-    plan: free
-    autoDeploy: true
+      - key: DEBUG
+        value: "false"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ALLOWED_HOSTS
+        value: ".onrender.com,localhost,127.0.0.1"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: mero-ticket-db
+          property: connectionString
     buildFilter:
       paths:
         - backend/**
         - requirements.txt
         - Procfile
-  - type: web
-    name: mero-ticket-frontend
-    env: node
-    buildCommand: cd frontend && npm install && npm run build
-    startCommand: npx serve -s frontend/dist
+        - render.yaml
+
+  - type: worker
+    name: mero-ticket-worker
+    env: python
     plan: free
     autoDeploy: true
+    buildCommand: pip install -r requirements.txt
+    startCommand: cd backend ; python manage.py run_background_jobs
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: backend.settings
+      - key: PYTHON_VERSION
+        value: 3.10
+      - key: DEBUG
+        value: "false"
+      - key: ALLOWED_HOSTS
+        value: ".onrender.com,localhost,127.0.0.1"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: mero-ticket-db
+          property: connectionString
+    buildFilter:
+      paths:
+        - backend/**
+        - requirements.txt
+        - render.yaml
+
+  - type: static
+    name: mero-ticket-frontend
+    buildCommand: cd frontend ; npm install ; npm run build
+    staticPublishPath: frontend/dist
+    envVars:
+      - key: VITE_API_BASE_URL
+        value: https://mero-ticket-backend.onrender.com
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
     buildFilter:
       paths:
         - frontend/**
+        - render.yaml

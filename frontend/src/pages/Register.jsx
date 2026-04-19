@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import "../css/register.css";
 import HeroImage1 from "../images/gharjwai.jpg";
 import HeroImage2 from "../images/balidan.jpg";
@@ -13,10 +13,18 @@ import { API_BASE } from "../lib/apiBase";
 const SUPER_ADMIN_EMAIL = "asimsapkota2005@gmail.com";
 const SUPER_ADMIN_PHONE = "+977-9826633701";
 const VENDOR_REGISTRATION_EMAIL = "asimsapkota2005@gmail.com";
+const REQUIRED_FIELD_MESSAGES = {
+  phone_number: "Please enter your phone number",
+  email: "Please enter your email",
+  dob: "Please enter your date of birth",
+  first_name: "Please enter your first name",
+  last_name: "Please enter your last name",
+  password: "Please enter your password",
+  confirm_password: "Please confirm your password",
+};
 
 const RegisterPage = () => {
   const navigate = useNavigate();
-  const location = useLocation();
   const initialReferralCode = getReferralCodeFromQuery();
   const [formData, setFormData] = useState({
     first_name: "",
@@ -29,6 +37,7 @@ const RegisterPage = () => {
     password: "",
     confirm_password: "",
   });
+  const [fieldErrors, setFieldErrors] = useState({});
 
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -88,6 +97,8 @@ const RegisterPage = () => {
 
   const [currentSlide, setCurrentSlide] = useState(0);
   const activeSlide = heroSlides[currentSlide] || heroSlides[0] || null;
+  const passwordRequirements = getPasswordRequirements(formData.password);
+  const passwordMeetsRequirements = passwordRequirements.every((requirement) => requirement.valid);
 
   useEffect(() => {
     if (heroSlides.length <= 1) return undefined;
@@ -108,6 +119,18 @@ const RegisterPage = () => {
   const handleChange = (e) => {
     const { name, value } = e.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
+    setError("");
+    setFieldErrors((prev) => {
+      if (!prev[name] && !(name === "password" && prev.confirm_password)) {
+        return prev;
+      }
+      const next = { ...prev };
+      delete next[name];
+      if (name === "password") {
+        delete next.confirm_password;
+      }
+      return next;
+    });
     if (name === "email") {
       // Changing the email invalidates previous OTP verification.
       setOtpVerified(false);
@@ -117,25 +140,35 @@ const RegisterPage = () => {
   };
 
   const validateForm = () => {
-    const { first_name, last_name, email, phone_number, dob, password, confirm_password } = formData;
+    const { email, phone_number, password, confirm_password } = formData;
+    const nextFieldErrors = {};
+    const requiredFields = Object.keys(REQUIRED_FIELD_MESSAGES);
 
-    if (!first_name || !last_name || !email || !phone_number || !dob || !password || !confirm_password) {
-      setError("All required fields must be filled");
-      return false;
+    requiredFields.forEach((fieldName) => {
+      if (!String(formData[fieldName] || "").trim()) {
+        nextFieldErrors[fieldName] = REQUIRED_FIELD_MESSAGES[fieldName];
+      }
+    });
+
+    if (!nextFieldErrors.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim())) {
+      nextFieldErrors.email = "Invalid email format";
     }
 
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      setError("Invalid email format");
-      return false;
+    if (!nextFieldErrors.phone_number && !/^\+?[0-9]{10,13}$/.test(String(phone_number || "").trim())) {
+      nextFieldErrors.phone_number = "Invalid phone number format";
     }
 
-    if (!/^\+?[0-9]{10,13}$/.test(phone_number)) {
-      setError("Invalid phone number format");
-      return false;
+    if (!nextFieldErrors.password && !passwordMeetsRequirements) {
+      nextFieldErrors.password = "Please meet all password requirements below";
     }
 
-    if (password !== confirm_password) {
-      setError("Passwords do not match");
+    if (!nextFieldErrors.confirm_password && password !== confirm_password) {
+      nextFieldErrors.confirm_password = "Passwords do not match";
+    }
+
+    setFieldErrors(nextFieldErrors);
+    if (Object.keys(nextFieldErrors).length > 0) {
+      setError("");
       return false;
     }
 
@@ -149,6 +182,7 @@ const RegisterPage = () => {
       return false;
     }
 
+    setError("");
     return true;
   };
 
@@ -159,13 +193,21 @@ const RegisterPage = () => {
     setOtpStatus("");
 
     if (!email) {
+      setFieldErrors((prev) => ({ ...prev, email: REQUIRED_FIELD_MESSAGES.email }));
       setError("Enter your email first to receive OTP");
       return;
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setFieldErrors((prev) => ({ ...prev, email: "Invalid email format" }));
       setError("Invalid email format");
       return;
     }
+    setFieldErrors((prev) => {
+      if (!prev.email) return prev;
+      const next = { ...prev };
+      delete next.email;
+      return next;
+    });
 
     setOtpLoading(true);
     try {
@@ -195,6 +237,7 @@ const RegisterPage = () => {
     setSuccess("");
 
     if (!email) {
+      setFieldErrors((prev) => ({ ...prev, email: REQUIRED_FIELD_MESSAGES.email }));
       setError("Enter your email first");
       return;
     }
@@ -265,6 +308,7 @@ const RegisterPage = () => {
         password: "",
         confirm_password: "",
       });
+      setFieldErrors({});
       setAcceptedTerms(false);
 
       setTimeout(() => { navigate("/login", { replace: true }); }, 1500);
@@ -296,11 +340,11 @@ const RegisterPage = () => {
             Fill in your details to register
           </p>
 
-          <form className="mt-form" onSubmit={handleSubmit}>
+          <form className="mt-form" onSubmit={handleSubmit} noValidate>
             {/* Phone */}
             <label className="mt-label">
               Phone Number *
-              <div className="mt-input-wrapper">
+              <div className={`mt-input-wrapper ${fieldErrors.phone_number ? "mt-input-invalid" : ""}`}>
                 <span className="mt-icon material-symbols-outlined">phone</span>
                 <input
                   type="tel"
@@ -312,12 +356,15 @@ const RegisterPage = () => {
                   required
                 />
               </div>
+              {fieldErrors.phone_number ? (
+                <div className="mt-field-error">{fieldErrors.phone_number}</div>
+              ) : null}
             </label>
 
             {/* Email */}
             <label className="mt-label">
               Email *
-              <div className="mt-input-wrapper">
+              <div className={`mt-input-wrapper ${fieldErrors.email ? "mt-input-invalid" : ""}`}>
                 <span className="mt-icon material-symbols-outlined">email</span>
                 <input
                   type="email"
@@ -329,6 +376,7 @@ const RegisterPage = () => {
                   required
                 />
               </div>
+              {fieldErrors.email ? <div className="mt-field-error">{fieldErrors.email}</div> : null}
               <div className="mt-otp-row">
                 <button
                   type="button"
@@ -386,7 +434,7 @@ const RegisterPage = () => {
             {/* Date of Birth */}
             <label className="mt-label">
               Date of Birth *
-              <div className="mt-input-wrapper">
+              <div className={`mt-input-wrapper ${fieldErrors.dob ? "mt-input-invalid" : ""}`}>
                 <span className="mt-icon material-symbols-outlined">calendar_month</span>
                 <input
                   type="date"
@@ -397,12 +445,13 @@ const RegisterPage = () => {
                   required
                 />
               </div>
+              {fieldErrors.dob ? <div className="mt-field-error">{fieldErrors.dob}</div> : null}
             </label>
 
             <div className="mt-name-row">
-              <div>
+              <div className="mt-name-field">
                 <div className="mt-inline-label">First Name *</div>
-                <div className="mt-input-wrapper">
+                <div className={`mt-input-wrapper ${fieldErrors.first_name ? "mt-input-invalid" : ""}`}>
                   <span className="mt-icon material-symbols-outlined">person</span>
                   <input
                     type="text"
@@ -414,8 +463,9 @@ const RegisterPage = () => {
                     required
                   />
                 </div>
+                {fieldErrors.first_name ? <div className="mt-field-error">{fieldErrors.first_name}</div> : null}
               </div>
-              <div>
+              <div className="mt-name-field">
                 <div className="mt-inline-label">Middle Name</div>
                 <div className="mt-input-wrapper">
                   <span className="mt-icon material-symbols-outlined">person</span>
@@ -429,9 +479,9 @@ const RegisterPage = () => {
                   />
                 </div>
               </div>
-              <div>
+              <div className="mt-name-field">
                 <div className="mt-inline-label">Last Name *</div>
-                <div className="mt-input-wrapper">
+                <div className={`mt-input-wrapper ${fieldErrors.last_name ? "mt-input-invalid" : ""}`}>
                   <span className="mt-icon material-symbols-outlined">person</span>
                   <input
                     type="text"
@@ -443,13 +493,14 @@ const RegisterPage = () => {
                     required
                   />
                 </div>
+                {fieldErrors.last_name ? <div className="mt-field-error">{fieldErrors.last_name}</div> : null}
               </div>
             </div>
 
             {/* Password */}
             <label className="mt-label">
               Password *
-              <div className="mt-input-wrapper">
+              <div className={`mt-input-wrapper ${fieldErrors.password ? "mt-input-invalid" : ""}`}>
                 <span className="mt-icon material-symbols-outlined">key</span>
                 <input
                   type={showPassword ? "text" : "password"}
@@ -466,12 +517,26 @@ const RegisterPage = () => {
                   </span>
                 </button>
               </div>
+              {fieldErrors.password ? <div className="mt-field-error">{fieldErrors.password}</div> : null}
+              <div className="mt-password-guidance" aria-live="polite">
+                {passwordRequirements.map((requirement) => (
+                  <div
+                    key={requirement.key}
+                    className={`mt-password-requirement ${requirement.valid ? "is-valid" : ""}`}
+                  >
+                    <span className="material-symbols-outlined" aria-hidden="true">
+                      {requirement.valid ? "check_circle" : "radio_button_unchecked"}
+                    </span>
+                    <span>{requirement.label}</span>
+                  </div>
+                ))}
+              </div>
             </label>
 
             {/* Confirm Password */}
             <label className="mt-label">
               Confirm Password *
-              <div className="mt-input-wrapper">
+              <div className={`mt-input-wrapper ${fieldErrors.confirm_password ? "mt-input-invalid" : ""}`}>
                 <span className="mt-icon material-symbols-outlined">key</span>
                 <input
                   type={showPassword ? "text" : "password"}
@@ -483,6 +548,9 @@ const RegisterPage = () => {
                   required
                 />
               </div>
+              {fieldErrors.confirm_password ? (
+                <div className="mt-field-error">{fieldErrors.confirm_password}</div>
+              ) : null}
             </label>
 
             {error && <div className="mt-error">{error}</div>}
@@ -498,8 +566,8 @@ const RegisterPage = () => {
               <span>I agree to the Terms & Conditions (click i icon to read).</span>
             </label>
 
-            <button type="submit" className="mt-primary-btn" disabled={loading || !otpVerified || !acceptedTerms}>
-              {loading ? "Creating account..." : otpVerified ? "Sign Up" : "Verify OTP to Sign Up"}
+            <button type="submit" className="mt-primary-btn" disabled={loading}>
+              {loading ? "Creating account..." : "Sign Up"}
             </button>
 
             <div className="mt-footer-text">
@@ -597,6 +665,15 @@ function getReferralCodeFromQuery() {
   if (typeof window === "undefined") return "";
   const params = new URLSearchParams(window.location.search);
   return String(params.get("ref") || params.get("referral") || "").trim().toUpperCase();
+}
+
+function getPasswordRequirements(password) {
+  const value = String(password || "");
+  return [
+    { key: "length", label: "At least 8 characters", valid: value.length >= 8 },
+    { key: "letter", label: "1 letter", valid: /[A-Za-z]/.test(value) },
+    { key: "number", label: "1 number", valid: /\d/.test(value) },
+  ];
 }
 
 function buildDeviceFingerprint() {

@@ -2,6 +2,7 @@ import { createRoot } from "react-dom/client";
 import "./index.css";
 import "./css/admin.css";
 import "./css/vendor.css";
+import "./css/notification-sidebar.css";
 import App from "./App.jsx";
 import { AppProvider } from "./context/Appcontext";
 

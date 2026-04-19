@@ -1,25 +1,35 @@
 .gb-page {
-  min-height: 100vh;
-  padding: 1.5rem 1rem 2rem;
-  background: #f6f7fb;
-  color: #1f2937;
+  width: min(1220px, 100%);
+  margin: 18px auto 28px;
+  padding: 28px var(--page-pad) 38px;
+  display: grid;
+  gap: 18px;
+  position: relative;
+  isolation: isolate;
+  border-radius: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: #3f3f44;
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.24);
+  overflow: hidden;
+  color: #ecf3ff;
 }
 
 .gb-shell {
-  width: min(980px, 100%);
-  margin: 0 auto;
+  width: 100%;
+  margin: 0;
   display: grid;
-  gap: 0.9rem;
+  gap: 18px;
 }
 
 .gb-header h1 {
   margin: 0;
   font-size: clamp(1.3rem, 1.8vw, 1.8rem);
+  color: #ecf3ff;
 }
 
 .gb-header p {
   margin: 0.4rem 0 0;
-  color: #6b7280;
+  color: #b7c7e3;
 }
 
 .gb-header-row {
@@ -31,10 +41,10 @@
 }
 
 .gb-card {
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  background: #ffffff;
-  padding: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  background: #4a4b53;
+  padding: 18px 20px;
   display: grid;
   gap: 0.8rem;
 }
@@ -47,6 +57,7 @@
 .gb-card h2 {
   margin: 0;
   font-size: 1.05rem;
+  color: #ecf3ff;
 }
 
 .gb-card-head {
@@ -77,7 +88,7 @@
 .gb-form label {
   display: grid;
   gap: 0.4rem;
-  color: #374151;
+  color: #e3eafd;
   font-size: 0.92rem;
 }
 
@@ -85,9 +96,9 @@
 .gb-form select,
 .gb-table input {
   width: 100%;
-  border: 1px solid #d1d5db;
-  background: #ffffff;
-  color: #111827;
+  border: 1px solid #4a4b53;
+  background: #23232a;
+  color: #ecf3ff;
   border-radius: 8px;
   padding: 0.58rem 0.7rem;
   outline: none;

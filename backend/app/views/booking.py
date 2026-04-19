@@ -129,9 +129,10 @@ def _format_amount(value: Decimal) -> str:
 
 
 def _build_transaction_uuid() -> str:
-    """Build eSewa-safe transaction UUID (alphanumeric and hyphen only)."""
+    """Build eSewa-safe transaction UUID with low collision risk."""
     now = timezone.now()
-    return f"{now.strftime('%y%m%d-%H%M%S')}-{now.microsecond // 1000:03d}"
+    random_suffix = uuid.uuid4().hex[:6].upper()
+    return f"{now.strftime('%y%m%d-%H%M%S')}-{now.microsecond // 1000:03d}-{random_suffix}"
 
 
 def _build_signature(message: str) -> str:
@@ -193,6 +194,7 @@ def _store_pending_transaction(
     success_url: str,
     failure_url: str,
     booking_id: Optional[int] = None,
+    reference: Optional[str] = None,
 ) -> None:
     """Store pending checkout payload so booking can be confirmed after callback verify."""
     cache.set(
@@ -204,6 +206,7 @@ def _store_pending_transaction(
             "success_url": success_url,
             "failure_url": failure_url,
             "booking_id": booking_id,
+            "reference": reference,
             "initiated_at": timezone.now().isoformat(),
         },
         timeout=_esewa_pending_ttl_seconds(),
@@ -213,6 +216,49 @@ def _store_pending_transaction(
 def _pending_booking_payload_from_payment(payment: Payment) -> dict[str, Any]:
     metadata = payment.metadata if isinstance(payment.metadata, dict) else {}
     order = metadata.get("order") if isinstance(metadata.get("order"), dict) else None
+    booking = payment.booking
+
+    if order is None and booking is not None:
+        showtime = getattr(booking, "showtime", None)
+        screen = getattr(showtime, "screen", None)
+        start_dt = getattr(showtime, "start_time", None)
+        selected_seats = []
+        for booking_seat in BookingSeat.objects.select_related("seat").filter(booking=booking):
+            seat = getattr(booking_seat, "seat", None)
+            if not seat:
+                continue
+            row_label = str(getattr(seat, "row_label", "") or "").strip()
+            seat_number = str(getattr(seat, "seat_number", "") or "").strip()
+            if not seat_number:
+                continue
+            selected_seats.append(f"{row_label}{seat_number}" if row_label else seat_number)
+
+        show_date = start_dt.date().isoformat() if start_dt else None
+        show_time = start_dt.strftime("%H:%M") if start_dt else None
+        hall_name = str(getattr(screen, "name", "") or "").strip() or None
+        movie_id = getattr(showtime, "movie_id", None)
+        cinema_id = getattr(screen, "vendor_id", None)
+
+        if movie_id and cinema_id and show_date and show_time and selected_seats:
+            booking_context = {
+                "movie_id": movie_id,
+                "cinema_id": cinema_id,
+                "date": show_date,
+                "time": show_time,
+                "hall": hall_name,
+                "selected_seats": selected_seats,
+                "user_id": booking.user_id,
+            }
+            total_amount = _format_amount(payment.amount or booking.total_amount or Decimal("0"))
+            order = {
+                "ticketTotal": total_amount,
+                "total": total_amount,
+                "selectedSeats": selected_seats,
+                "selected_seats": selected_seats,
+                "booking": booking_context,
+                "bookingContext": booking_context,
+            }
+
     transaction_uuid = str(payment.transaction_uuid or "").strip() or _transaction_uuid_from_payment_method(
         payment.payment_method
     )
@@ -519,13 +565,19 @@ def _build_ticket_response(
     booking_payload: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Build API response payload for a confirmed ticket."""
-    payload = ticket.payload if isinstance(ticket.payload, dict) else {}
+    payload = services.persist_ticket_render_artifacts(ticket)
     details_url = payload.get("details_url") or request.build_absolute_uri(
         f"/api/ticket/{ticket.reference}/details/"
     )
-    qr_payload = services.build_ticket_qr_payload(ticket)
+    qr_payload = (
+        payload.get("qr_payload")
+        if isinstance(payload.get("qr_payload"), dict)
+        else services.build_ticket_qr_payload(ticket)
+    )
+    qr_code_data = str(payload.get("qr_code") or "").strip() or None
     qr_image = services._build_qr_image(json.dumps(qr_payload, separators=(",", ":")))
-    qr_code_data = services._image_to_data_url(qr_image) if qr_image else None
+    if qr_code_data is None and qr_image:
+        qr_code_data = services._image_to_data_url(qr_image)
     ticket_image_data = None
     try:
         render_payload = dict(payload)
@@ -1051,7 +1103,8 @@ def _confirm_booking_after_payment(
                     status.HTTP_409_CONFLICT,
                 )
 
-        reference = uuid.uuid4().hex[:10].upper()
+        pending_tx = _get_pending_transaction(transaction_uuid)
+        reference = (pending_tx.get("reference") if isinstance(pending_tx, dict) else None) or uuid.uuid4().hex[:10].upper()
         ticket_payload = services._build_ticket_payload(order, reference, request)
         ticket_payload["order"] = order
         if booking_payload:
@@ -1077,6 +1130,7 @@ def _confirm_booking_after_payment(
             payload=ticket_payload,
             **ticket_security_fields,
         )
+        services.persist_ticket_render_artifacts(ticket)
 
     try:
         services.send_ticket_confirmation_email(ticket)
@@ -1448,6 +1502,7 @@ def user_wallet_booking_pay(request: Any):
             payload=ticket_payload,
             **ticket_security_fields,
         )
+        services.persist_ticket_render_artifacts(ticket)
 
     try:
         services.send_ticket_confirmation_email(ticket)
@@ -1542,6 +1597,7 @@ def esewa_initiate(request: Any):
     if pending_error:
         return Response(pending_error, status=pending_status)
 
+    payment_reference = uuid.uuid4().hex[:10].upper()
     _store_pending_transaction(
         transaction_uuid=transaction_uuid,
         order=order,
@@ -1549,6 +1605,7 @@ def esewa_initiate(request: Any):
         success_url=frontend_success_url,
         failure_url=frontend_failure_url,
         booking_id=pending_booking.id if pending_booking else None,
+        reference=payment_reference,
     )
 
     return Response(

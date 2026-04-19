@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import Pagination from "../components/Pagination";
 import { useNavigate } from "react-router-dom";
 import {
   cancelCustomerBookingHistory,
@@ -8,6 +9,8 @@ import { getAuthSession } from "../lib/authSession";
 import "../css/customerPages.css";
 
 export default function BookingHistory() {
+    const [page, setPage] = useState(1);
+    const PAGE_SIZE = 10;
   const navigate = useNavigate();
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -44,6 +47,12 @@ export default function BookingHistory() {
       active = false;
     };
   }, [navigate]);
+
+  const totalPages = Math.ceil(bookings.length / PAGE_SIZE) || 1;
+  const paginatedBookings = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE;
+    return bookings.slice(start, start + PAGE_SIZE);
+  }, [bookings, page]);
 
   const handleCancelRequest = async (booking) => {
     const bookingId = Number(booking?.id || 0);
@@ -183,7 +192,7 @@ export default function BookingHistory() {
             </tr>
           </thead>
           <tbody>
-            {bookings.map((booking) => {
+            {paginatedBookings.map((booking) => {
               const bookingId = Number(booking?.id || 0);
               const isTerminalStatus = ["cancelled", "refunded"].includes(
                 String(booking?.status || "").trim().toLowerCase()
@@ -241,6 +250,10 @@ export default function BookingHistory() {
             ) : null}
           </tbody>
         </table>
+        {/* Pagination Controls */}
+        {!loading && bookings.length > PAGE_SIZE && (
+          <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
+        )}
       </div>
     </section>
   );

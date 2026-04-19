@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+
 import { verifyEsewaPayment } from "../lib/catalogApi";
+import { CheckCircle } from "lucide-react";
 
 function decodeEsewaData(dataValue) {
   if (!dataValue) return null;
@@ -66,10 +68,13 @@ export default function PaymentSuccess() {
     };
   }, [dataValue, transactionUuid]);
 
+
   if (loading) {
     return (
-      <div className="wf2-orderPage">
-        <div className="wf2-orderPanel">Verifying payment...</div>
+      <div style={{ minHeight: "80vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--page-bg, #181a20)" }}>
+        <div style={{ background: "#23232a", borderRadius: 20, boxShadow: "0 4px 32px rgba(0,0,0,0.18)", padding: "48px 32px", maxWidth: 420, width: "100%", textAlign: "center" }}>
+          <div style={{ color: "#bfc9d8", fontSize: 18 }}>Verifying payment...</div>
+        </div>
       </div>
     );
   }
@@ -92,57 +97,49 @@ export default function PaymentSuccess() {
   };
 
   return (
-    <div className="wf2-orderPage">
-      <div className="wf2-orderPanel wf2-lifecycleShell" style={{ maxWidth: 840, margin: "40px auto" }}>
-        <div className="wf2-lifecycleHero">
-          <span className="wf2-orderChip">Payment verified</span>
-          <h2>eSewa payment success</h2>
-          <p>The callback was accepted and the booking is moving toward final ticket handoff.</p>
+    <div style={{ minHeight: "80vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--page-bg, #181a20)" }}>
+      <div style={{ background: "#23232a", borderRadius: 20, boxShadow: "0 4px 32px rgba(0,0,0,0.18)", padding: "48px 32px", maxWidth: 420, width: "100%", textAlign: "center" }}>
+        <CheckCircle size={64} color="#0ec3e0" style={{ marginBottom: 16 }} />
+        <h2 style={{ color: "#fff", marginBottom: 8 }}>Thank You!</h2>
+        <div style={{ color: "#bfc9d8", fontSize: 18, marginBottom: 24 }}>
+          {error ? (
+            <span style={{ color: "#ff6b6b" }}>{error}</span>
+          ) : confirmed ? (
+            <>Your payment was successful.<br />Your booking is confirmed.</>
+          ) : (
+            <>Your payment was received, but booking is not yet confirmed.<br />Please check your ticket or contact support.</>
+          )}
         </div>
-
-        {error ? <div className="wf2-lifecycleAlert wf2-lifecycleAlertDanger">{error}</div> : null}
-
-        {!error ? (
-          <div className="wf2-lifecycleGrid">
-            <div className="wf2-lifecycleCard">
-              <span>Verification</span>
-              <strong>{verified ? "Valid" : "Invalid"}</strong>
-              <p>Gateway response signature and payload were checked.</p>
-            </div>
-            <div className="wf2-lifecycleCard">
-              <span>Gateway status</span>
-              <strong>{completed ? "Complete" : statusLabel}</strong>
-              <p>The gateway status is now the source of truth for this booking.</p>
-            </div>
-            <div className="wf2-lifecycleCard">
-              <span>Booking state</span>
-              <strong>{confirmed ? "Confirmed" : "Waiting"}</strong>
-              <p>{confirmed ? "Ticket download can continue." : "The booking still needs completion."}</p>
-            </div>
-          </div>
-        ) : null}
-
-        {verification?.message ? <div className="wf2-lifecycleAlert">{verification.message}</div> : null}
-
-        <details className="wf2-lifecycleDetails">
-          <summary>Decoded response</summary>
-          <pre>{JSON.stringify(verification?.decoded || decoded || {}, null, 2)}</pre>
-        </details>
-
-        <div className="wf2-lifecycleActions">
-          <button className="wf2-orderPayBtn" type="button" onClick={() => navigate("/") }>
+        <div style={{ display: "flex", gap: 12, justifyContent: "center", marginTop: 24 }}>
+          <button
+            className="wf2-orderPayBtn"
+            style={{ minWidth: 120 }}
+            onClick={() => navigate("/")}
+          >
             Go Home
           </button>
           {confirmed ? (
-            <button className="wf2-orderPayBtn" type="button" onClick={handleContinue}>
-              Continue
+            <button
+              className="wf2-orderPayBtn wf2-btnSecondary"
+              style={{ minWidth: 120 }}
+              onClick={handleContinue}
+            >
+              Download Ticket
             </button>
           ) : (
-            <button className="wf2-orderPayBtn" type="button" onClick={() => navigate("/movies") }>
+            <button
+              className="wf2-orderPayBtn wf2-btnSecondary"
+              style={{ minWidth: 120 }}
+              onClick={() => navigate("/movies")}
+            >
               Browse Movies
             </button>
           )}
         </div>
+        <details style={{ marginTop: 32, color: "#bfc9d8", textAlign: "left" }}>
+          <summary>Decoded response</summary>
+          <pre style={{ whiteSpace: "pre-wrap", color: "#bfc9d8" }}>{JSON.stringify(verification?.decoded || decoded || {}, null, 2)}</pre>
+        </details>
       </div>
     </div>
   );

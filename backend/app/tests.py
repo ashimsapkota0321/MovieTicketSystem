@@ -923,6 +923,54 @@ class MovieCreditsAndReviewsTests(TestCase):
         movie = Movie.objects.get(pk=payload["movie"]["id"])
         self.assertFalse(movie.is_approved)
 
+    def test_vendor_movie_creation_notifies_active_admins(self) -> None:
+        admin = Admin.objects.create(
+            name="Movie Reviewer",
+            email="movie.reviewer@meroticket.local",
+            phone_number="9800010101",
+            theatre_name="Reviewer Theatre",
+            location="Kathmandu",
+            is_active=True,
+        )
+        admin.set_password("password")
+        admin.save()
+
+        vendor = Vendor.objects.create(
+            name="Notify Vendor",
+            email="notify.vendor@meroticket.local",
+            phone_number="9800010102",
+            username="notify-vendor",
+            theatre="Notify Theatre",
+            city="Kathmandu",
+            is_active=True,
+            status="Active",
+        )
+        vendor.set_password("password")
+        vendor.save()
+
+        request = type("Request", (), {"FILES": {}})()
+        with mock.patch("app.services.get_payload", return_value={"title": "Vendor Notify Movie"}), mock.patch(
+            "app.services.resolve_vendor", return_value=vendor
+        ), mock.patch("app.services.resolve_admin", return_value=None):
+            payload, status_code = services.create_movie(request)
+
+        self.assertEqual(status_code, status.HTTP_201_CREATED)
+        movie_id = payload.get("movie", {}).get("id")
+        self.assertIsNotNone(movie_id)
+
+        admin_notification = (
+            Notification.objects.filter(
+                recipient_role=Notification.ROLE_ADMIN,
+                recipient_id=admin.id,
+                event_type=Notification.EVENT_SHOW_UPDATE,
+                metadata__movie_id=movie_id,
+                metadata__action="movie_submission",
+            )
+            .order_by("-id")
+            .first()
+        )
+        self.assertIsNotNone(admin_notification)
+
     def test_public_movie_lists_hide_unapproved_titles(self) -> None:
         approved_movie = Movie.objects.create(
             title="Approved Movie",

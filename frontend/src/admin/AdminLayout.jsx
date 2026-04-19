@@ -1,22 +1,14 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Outlet } from "react-router-dom";
 import AdminSidebar from "./AdminSidebar";
 import AdminTopbar from "./AdminTopbar";
+import AdminNotificationSidebar from "./AdminNotificationSidebar";
 import { AdminToastProvider } from "./AdminToastContext";
-
-const ADMIN_THEME_KEY = "mt_admin_theme";
-
-function getInitialTheme() {
-  if (typeof window === "undefined") return "light";
-  const stored = String(window.localStorage.getItem(ADMIN_THEME_KEY) || "").trim();
-  if (stored === "dark" || stored === "light") return stored;
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-}
 
 export default function AdminLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [theme, setTheme] = useState(getInitialTheme);
+  const [notificationOpen, setNotificationOpen] = useState(false);
 
   const handleToggleSidebar = () => {
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 1024px)").matches) {
@@ -32,15 +24,10 @@ export default function AdminLayout() {
     }
   };
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(ADMIN_THEME_KEY, theme);
-  }, [theme]);
-
   return (
     <AdminToastProvider>
       <div
-        className={`admin-shell theme-${theme} ${sidebarOpen ? "sidebar-open" : ""} ${
+        className={`admin-shell ${sidebarOpen ? "sidebar-open" : ""} ${
           sidebarCollapsed ? "sidebar-collapsed" : ""
         }`}
       >
@@ -48,13 +35,16 @@ export default function AdminLayout() {
         <div className="admin-main">
           <AdminTopbar
             onToggleSidebar={handleToggleSidebar}
-            onToggleTheme={() => setTheme((prev) => (prev === "dark" ? "light" : "dark"))}
-            theme={theme}
+            onOpenNotifications={() => setNotificationOpen(true)}
           />
           <main className="admin-content">
             <Outlet />
           </main>
         </div>
+        <AdminNotificationSidebar
+          isOpen={notificationOpen}
+          onClose={() => setNotificationOpen(false)}
+        />
         {sidebarOpen ? (
           <button
             type="button"

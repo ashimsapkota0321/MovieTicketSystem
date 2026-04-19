@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { useLocation } from "react-router-dom";
+import Pagination from "../components/Pagination";
 import { useNavigate } from "react-router-dom";
 import { fetchNotifications, markNotificationsRead } from "../lib/catalogApi";
 import { getAuthSession } from "../lib/authSession";
@@ -17,6 +19,9 @@ const EVENT_LABELS = {
 };
 
 export default function Notifications() {
+  const location = useLocation();
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 10;
   const navigate = useNavigate();
   const [notifications, setNotifications] = useState([]);
   const [unreadOnly, setUnreadOnly] = useState(false);
@@ -26,6 +31,15 @@ export default function Notifications() {
   const [error, setError] = useState("");
   const [unreadCount, setUnreadCount] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
+
+  const selectedNotificationId = useMemo(() => {
+    const stateId = Number(location.state?.selectedNotificationId || 0);
+    if (stateId > 0) return stateId;
+
+    const params = new URLSearchParams(location.search || "");
+    const queryId = Number(params.get("notificationId") || params.get("notification_id") || 0);
+    return queryId > 0 ? queryId : 0;
+  }, [location.search, location.state]);
 
   useEffect(() => {
     const auth = getAuthSession("customer");
@@ -47,6 +61,7 @@ export default function Notifications() {
         setNotifications(
           Array.isArray(payload?.notifications) ? payload.notifications : []
         );
+        setPage(1); // Reset to first page on reload
         setUnreadCount(Number(payload?.unread_count || 0));
         setTotalCount(Number(payload?.total_count || 0));
       } catch (err) {
@@ -68,6 +83,25 @@ export default function Notifications() {
     () => notifications.some((item) => !item?.is_read),
     [notifications]
   );
+
+  const selectedNotification = useMemo(
+    () => notifications.find((item) => Number(item?.id || 0) === selectedNotificationId) || null,
+    [notifications, selectedNotificationId]
+  );
+
+  const visibleNotifications = useMemo(() => {
+    if (selectedNotificationId && selectedNotification) {
+      return [selectedNotification];
+    }
+    return notifications;
+  }, [notifications, selectedNotification, selectedNotificationId]);
+
+  // Pagination logic
+  const totalPages = Math.ceil(visibleNotifications.length / PAGE_SIZE) || 1;
+  const paginatedNotifications = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE;
+    return visibleNotifications.slice(start, start + PAGE_SIZE);
+  }, [visibleNotifications, page]);
 
   const refreshAfterMutation = async () => {
     const payload = await fetchNotifications({
@@ -308,16 +342,32 @@ export default function Notifications() {
     <section className="wf2-customerPage">
       <div className="wf2-customerPageHead">
         <div>
-          <h1>Notifications</h1>
-          <p>Offers, booking updates, and payment notices.</p>
+          <h1>{selectedNotification ? "Notification details" : "Notifications"}</h1>
+          <p>
+            {selectedNotification
+              ? "Showing only the notification you selected."
+              : "Offers, booking updates, and payment notices."}
+          </p>
         </div>
-        <button
-          type="button"
-          className="wf2-customerPageAction"
-          onClick={() => navigate("/bookings/history")}
-        >
-          View booking history
-        </button>
+        <div className="d-flex gap-2 flex-wrap justify-content-end">
+          {selectedNotification ? (
+            <button
+              type="button"
+              className="wf2-customerPageAction"
+              onClick={() => navigate("/notifications", { replace: true })}
+            >
+              View all notifications
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="wf2-customerPageAction"
+              onClick={() => navigate("/bookings/history")}
+            >
+              View booking history
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="wf2-notificationToolbar">
@@ -333,30 +383,50 @@ export default function Notifications() {
         </div>
 
         <div className="wf2-notificationActions">
-          <button
-            type="button"
-            className={`wf2-notificationFilter ${!unreadOnly ? "is-active" : ""}`}
-            onClick={() => setUnreadOnly(false)}
-          >
-            All
-          </button>
-          <button
-            type="button"
-            className={`wf2-notificationFilter ${unreadOnly ? "is-active" : ""}`}
-            onClick={() => setUnreadOnly(true)}
-          >
-            Unread
-          </button>
+          {!selectedNotification ? (
+            <>
+              <button
+                type="button"
+                className={`wf2-notificationFilter ${!unreadOnly ? "is-active" : ""}`}
+                onClick={() => setUnreadOnly(false)}
+              >
+                All
+              </button>
+              <button
+                type="button"
+                className={`wf2-notificationFilter ${unreadOnly ? "is-active" : ""}`}
+                onClick={() => setUnreadOnly(true)}
+              >
+                Unread
+              </button>
+            </>
+          ) : null}
           <button
             type="button"
             className="wf2-customerPageAction"
             onClick={handleMarkAll}
-            disabled={!canMarkAll || markingAll}
+            disabled={selectedNotificationId ? true : !canMarkAll || markingAll}
           >
             {markingAll ? "Updating..." : "Mark all read"}
           </button>
         </div>
       </div>
+
+      {selectedNotification ? (
+        <div className="wf2-selectedNotificationBanner">
+          <div>
+            <strong>Selected notification</strong>
+            <p className="mb-0">Only this notification is shown below.</p>
+          </div>
+          <button
+            type="button"
+            className="wf2-notificationReadBtn"
+            onClick={() => navigate("/notifications", { replace: true })}
+          >
+            Back to all
+          </button>
+        </div>
+      ) : null}
 
       {error ? <div className="wf2-customerError">{error}</div> : null}
 
@@ -372,16 +442,18 @@ export default function Notifications() {
         ) : null}
 
         {!loading
-          ? notifications.map((item) => {
+          ? paginatedNotifications.map((item) => {
               const itemId = Number(item?.id || 0);
               const isRead = Boolean(item?.is_read);
               const hasTicketDownload = Boolean(getNotificationDownloadUrl(item));
               const hasResumeContext = Boolean(getNotificationResumeContext(item));
               const resumeExpired = isResumeNotificationExpired(item);
+              const isSelected = selectedNotificationId && itemId === selectedNotificationId;
+
               return (
                 <article
                   key={itemId || `${item?.created_at || "n"}-${item?.title || "item"}`}
-                  className={`wf2-notificationCard ${isRead ? "is-read" : "is-unread"}`}
+                  className={`wf2-notificationCard ${isRead ? "is-read" : "is-unread"} ${isSelected ? "is-selected" : ""}`}
                 >
                   <div className="wf2-notificationCardHead">
                     <span className="wf2-notificationType">
@@ -431,6 +503,10 @@ export default function Notifications() {
               );
             })
           : null}
+
+        {!loading && visibleNotifications.length > PAGE_SIZE ? (
+          <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
+        ) : null}
       </div>
     </section>
   );

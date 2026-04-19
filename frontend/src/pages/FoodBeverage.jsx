@@ -56,6 +56,7 @@ export default function FoodBeverage() {
   const orderTotal = ticketTotal + cartTotal;
   const totalQuantity = cartItems.reduce((sum, item) => sum + (cart[item.id] || 0), 0);
   const selectedSeats = Array.isArray(state.selectedSeats) ? state.selectedSeats : [];
+  const ticketCount = selectedSeats.length > 0 ? selectedSeats.length : 1;
   const orderMovie = {
     ...DEFAULT_MOVIE,
     ...(state.movie || {}),
@@ -159,12 +160,11 @@ export default function FoodBeverage() {
     });
   };
 
-  const formatPrice = (value) => `Npr ${value}`;
   const formatCurrency = (value) => {
     const amount = Number(value || 0);
-    return `NPR ${amount.toLocaleString("en-NP", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
+    return `Npr ${amount.toLocaleString("en-NP", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
     })}`;
   };
   const discountLabel = (item) => {
@@ -200,124 +200,25 @@ export default function FoodBeverage() {
     });
   };
 
-  const purchaseSummaryRows = useMemo(() => {
-    const seatCount = selectedSeats.length;
-    if (!seatCount) {
-      return [
-        {
-          label: "(1 Seat) Ticket",
-          subLabel: "Standard",
-          amount: ticketTotal,
-        },
-      ];
-    }
-
-    const perSeat = seatCount > 0 ? ticketTotal / seatCount : ticketTotal;
-    return [
-      {
-        label: `(${seatCount} Seats) Tickets`,
-        subLabel: selectedSeats.join(", "),
-        amount: ticketTotal,
-      },
-      {
-        label: "Average / Seat",
-        subLabel: "Seat fare",
-        amount: perSeat,
-      },
-    ];
-  }, [selectedSeats, ticketTotal]);
-
   return (
     <div className="wf2-page wf2-foodPage">
-      <div className="wf2-foodLayout">
-        <aside className="wf2-foodSidebar">
-          <div className="wf2-foodSideCard wf2-foodOrderCard">
-            <div className="wf2-foodOrderTitle">MY F&amp;B ORDER</div>
-            <div className="wf2-foodOrderList">
-              {cartItems.length ? (
-                cartItems.map((item) => (
-                  <div className="wf2-foodOrderRow" key={item.id}>
-                    <div>
-                      <div className="wf2-foodOrderName">{item.name}</div>
-                      <div className="wf2-foodOrderMeta">x{cart[item.id]}</div>
-                    </div>
-                    <div className="wf2-foodOrderAmount">
-                      {formatCurrency(item.price * cart[item.id])}
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div className="wf2-foodOrderEmpty">No Items Selected</div>
-              )}
-            </div>
+      <div className="wf2-foodHeroTop">
+        <button
+          className="wf2-foodBackBtn"
+          type="button"
+          onClick={() => navigate(-1)}
+          aria-label="Go back"
+        >
+          <ChevronLeft size={18} />
+        </button>
+        <h2>Grab a Bite!</h2>
+      </div>
 
-            <div className="wf2-foodOrderTotalRow">
-              <span>TOTAL</span>
-              <span>{formatCurrency(cartTotal)}</span>
-            </div>
-            <button
-              className="wf2-foodProceedBtn"
-              type="button"
-              onClick={() => goToOrderConfirm(buildOrderItems())}
-              disabled={!cartCount}
-            >
-              Proceed
-            </button>
-          </div>
-
-          <div className="wf2-foodSideCard wf2-foodPurchaseCard">
-            <div className="wf2-foodPurchaseTitle">PURCHASE SUMMARY</div>
-            {purchaseSummaryRows.map((row, index) => (
-              <div className="wf2-foodPurchaseRow" key={`${row.label}-${index + 1}`}>
-                <div>
-                  <div className="wf2-foodPurchaseLabel">{row.label}</div>
-                  <div className="wf2-foodPurchaseSub">{row.subLabel}</div>
-                </div>
-                <div className="wf2-foodPurchaseAmount">{formatCurrency(row.amount)}</div>
-              </div>
-            ))}
-          </div>
-
-          <div className="wf2-foodGrandTotal">
-            <span>GRAND TOTAL</span>
-            <span>{formatCurrency(orderTotal)}</span>
-          </div>
-        </aside>
-
+      <div className="wf2-foodLayout wf2-foodLayoutImage">
         <div className="wf2-foodPanelWrap">
-          <section className="wf2-foodHeaderPanel">
-            <div className="wf2-foodHeaderTop">
-              <button
-                className="wf2-foodBackBtn"
-                type="button"
-                onClick={() => navigate(-1)}
-                aria-label="Go back"
-              >
-                <ChevronLeft size={18} />
-              </button>
-              <h3 className="wf2-foodHeaderTitle">Select Food And Beverage</h3>
-              <button
-                className="wf2-foodSkipBtn"
-                type="button"
-                onClick={() => goToOrderConfirm([])}
-              >
-                Skip to checkout ?
-              </button>
-            </div>
-
-            <div className="wf2-foodToolbar">
-              <div className="wf2-foodSearch">
-                <Search size={24} />
-                <input
-                  type="text"
-                  placeholder="Search for concessions"
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  aria-label="Search food items"
-                />
-              </div>
-
-              <div className="wf2-foodTabs">
+          <section className="wf2-foodHeaderPanel wf2-foodHeaderPanelFlat">
+            <div className="wf2-foodToolbar wf2-foodToolbarImage">
+              <div className="wf2-foodTabs wf2-foodTabsImage">
                 {categories.map((category) => (
                   <button
                     key={category}
@@ -329,10 +230,21 @@ export default function FoodBeverage() {
                   </button>
                 ))}
               </div>
+
+              <div className="wf2-foodSearch wf2-foodSearchImage">
+                <Search size={18} />
+                <input
+                  type="text"
+                  placeholder="Search for food items"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  aria-label="Search food items"
+                />
+              </div>
             </div>
           </section>
 
-          <div className="wf2-foodGrid">
+          <div className="wf2-foodGrid wf2-foodGridImage">
             {loadingItems ? <div className="wf2-foodEmpty">Loading food items...</div> : null}
             {filteredItems.map((item) => {
               const qty = cart[item.id] || 0;
@@ -340,20 +252,22 @@ export default function FoodBeverage() {
               const thumbStyle = item.image
                 ? { background: "#ffffff" }
                 : { background: item.color };
+
               return (
-                <div className="wf2-foodItemCard" key={item.id}>
-                  <div className="wf2-foodThumb" style={thumbStyle}>
-                    {item.image ? (
-                      <img src={item.image} alt={item.name} loading="lazy" />
-                    ) : null}
+                <article className="wf2-foodItemCard wf2-foodItemCardImage" key={item.id}>
+                  <div className="wf2-foodVegFlag" aria-hidden="true">
+                    <span className={item.isVeg ? "veg" : "nonveg"} />
                   </div>
-                  <div className="wf2-foodItemBody">
-                    <div className="wf2-foodItemTopRow">
-                      <h4 className="wf2-foodItemName">{item.name}</h4>
-                      <span className="wf2-foodItemTopPrice">{formatCurrency(item.price)}</span>
-                    </div>
+
+                  <div className="wf2-foodThumb wf2-foodThumbImage" style={thumbStyle}>
+                    {item.image ? <img src={item.image} alt={item.name} loading="lazy" /> : null}
+                  </div>
+
+                  <div className="wf2-foodItemBody wf2-foodItemBodyImage">
+                    <h4 className="wf2-foodItemName">{item.name}</h4>
                     <p className="wf2-foodItemDesc">{item.tag || item.desc}</p>
-                    <div className="wf2-foodItemFooter">
+
+                    <div className="wf2-foodItemFooter wf2-foodItemFooterImage">
                       <div className="wf2-foodItemPriceRow">
                         <span className="wf2-foodItemPrice">{formatCurrency(item.price)}</span>
                         {item.originalPrice ? (
@@ -361,10 +275,9 @@ export default function FoodBeverage() {
                             {formatCurrency(item.originalPrice)}
                           </span>
                         ) : null}
-                        {discount ? (
-                          <span className="wf2-foodItemDiscount">{discount}</span>
-                        ) : null}
+                        {discount ? <span className="wf2-foodItemDiscount">{discount}</span> : null}
                       </div>
+
                       {qty > 0 ? (
                         <div className="wf2-foodQty">
                           <button
@@ -387,7 +300,7 @@ export default function FoodBeverage() {
                         </div>
                       ) : (
                         <button
-                          className="wf2-foodAddBtn"
+                          className="wf2-foodAddBtn wf2-foodAddBtnImage"
                           type="button"
                           onClick={() => addItem(item.id)}
                         >
@@ -396,14 +309,104 @@ export default function FoodBeverage() {
                       )}
                     </div>
                   </div>
-                </div>
+                </article>
               );
             })}
-            {filteredItems.length === 0 ? (
+
+            {!loadingItems && filteredItems.length === 0 ? (
               <div className="wf2-foodEmpty">No items match your search.</div>
             ) : null}
           </div>
         </div>
+
+        <aside className="wf2-foodSidebar wf2-foodSidebarImage">
+          <div className="wf2-foodSideCard wf2-foodSummaryCard">
+            <div className="wf2-foodSummaryHead">
+              <strong>Ticket Price</strong>
+              <span>{ticketCount} Ticket{ticketCount > 1 ? "s" : ""}</span>
+            </div>
+            <div className="wf2-foodSummaryRow">
+              <span>Base Fare</span>
+              <strong>{formatCurrency(ticketTotal)}</strong>
+            </div>
+            <div className="wf2-foodSummaryRow">
+              <span>Convenience Fee</span>
+              <strong>{formatCurrency(0)}</strong>
+            </div>
+            <div className="wf2-foodSummaryRow wf2-foodSummaryTotal">
+              <span>Total</span>
+              <strong>{formatCurrency(ticketTotal)}</strong>
+            </div>
+          </div>
+
+          <div className="wf2-foodSideCard wf2-foodCartCardImage">
+            <div className="wf2-foodSummaryHead">
+              <strong>Your Cart</strong>
+              <span>{totalQuantity} Item{totalQuantity > 1 ? "s" : ""}</span>
+            </div>
+
+            <div className="wf2-foodOrderList wf2-foodOrderListImage">
+              {cartItems.length ? (
+                cartItems.map((item) => (
+                  <div className="wf2-foodOrderRow wf2-foodOrderRowImage" key={item.id}>
+                    <div>
+                      <div className="wf2-foodOrderName">{item.name}</div>
+                      <div className="wf2-foodOrderMeta">{formatCurrency(item.price)} x {cart[item.id]}</div>
+                    </div>
+
+                    <div className="wf2-foodCartQtyInline">
+                      <button
+                        className="wf2-foodQtyBtn"
+                        type="button"
+                        onClick={() => removeItem(item.id)}
+                        aria-label={`Remove ${item.name}`}
+                      >
+                        <Minus size={14} />
+                      </button>
+                      <span>{cart[item.id]}</span>
+                      <button
+                        className="wf2-foodQtyBtn"
+                        type="button"
+                        onClick={() => addItem(item.id)}
+                        aria-label={`Add ${item.name}`}
+                      >
+                        <Plus size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="wf2-foodOrderEmpty">No Items Selected</div>
+              )}
+            </div>
+
+            <div className="wf2-foodSummaryRow">
+              <span>Food Subtotal</span>
+              <strong>{formatCurrency(cartTotal)}</strong>
+            </div>
+            <div className="wf2-foodSummaryRow wf2-foodSummaryTotal">
+              <span>Grand Total</span>
+              <strong>{formatCurrency(orderTotal)}</strong>
+            </div>
+
+            <button
+              className="wf2-foodProceedBtn wf2-foodProceedBtnImage"
+              type="button"
+              onClick={() => goToOrderConfirm(buildOrderItems())}
+              disabled={!cartCount}
+            >
+              Checkout
+            </button>
+
+            <button
+              className="wf2-foodSkipBtnInline"
+              type="button"
+              onClick={() => goToOrderConfirm([])}
+            >
+              Skip food and beverages
+            </button>
+          </div>
+        </aside>
       </div>
     </div>
   );

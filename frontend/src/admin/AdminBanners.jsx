@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Eye, Pencil, Plus, Trash2 } from "lucide-react";
+import { Eye, Pencil, Plus, Power, Trash2 } from "lucide-react";
 import AdminPageHeader from "./components/AdminPageHeader";
 import AdminModal from "./components/AdminModal";
 import ConfirmModal from "./components/ConfirmModal";
@@ -170,6 +170,10 @@ export default function AdminBanners() {
     try {
       await updateBanner(banner.id, payload, { method: "PATCH" });
       await loadBanners();
+      pushToast({
+        title: "Status updated",
+        message: `${banner.banner_type === "MOVIE" ? "Movie" : "Promo"} banner is now ${banner.is_active ? "Inactive" : "Active"}.`,
+      });
     } catch (error) {
       pushToast({
         title: "Update failed",
@@ -234,15 +238,9 @@ export default function AdminBanners() {
                     )}
                   </td>
                   <td>
-                    <button
-                      type="button"
-                      className={`btn btn-sm ${
-                        banner.is_active ? "btn-outline-light" : "btn-danger"
-                      }`}
-                      onClick={() => handleToggleActive(banner)}
-                    >
+                    <span className={`badge-soft ${banner.is_active ? "success" : "danger"}`}>
                       {banner.is_active ? "Active" : "Inactive"}
-                    </button>
+                    </span>
                   </td>
                   <td>
                     <div className="d-flex gap-2">
@@ -259,6 +257,15 @@ export default function AdminBanners() {
                         onClick={() => openEdit(banner)}
                       >
                         <Pencil size={16} />
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-outline-light btn-sm"
+                        title={banner.is_active ? "Set Inactive" : "Set Active"}
+                        aria-label={banner.is_active ? "Set Inactive" : "Set Active"}
+                        onClick={() => handleToggleActive(banner)}
+                      >
+                        <Power size={16} />
                       </button>
                       <button
                         type="button"
@@ -313,85 +320,110 @@ export default function AdminBanners() {
           </>
         }
       >
-        <fieldset disabled={isReadOnlyMode}>
-        <div className="row g-3">
-          <div className="col-12">
-            <label className="form-label">Banner type</label>
-            <div className="d-flex flex-wrap gap-2">
-              {BANNER_TYPES.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={`btn ${
-                    form.banner_type === option.value ? "btn-primary" : "btn-outline-light"
-                  }`}
-                  onClick={() =>
-                    setForm((prev) => ({
-                      ...prev,
-                      banner_type: option.value,
-                      movie_id: option.value === "MOVIE" ? prev.movie_id : "",
-                    }))
+        {isReadOnlyMode ? (
+          <div className="admin-details-view">
+            <div className="admin-details-row">
+              <div className="admin-details-label">Banner Type</div>
+              <div className="admin-details-value">{form.banner_type === "MOVIE" ? "Movie Banner" : "Promo Banner"}</div>
+            </div>
+            <div className="admin-details-row">
+              <div className="admin-details-label">Movie</div>
+              <div className="admin-details-value">
+                {form.banner_type === "MOVIE" ? movieLookup.get(String(form.movie_id))?.title || "-" : "Promo banner"}
+              </div>
+            </div>
+            <div className="admin-details-row">
+              <div className="admin-details-label">Status</div>
+              <div className="admin-details-value">{form.is_active ? "Active" : "Inactive"}</div>
+            </div>
+            <div className="admin-details-row">
+              <div className="admin-details-label">Image</div>
+              <div className="admin-details-value">
+                {imagePreview ? <img className="admin-details-image" src={imagePreview} alt="Banner" /> : "-"}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <fieldset disabled={isReadOnlyMode}>
+          <div className="row g-3">
+            <div className="col-12">
+              <label className="form-label">Banner type</label>
+              <div className="d-flex flex-wrap gap-2">
+                {BANNER_TYPES.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={`btn ${
+                      form.banner_type === option.value ? "btn-primary" : "btn-outline-light"
+                    }`}
+                    onClick={() =>
+                      setForm((prev) => ({
+                        ...prev,
+                        banner_type: option.value,
+                        movie_id: option.value === "MOVIE" ? prev.movie_id : "",
+                      }))
+                    }
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {form.banner_type === "MOVIE" ? (
+              <div className="col-12">
+                <label className="form-label">Select movie</label>
+                <select
+                  className="form-select"
+                  value={form.movie_id}
+                  onChange={(event) =>
+                    setForm((prev) => ({ ...prev, movie_id: event.target.value }))
                   }
                 >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </div>
+                  <option value="">Select a movie</option>
+                  {movies.map((movie) => (
+                    <option key={movie.id} value={movie.id}>
+                      {movie.title}
+                    </option>
+                  ))}
+                </select>
+                {form.movie_id ? (
+                  <small className="text-muted d-block mt-1">
+                    Using movie details from "{movieLookup.get(String(form.movie_id))?.title}".
+                  </small>
+                ) : null}
+              </div>
+            ) : null}
 
-          {form.banner_type === "MOVIE" ? (
-            <div className="col-12">
-              <label className="form-label">Select movie</label>
-              <select
-                className="form-select"
-                value={form.movie_id}
-                onChange={(event) =>
-                  setForm((prev) => ({ ...prev, movie_id: event.target.value }))
-                }
-              >
-                <option value="">Select a movie</option>
-                {movies.map((movie) => (
-                  <option key={movie.id} value={movie.id}>
-                    {movie.title}
-                  </option>
-                ))}
-              </select>
-              {form.movie_id ? (
-                <small className="text-muted d-block mt-1">
-                  Using movie details from "{movieLookup.get(String(form.movie_id))?.title}".
-                </small>
+            <div className="col-md-6">
+              <label className="form-label">Banner image</label>
+              <input
+                type="file"
+                className="form-control"
+                accept="image/*"
+                onChange={(event) => handleImageChange(event.target.files?.[0])}
+              />
+              {imagePreview ? (
+                <img className="admin-banner-preview" src={imagePreview} alt="Banner" />
               ) : null}
             </div>
-          ) : null}
 
-          <div className="col-md-6">
-            <label className="form-label">Banner image</label>
-            <input
-              type="file"
-              className="form-control"
-              accept="image/*"
-              onChange={(event) => handleImageChange(event.target.files?.[0])}
-            />
-            {imagePreview ? (
-              <img className="admin-banner-preview" src={imagePreview} alt="Banner" />
-            ) : null}
+            <div className="col-md-6">
+              <label className="form-label">Status</label>
+              <select
+                className="form-select"
+                value={form.is_active ? "true" : "false"}
+                onChange={(event) =>
+                  setForm((prev) => ({ ...prev, is_active: event.target.value === "true" }))
+                }
+              >
+                <option value="true">Active</option>
+                <option value="false">Inactive</option>
+              </select>
+            </div>
           </div>
-
-          <div className="col-md-6">
-            <label className="form-label">Status</label>
-            <select
-              className="form-select"
-              value={form.is_active ? "true" : "false"}
-              onChange={(event) =>
-                setForm((prev) => ({ ...prev, is_active: event.target.value === "true" }))
-              }
-            >
-              <option value="true">Active</option>
-              <option value="false">Inactive</option>
-            </select>
-          </div>
-        </div>
-        </fieldset>
+          </fieldset>
+        )}
       </AdminModal>
 
       <ConfirmModal

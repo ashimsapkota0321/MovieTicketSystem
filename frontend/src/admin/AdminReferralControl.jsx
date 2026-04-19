@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Check, X, Undo2, Clock4 } from "lucide-react";
 import AdminPageHeader from "./components/AdminPageHeader";
 import {
   fetchAdminReferralControls,
@@ -249,34 +250,42 @@ export default function AdminReferralControl() {
                   <td>{item.status}</td>
                   <td>{formatDate(item.created_at)}</td>
                   <td>
-                    <div className="d-flex gap-2 flex-wrap">
+                    <div className="admin-action-icon-row" aria-label="Referral actions">
                       <button
                         type="button"
                         className="btn btn-sm btn-outline-light"
+                        title="Approve"
+                        aria-label="Approve"
                         onClick={() => handleStatusAction(item, "APPROVE")}
                       >
-                        Approve
+                        <Check size={15} />
                       </button>
                       <button
                         type="button"
                         className="btn btn-sm btn-outline-light"
+                        title="Reject"
+                        aria-label="Reject"
                         onClick={() => handleStatusAction(item, "REJECT")}
                       >
-                        Reject
+                        <X size={15} />
                       </button>
                       <button
                         type="button"
                         className="btn btn-sm btn-outline-light"
+                        title="Reverse"
+                        aria-label="Reverse"
                         onClick={() => handleStatusAction(item, "REVERSE")}
                       >
-                        Reverse
+                        <Undo2 size={15} />
                       </button>
                       <button
                         type="button"
                         className="btn btn-sm btn-outline-light"
+                        title="Set Pending"
+                        aria-label="Set Pending"
                         onClick={() => handleStatusAction(item, "PENDING")}
                       >
-                        Set Pending
+                        <Clock4 size={15} />
                       </button>
                     </div>
                   </td>

@@ -755,127 +755,129 @@
 }
 
 .wf2-thankyouPage {
-  padding: 48px var(--page-pad) 90px;
+  padding: 44px var(--page-pad) 86px;
   font-family: var(--font-hero);
-  background: transparent;
   color: #f2f4fb;
-  min-height: 100vh;
 }
 
 .wf2-thankyouContainer {
-  width: min(980px, 100%);
+  width: min(1040px, 100%);
   margin: 0 auto;
   display: grid;
-  gap: 28px;
+  gap: 20px;
+  border-radius: 26px;
+  padding: clamp(22px, 2.5vw, 34px);
   background: #3f3f44;
-  border-radius: 24px;
-  padding: clamp(26px, 3vw, 40px);
-  box-shadow: var(--shadow-xl);
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 28px 56px rgba(2, 6, 23, 0.36);
 }
 
 .wf2-thankyouHero {
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+  text-align: center;
+  padding: 20px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+}
 
-  @media (max-width: 1024px) {
-    .wf2-orderLayout {
-      grid-template-columns: 1fr;
-    }
+.wf2-thankyouCheck {
+  width: 64px;
+  height: 64px;
+  border-radius: 18px;
+  display: grid;
+  place-items: center;
+  color: #04251f;
+  background: linear-gradient(145deg, #49e3b2 0%, #14c28f 100%);
+  box-shadow: 0 14px 30px rgba(20, 194, 143, 0.32);
+}
 
-    .wf2-etkShell {
-      grid-template-columns: 1fr;
-    }
+.wf2-thankyouTitle {
+  margin: 0;
+  font-family: var(--font-hero);
+  font-size: clamp(28px, 5vw, 44px);
+  line-height: 1;
+  letter-spacing: 0.04em;
+  color: #f2f4fb;
+}
 
-    .wf2-etkSide {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      align-items: start;
-    }
+.wf2-thankyouSubtext {
+  margin: 0;
+  max-width: 60ch;
+  color: rgba(231, 238, 252, 0.9);
+  font-size: 15px;
+  line-height: 1.55;
+}
 
-    .wf2-etkQrWrap {
-      grid-column: 1 / -1;
-    }
+.wf2-thankyouRow {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  gap: 14px;
+}
 
-    .wf2-lifecycleGrid {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-  }
+.wf2-thankyouCard {
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+  padding: 18px;
+  display: grid;
+  gap: 12px;
+}
 
-  @media (max-width: 640px) {
-    .wf2-orderMovieRow {
-      grid-template-columns: 72px 1fr;
-    }
-    .wf2-orderPriceTag {
-      grid-column: 2;
-      justify-self: end;
-    }
-    .wf2-orderItemRow {
-      grid-template-columns: 1fr auto;
-    }
-    .wf2-orderItemPrice {
-      grid-column: 2;
-    }
-    .wf2-thankyouRow {
-      grid-template-columns: 1fr;
-    }
-    .wf2-thankyouBtnPrimary,
-    .wf2-thankyouBtnGhost {
-      width: 100%;
-    }
+.wf2-thankyouCard h3 {
+  margin: 0;
+  font-size: 21px;
+  font-weight: 800;
+}
 
-    .wf2-ticketCard {
-      grid-template-columns: 1fr;
-    }
+.wf2-thankyouCard p {
+  margin: 0;
+  color: rgba(230, 237, 251, 0.84);
+  line-height: 1.5;
+}
 
-    .wf2-ticketRight {
-      border-left: none;
-      border-top: 2px dashed #e5e7eb;
-    }
+.wf2-thankyouQrCard {
+  justify-items: start;
+}
 
-    .wf2-etkMain {
-      padding: 16px;
-    }
+.wf2-thankyouQr {
+  width: min(230px, 100%);
+  aspect-ratio: 1 / 1;
+  border-radius: 14px;
+  padding: 10px;
+  background: #ffffff;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.3);
+}
 
-    .wf2-etkHead {
-      grid-template-columns: 1fr;
-      align-items: start;
-    }
-
-    .wf2-etkType {
-      width: fit-content;
-    }
-
-    .wf2-etkHighlightRow {
-      grid-template-columns: 1fr;
-    }
-
-    .wf2-etkGrid {
-      grid-template-columns: 1fr;
-    }
-
-    .wf2-etkFooter {
-      grid-template-columns: 1fr;
-    }
-
-    .wf2-etkContact {
-      text-align: left;
-    }
-
-    .wf2-etkSide {
-      grid-template-columns: 1fr;
-    }
-
-    .wf2-etkQrWrap {
-      grid-column: auto;
-    }
-
-    .wf2-lifecycleGrid {
-      grid-template-columns: 1fr;
-    }
-  }
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px dashed rgba(255, 255, 255, 0.2);
-  font-size: 12px;
-  font-weight: 700;
+.wf2-thankyouQrPlaceholder {
+  width: min(230px, 100%);
+  aspect-ratio: 1 / 1;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  padding: 16px;
   color: rgba(234, 240, 255, 0.95);
+  border: 1px dashed rgba(255, 255, 255, 0.26);
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.wf2-thankyouRef {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(15, 23, 42, 0.36);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .wf2-thankyouBtnPrimary {
@@ -947,6 +949,40 @@
   flex-wrap: wrap;
   gap: 10px;
   justify-content: center;
+}
+
+@media (max-width: 1024px) {
+  .wf2-thankyouRow {
+    grid-template-columns: 1fr;
+  }
+
+  .wf2-lifecycleGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .wf2-thankyouPage {
+    padding: 26px var(--page-pad) 64px;
+  }
+
+  .wf2-thankyouContainer {
+    padding: 16px;
+    border-radius: 18px;
+  }
+
+  .wf2-thankyouHero {
+    padding: 14px;
+  }
+
+  .wf2-thankyouBtnPrimary,
+  .wf2-thankyouBtnGhost {
+    width: 100%;
+  }
+
+  .wf2-lifecycleGrid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .wf2-ticketFrame {

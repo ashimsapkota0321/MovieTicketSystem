@@ -1,56 +1,29 @@
 import { useEffect, useMemo, useState } from "react";
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import {
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  ComposedChart,
+  Area,
+  Legend,
+} from "recharts";
 import { ShieldCheck, Wallet, Users, Landmark, RefreshCw } from "lucide-react";
 import AdminPageHeader from "./components/AdminPageHeader";
 import { fetchAdminRevenueAnalytics } from "../lib/catalogApi";
 
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
-
-function roughPercentFromLabel(label) {
-  const text = String(label || "");
-  let hash = 0;
-  for (let i = 0; i < text.length; i += 1) {
-    hash = (hash << 5) - hash + text.charCodeAt(i);
-    hash |= 0;
-  }
-  const pct = 5 + (Math.abs(hash) % 11);
-  return pct / 100;
-}
-
-function buildImperfectPlatformTrend(rows = []) {
-  if (!Array.isArray(rows) || rows.length === 0) return [];
-
-  return rows.map((row, index) => {
-    const label = row?.label || "";
-    const revenue = Number(row?.platform_revenue || 0);
-    const commission = Number(row?.admin_commission || 0);
-
-    if (!revenue) {
-      return {
-        label,
-        platform_revenue: 0,
-        admin_commission: Number((commission * 0.95).toFixed(2)),
-      };
-    }
-
-    const pct = roughPercentFromLabel(label);
-    const sign = index % 3 === 0 ? -1 : 1;
-    const adjustedRevenue = revenue + revenue * pct * sign;
-    const adjustedCommission = commission + commission * (pct * 0.7) * sign;
-
-    return {
-      label,
-      platform_revenue: Number(clamp(adjustedRevenue, 0, Number.MAX_SAFE_INTEGER).toFixed(2)),
-      admin_commission: Number(clamp(adjustedCommission, 0, Number.MAX_SAFE_INTEGER).toFixed(2)),
-    };
-  });
-}
-
 function formatMoney(value) {
   const amount = Number(value || 0);
-  return `NPR ${amount.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+  return `NPR ${amount.toLocaleString("en-NP", { maximumFractionDigits: 2 })}`;
+}
+
+function formatCount(value) {
+  return Number(value || 0).toLocaleString("en-NP");
 }
 
 function shortVendorName(value) {
@@ -85,9 +58,10 @@ export default function AdminDashboard() {
 
   const summary = analytics?.summary || {};
   const topVendors = Array.isArray(analytics?.top_performing_vendors) ? analytics.top_performing_vendors : [];
-  const trend = Array.isArray(analytics?.trend) ? analytics.trend : [];
-
-  const displayTrend = useMemo(() => buildImperfectPlatformTrend(trend), [trend]);
+  const displayTrend = useMemo(
+    () => (Array.isArray(analytics?.trend) ? analytics.trend : []),
+    [analytics?.trend]
+  );
 
   const vendorBarRows = useMemo(() => {
     return topVendors.slice(0, 8).map((row) => ({
@@ -97,6 +71,24 @@ export default function AdminDashboard() {
       bookings: Number(row?.bookings || 0),
     }));
   }, [topVendors]);
+
+  const trendTableRows = useMemo(() => {
+    return displayTrend.map((row, index) => {
+      const revenue = Number(row?.platform_revenue || 0);
+      const commission = Number(row?.admin_commission || 0);
+      const previousRevenue = Number(displayTrend[index - 1]?.platform_revenue || 0);
+      const deltaPercent =
+        previousRevenue > 0 ? ((revenue - previousRevenue) / previousRevenue) * 100 : null;
+
+      return {
+        label: row?.label || "-",
+        revenue,
+        commission,
+        commissionRate: revenue > 0 ? (commission / revenue) * 100 : 0,
+        deltaPercent,
+      };
+    });
+  }, [displayTrend]);
 
   const statCards = [
     {
@@ -176,6 +168,54 @@ export default function AdminDashboard() {
         })}
       </section>
 
+      <section className="admin-card">
+        <div className="admin-card-header">
+          <div>
+            <h5 className="mb-1">Main Revenue Performance Chart</h5>
+            <small className="text-muted">Primary dashboard view: total revenue and admin commission over time</small>
+          </div>
+        </div>
+        {displayTrend.length === 0 ? (
+          <p className="text-muted mb-0">No trend data available.</p>
+        ) : (
+          <ResponsiveContainer width="100%" height={340}>
+            <ComposedChart data={displayTrend}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--admin-border)" />
+              <XAxis dataKey="label" tick={{ fontSize: 11 }} stroke="var(--admin-muted)" />
+              <YAxis tick={{ fontSize: 11 }} stroke="var(--admin-muted)" />
+              <Tooltip
+                contentStyle={{
+                  background: "#fff",
+                  border: "1px solid var(--admin-border)",
+                  borderRadius: "6px",
+                }}
+                formatter={(value, name) => {
+                  if (name === "platform_revenue") return [formatMoney(value), "Platform Revenue"];
+                  return [formatMoney(value), "Admin Commission"];
+                }}
+              />
+              <Legend />
+              <Area
+                type="monotone"
+                dataKey="platform_revenue"
+                stroke="#2d7ff9"
+                fill="#2d7ff9"
+                fillOpacity={0.14}
+                name="Platform Revenue"
+              />
+              <Line
+                type="monotone"
+                dataKey="admin_commission"
+                stroke="#1e9e5a"
+                strokeWidth={3}
+                dot={{ r: 2 }}
+                name="Admin Commission"
+              />
+            </ComposedChart>
+          </ResponsiveContainer>
+        )}
+      </section>
+
       <section className="admin-grid-2 revenue-grid-main-admin">
         <div className="admin-card">
           <div className="admin-card-header">
@@ -203,8 +243,8 @@ export default function AdminDashboard() {
                     return [formatMoney(value), "Commission"];
                   }}
                 />
-                <Line dataKey="platform_revenue" stroke="#2d7ff9" strokeWidth={2} dot={{ r: 2 }} />
-                <Line dataKey="admin_commission" stroke="#1e9e5a" strokeWidth={2} dot={{ r: 2 }} />
+                <Line dataKey="platform_revenue" stroke="#2d7ff9" strokeWidth={2} dot={{ r: 2 }} name="Revenue" />
+                <Line dataKey="admin_commission" stroke="#1e9e5a" strokeWidth={2} dot={{ r: 2 }} name="Commission" />
               </LineChart>
             </ResponsiveContainer>
           )}
@@ -237,11 +277,66 @@ export default function AdminDashboard() {
                     return [value, "Bookings"];
                   }}
                 />
-                <Bar dataKey="revenue" fill="#2d7ff9" radius={[4, 4, 0, 0]} />
+                <Legend />
+                <Bar dataKey="revenue" fill="#2d7ff9" radius={[4, 4, 0, 0]} name="Revenue" />
+                <Bar dataKey="commission" fill="#1e9e5a" radius={[4, 4, 0, 0]} name="Commission" />
               </BarChart>
             </ResponsiveContainer>
           )}
         </div>
+      </section>
+
+      <section className="admin-card">
+        <div className="admin-card-header">
+          <div>
+            <h5 className="mb-1">Trend Breakdown Table</h5>
+            <small className="text-muted">Structured period-level data for comparison and quick review</small>
+          </div>
+        </div>
+
+        {trendTableRows.length === 0 ? (
+          <p className="text-muted mb-0">No trend rows yet.</p>
+        ) : (
+          <div className="table-responsive">
+            <table className="table admin-table revenue-table">
+              <thead>
+                <tr>
+                  <th>Period</th>
+                  <th>Platform Revenue</th>
+                  <th>Admin Commission</th>
+                  <th>Commission Rate</th>
+                  <th>Revenue Change</th>
+                </tr>
+              </thead>
+              <tbody>
+                {trendTableRows.slice(-12).map((row) => {
+                  const tone =
+                    row.deltaPercent == null
+                      ? "info"
+                      : row.deltaPercent >= 0
+                        ? "success"
+                        : "danger";
+                  const deltaLabel =
+                    row.deltaPercent == null
+                      ? "-"
+                      : `${row.deltaPercent >= 0 ? "+" : ""}${row.deltaPercent.toFixed(1)}%`;
+
+                  return (
+                    <tr key={row.label}>
+                      <td>{row.label}</td>
+                      <td>{formatMoney(row.revenue)}</td>
+                      <td>{formatMoney(row.commission)}</td>
+                      <td>{row.commissionRate.toFixed(2)}%</td>
+                      <td>
+                        <span className={`badge-soft ${tone}`}>{deltaLabel}</span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
 
       <section className="admin-card">
@@ -270,7 +365,7 @@ export default function AdminDashboard() {
                 {topVendors.slice(0, 10).map((row) => (
                   <tr key={`${row?.vendor_id}-${row?.vendor_name}`}>
                     <td>{row?.vendor_name || "Unknown"}</td>
-                    <td>{Number(row?.bookings || 0).toLocaleString()}</td>
+                    <td>{formatCount(row?.bookings || 0)}</td>
                     <td>{formatMoney(row?.platform_revenue || 0)}</td>
                     <td>{formatMoney(row?.vendor_earning || 0)}</td>
                     <td>{formatMoney(row?.admin_commission || 0)}</td>

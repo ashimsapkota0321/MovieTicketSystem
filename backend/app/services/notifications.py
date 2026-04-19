@@ -380,35 +380,8 @@ def _resolve_notification_actor(request: Any) -> tuple[Optional[str], Optional[i
 
 
 def _ensure_customer_login_offer_notification(user: User) -> None:
-    if not user or not getattr(user, "id", None):
-        return
-
-    now = timezone.now()
-    start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    exists = Notification.objects.filter(
-        recipient_role=Notification.ROLE_CUSTOMER,
-        recipient_id=user.id,
-        event_type=Notification.EVENT_MARKETING_CAMPAIGN,
-        metadata__notice_key="LOGIN_OFFER",
-        created_at__gte=start_of_day,
-    ).exists()
-    if exists:
-        return
-
-    _create_notification(
-        recipient_role=Notification.ROLE_CUSTOMER,
-        recipient_id=user.id,
-        recipient_email=user.email,
-        event_type=Notification.EVENT_MARKETING_CAMPAIGN,
-        title="New offers available",
-        message="Check the latest movie offers and promo campaigns near you.",
-        metadata={
-            "notice_key": "LOGIN_OFFER",
-            "source": "customer_login",
-            "date": now.date().isoformat(),
-        },
-        send_email_too=False,
-    )
+    # Disabled: Do not send default offer notification on login
+    return
 
 
 def _notify_customer_cancel_request_rejected(

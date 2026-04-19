@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { Check, X } from "lucide-react";
 import AdminPageHeader from "./components/AdminPageHeader";
 import { useAdminToast } from "./AdminToastContext";
 import { useAppContext } from "../context/Appcontext";
@@ -196,7 +197,7 @@ export default function AdminReviews() {
                     <td>
                       <button
                         type="button"
-                        className="btn btn-sm btn-outline-light"
+                        className="btn btn-outline-light admin-table-text-btn"
                         onClick={() => navigate(`/admin/movies?q=${encodeURIComponent(movie.title || "")}`)}
                       >
                         Review movie
@@ -248,22 +249,26 @@ export default function AdminReviews() {
                   <td className="text-muted small">{item.description || "-"}</td>
                   <td>{formatDate(item.created_at)}</td>
                   <td>
-                    <div className="d-flex gap-2">
+                    <div className="admin-action-icon-row" aria-label="Payout actions">
                       <button
                         type="button"
                         className="btn btn-sm btn-success"
+                        title="Approve"
+                        aria-label="Approve"
                         disabled={busyWithdrawalId === item.id || String(item.status || "").trim().toUpperCase() !== "PENDING"}
                         onClick={() => handleWithdrawalDecision(item, "approve")}
                       >
-                        Approve
+                        <Check size={15} />
                       </button>
                       <button
                         type="button"
                         className="btn btn-sm btn-outline-warning"
+                        title="Reject"
+                        aria-label="Reject"
                         disabled={busyWithdrawalId === item.id || String(item.status || "").trim().toUpperCase() !== "PENDING"}
                         onClick={() => handleWithdrawalDecision(item, "reject")}
                       >
-                        Reject
+                        <X size={15} />
                       </button>
                     </div>
                   </td>
@@ -299,8 +304,6 @@ export default function AdminReviews() {
                 <th>Booking</th>
                 <th>User</th>
                 <th>Movie</th>
-                <th>Payment</th>
-                <th>Refund</th>
                 <th>Status</th>
               </tr>
             </thead>
@@ -309,25 +312,24 @@ export default function AdminReviews() {
                 const paymentStatus = String(booking?.paymentStatus || booking?.payment_status || "").trim() || "-";
                 const refundStatus = String(booking?.refundStatus || booking?.refund_status || "").trim() || "-";
                 const status = String(booking?.status || "").trim() || "-";
+                const mergedStatus = resolveBookingReviewStatus({ paymentStatus, refundStatus, status });
                 return (
                   <tr key={booking.id}>
                     <td>#{booking.id}</td>
                     <td>{booking.user || "-"}</td>
                     <td>{booking.movie || "-"}</td>
-                    <td><span className={`badge-soft ${paymentTone(paymentStatus)}`}>{paymentStatus}</span></td>
-                    <td><span className={`badge-soft ${refundTone(refundStatus)}`}>{refundStatus}</span></td>
-                    <td><span className={`badge-soft ${bookingTone(status)}`}>{status}</span></td>
+                    <td><span className={`badge-soft ${mergedStatus.tone}`}>{mergedStatus.label}</span></td>
                   </tr>
                 );
               })}
               {!loadingBookings && bookings.length === 0 ? (
                 <tr>
-                  <td colSpan="6">No bookings available.</td>
+                  <td colSpan="4">No bookings available.</td>
                 </tr>
               ) : null}
               {loadingBookings ? (
                 <tr>
-                  <td colSpan="6">Loading bookings...</td>
+                  <td colSpan="4">Loading bookings...</td>
                 </tr>
               ) : null}
             </tbody>
@@ -374,28 +376,34 @@ function withdrawalTone(status) {
   return "info";
 }
 
-function paymentTone(status) {
-  const value = String(status || "").trim().toUpperCase();
-  if (value === "SUCCESS" || value === "PAID") return "success";
-  if (value === "FAILED") return "danger";
-  if (value === "PENDING") return "warning";
-  return "info";
-}
+function resolveBookingReviewStatus({ paymentStatus, refundStatus, status }) {
+  const payment = String(paymentStatus || "").trim().toUpperCase();
+  const refund = String(refundStatus || "").trim().toUpperCase();
+  const booking = String(status || "").trim().toUpperCase();
 
-function refundTone(status) {
-  const value = String(status || "").trim().toUpperCase();
-  if (value === "COMPLETED" || value === "REFUNDED") return "success";
-  if (value === "PENDING") return "warning";
-  if (value === "FAILED") return "danger";
-  return "info";
-}
+  if (refund === "REFUNDED" || refund === "COMPLETED") {
+    return { label: "REFUNDED", tone: "success" };
+  }
+  if (refund === "PENDING") {
+    return { label: "REFUND PENDING", tone: "warning" };
+  }
+  if (refund === "FAILED") {
+    return { label: "REFUND FAILED", tone: "danger" };
+  }
+  if (payment === "FAILED") {
+    return { label: "PAYMENT FAILED", tone: "danger" };
+  }
+  if (payment === "PENDING") {
+    return { label: "PAYMENT PENDING", tone: "warning" };
+  }
+  if (booking === "CANCELLED") {
+    return { label: "CANCELLED", tone: "danger" };
+  }
+  if (booking === "CONFIRMED" || booking === "PAID" || payment === "SUCCESS" || payment === "PAID") {
+    return { label: "PAID", tone: "success" };
+  }
 
-function bookingTone(status) {
-  const value = String(status || "").trim().toUpperCase();
-  if (value === "CONFIRMED") return "success";
-  if (value === "CANCELLED") return "danger";
-  if (value === "PENDING") return "warning";
-  return "info";
+  return { label: booking || "UNKNOWN", tone: "info" };
 }
 
 function formatDate(value) {

@@ -50,6 +50,7 @@ export default function Home() {
   }, [showBuckets, movies, moviesWithActiveShows]);
 
 
+  // Only one trailer per movie (deduplicate by movie id)
   const [trailers, setTrailers] = useState([]);
   const [trailersLoading, setTrailersLoading] = useState(true);
   const [trailersError, setTrailersError] = useState("");
@@ -63,7 +64,21 @@ export default function Home() {
       try {
         const list = await fetchTrailers();
         if (!mounted) return;
-        setTrailers(Array.isArray(list) ? list : []);
+        // Deduplicate: only one trailer per movie (first found)
+        if (Array.isArray(list)) {
+          const seen = new Set();
+          const unique = [];
+          for (const t of list) {
+            const movieId = t.movie_id || t.movieId || t.movie || t.id;
+            if (movieId && !seen.has(movieId)) {
+              seen.add(movieId);
+              unique.push(t);
+            }
+          }
+          setTrailers(unique);
+        } else {
+          setTrailers([]);
+        }
       } catch (error) {
         if (!mounted) return;
         setTrailersError(error.message || "Unable to load trailers.");

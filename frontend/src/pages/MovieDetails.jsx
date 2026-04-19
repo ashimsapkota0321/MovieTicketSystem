@@ -381,7 +381,11 @@ export default function MovieDetails() {
                     <span className="md-btnIcon">
                       <Play size={14} />
                     </span>
-                    Watch Trailer{trailerUrls.length > 1 ? ` (${trailerUrls.length})` : ""}
+                    Watch Trailer
+                    {/* Show trailer count as a label if more than one */}
+                    {trailerUrls.length > 1 && (
+                      <span className="md-trailerCount">{trailerUrls.length} trailers</span>
+                    )}
                   </button>
                   <button
                     className="md-btn md-btnPrimary"
@@ -601,9 +605,10 @@ export default function MovieDetails() {
                   />
                 </div>
               </div>
-              {hasMultipleTrailers ? (
+              {/* Only show trailer rail if more than one unique trailer exists */}
+              {trailerUrls.length > 1 ? (
                 <aside className="md-trailerRail" aria-label="Trailers list">
-                  {trailerUrls.map((url, index) => {
+                  {trailerUrls.slice(0, 1).map((url, index) => {
                     const preview = buildTrailerPreview(url, title, index);
                     const active = url === currentTrailer;
                     return (
@@ -930,24 +935,14 @@ function resolveTrailerUrl(movie) {
 
 function resolveTrailerUrls(movie) {
   if (!movie) return [];
+  // Only use trailers added from the admin panel (array fields)
   const fromList = Array.isArray(movie?.trailerUrls)
     ? movie.trailerUrls
     : Array.isArray(movie?.trailer_urls)
       ? movie.trailer_urls
       : [];
-  const single =
-    movie.trailerUrl ||
-    movie.trailer_url ||
-    movie.trailer ||
-    movie.videoUrl ||
-    movie.youtubeUrl ||
-    movie.youtube ||
-    movie.trailer_link ||
-    movie.trailerLink ||
-    movie.promoUrl;
-
   const normalized = [];
-  for (const value of [...fromList, single]) {
+  for (const value of fromList) {
     const url = typeof value === "string"
       ? value.trim()
       : value && typeof value === "object"

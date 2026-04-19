@@ -48,7 +48,7 @@ export default function ThankYou() {
     };
   }, [state]);
 
-  const formatPrice = (value) => `Npr ${value}`;
+  const formatPrice = (value) => `Npr ${Number(value || 0).toLocaleString()}`;
 
   const handleGoDownload = (autoDownload = false) => {
     navigate("/ticket-download", {
@@ -67,9 +67,9 @@ export default function ThankYou() {
           <div className="wf2-thankyouCheck">
             <CheckCircle size={22} />
           </div>
-          <h1 className="wf2-thankyouTitle">THANK YOU</h1>
+          <h1 className="wf2-thankyouTitle">Thank You</h1>
           <p className="wf2-thankyouSubtext">
-            Your ticket is confirmed. Show the QR code at the entry gate.
+            Your booking is confirmed. Keep your QR code ready at the entry gate.
           </p>
         </div>
 
@@ -103,7 +103,7 @@ export default function ThankYou() {
             )}
             <p>Show this QR at the entry gate.</p>
             <div className="wf2-thankyouRef">
-              {ticket?.reference ? `Ref ${ticket.reference}` : "Ref MT-XXXX"}
+              {ticket?.reference ? `Ref ${ticket.reference}` : "Ref Pending"}
             </div>
           </section>
 
@@ -127,6 +127,10 @@ export default function ThankYou() {
           <div className="wf2-thankyouSummaryItem">
             <span>Movie</span>
             <strong>{order.movie.title}</strong>
+          </div>
+          <div className="wf2-thankyouSummaryItem">
+            <span>Language · Runtime</span>
+            <strong>{order.movie.language} · {order.movie.runtime}</strong>
           </div>
           <div className="wf2-thankyouSummaryItem">
             <span>Seats</span>

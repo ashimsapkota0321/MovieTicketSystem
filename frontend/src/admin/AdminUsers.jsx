@@ -364,89 +364,118 @@ export default function AdminUsers() {
           </>
         }
       >
-        <fieldset disabled={isReadOnlyMode || isSaving}>
-        <div className="row g-3">
-          <div className="col-md-4">
-            <label className="form-label">First name</label>
-            <input
-              className="form-control"
-              value={form.first_name}
-              onChange={(event) => setForm((prev) => ({ ...prev, first_name: event.target.value }))}
-            />
+        {isReadOnlyMode ? (
+          <div className="admin-details-view">
+            <div className="admin-details-row">
+              <div className="admin-details-label">Name</div>
+              <div className="admin-details-value">{[form.first_name, form.middle_name, form.last_name].filter(Boolean).join(" ") || "-"}</div>
+            </div>
+            <div className="admin-details-row">
+              <div className="admin-details-label">Email</div>
+              <div className="admin-details-value">{form.email || "-"}</div>
+            </div>
+            <div className="admin-details-row">
+              <div className="admin-details-label">Phone</div>
+              <div className="admin-details-value">{form.phone_number || "-"}</div>
+            </div>
+            <div className="admin-details-row">
+              <div className="admin-details-label">Date of Birth</div>
+              <div className="admin-details-value">{form.dob || "-"}</div>
+            </div>
+            <div className="admin-details-row">
+              <div className="admin-details-label">Username</div>
+              <div className="admin-details-value">{form.username || "-"}</div>
+            </div>
+            <div className="admin-details-row">
+              <div className="admin-details-label">Status</div>
+              <div className="admin-details-value">{form.status || "-"}</div>
+            </div>
           </div>
-          <div className="col-md-4">
-            <label className="form-label">Middle name</label>
-            <input
-              className="form-control"
-              value={form.middle_name}
-              onChange={(event) => setForm((prev) => ({ ...prev, middle_name: event.target.value }))}
-            />
+        ) : (
+          <fieldset disabled={isReadOnlyMode || isSaving}>
+          <div className="row g-3">
+            <div className="col-md-4">
+              <label className="form-label">First name</label>
+              <input
+                className="form-control"
+                value={form.first_name}
+                onChange={(event) => setForm((prev) => ({ ...prev, first_name: event.target.value }))}
+              />
+            </div>
+            <div className="col-md-4">
+              <label className="form-label">Middle name</label>
+              <input
+                className="form-control"
+                value={form.middle_name}
+                onChange={(event) => setForm((prev) => ({ ...prev, middle_name: event.target.value }))}
+              />
+            </div>
+            <div className="col-md-4">
+              <label className="form-label">Last name</label>
+              <input
+                className="form-control"
+                value={form.last_name}
+                onChange={(event) => setForm((prev) => ({ ...prev, last_name: event.target.value }))}
+              />
+            </div>
+            <div className="col-md-6">
+              <label className="form-label">Email</label>
+              <input
+                className="form-control"
+                value={form.email}
+                onChange={(event) => setForm((prev) => ({ ...prev, email: event.target.value }))}
+              />
+            </div>
+            <div className="col-md-6">
+              <label className="form-label">Phone number</label>
+              <input
+                className="form-control"
+                value={form.phone_number}
+                onChange={(event) => setForm((prev) => ({ ...prev, phone_number: event.target.value }))}
+              />
+            </div>
+            <div className="col-md-6">
+              <label className="form-label">Date of birth</label>
+              <input
+                type="date"
+                className="form-control"
+                value={form.dob}
+                onChange={(event) => setForm((prev) => ({ ...prev, dob: event.target.value }))}
+              />
+            </div>
+            <div className="col-md-6">
+              <label className="form-label">Username</label>
+              <input
+                className="form-control"
+                value={form.username}
+                onChange={(event) => setForm((prev) => ({ ...prev, username: event.target.value }))}
+              />
+            </div>
+            <div className="col-md-6">
+              <label className="form-label">Status</label>
+              <select
+                className="form-select"
+                value={form.status}
+                onChange={(event) => setForm((prev) => ({ ...prev, status: event.target.value }))}
+              >
+                <option>Active</option>
+                <option>Blocked</option>
+              </select>
+            </div>
+            <div className="col-md-6">
+              <label className="form-label">Password</label>
+              <input
+                type="password"
+                className="form-control"
+                placeholder={editingUser ? "Leave blank to keep" : "Set user password"}
+                value={form.password}
+                onChange={(event) => setForm((prev) => ({ ...prev, password: event.target.value }))}
+              />
+            </div>
+            {formError ? <div className="col-12 text-danger small">{formError}</div> : null}
           </div>
-          <div className="col-md-4">
-            <label className="form-label">Last name</label>
-            <input
-              className="form-control"
-              value={form.last_name}
-              onChange={(event) => setForm((prev) => ({ ...prev, last_name: event.target.value }))}
-            />
-          </div>
-          <div className="col-md-6">
-            <label className="form-label">Email</label>
-            <input
-              className="form-control"
-              value={form.email}
-              onChange={(event) => setForm((prev) => ({ ...prev, email: event.target.value }))}
-            />
-          </div>
-          <div className="col-md-6">
-            <label className="form-label">Phone number</label>
-            <input
-              className="form-control"
-              value={form.phone_number}
-              onChange={(event) => setForm((prev) => ({ ...prev, phone_number: event.target.value }))}
-            />
-          </div>
-          <div className="col-md-6">
-            <label className="form-label">Date of birth</label>
-            <input
-              type="date"
-              className="form-control"
-              value={form.dob}
-              onChange={(event) => setForm((prev) => ({ ...prev, dob: event.target.value }))}
-            />
-          </div>
-          <div className="col-md-6">
-            <label className="form-label">Username</label>
-            <input
-              className="form-control"
-              value={form.username}
-              onChange={(event) => setForm((prev) => ({ ...prev, username: event.target.value }))}
-            />
-          </div>
-          <div className="col-md-6">
-            <label className="form-label">Status</label>
-            <select
-              className="form-select"
-              value={form.status}
-              onChange={(event) => setForm((prev) => ({ ...prev, status: event.target.value }))}
-            >
-              <option>Active</option>
-              <option>Blocked</option>
-            </select>
-          </div>
-          <div className="col-md-6">
-            <label className="form-label">Password</label>
-            <input
-              type="password"
-              className="form-control"
-              placeholder={editingUser ? "Leave blank to keep" : "Set user password"}
-              value={form.password}
-              onChange={(event) => setForm((prev) => ({ ...prev, password: event.target.value }))}
-            />
-          </div>
-          {formError ? <div className="col-12 text-danger small">{formError}</div> : null}
-        </div>
-        </fieldset>
+          </fieldset>
+        )}
       </AdminModal>
 
       <ConfirmModal

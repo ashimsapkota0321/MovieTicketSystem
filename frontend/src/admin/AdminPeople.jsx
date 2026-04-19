@@ -252,76 +252,115 @@ export default function AdminPeople() {
           </>
         }
       >
-        <fieldset disabled={isReadOnlyMode}>
-        <div className="row g-3">
-          <div className="col-md-6">
-            <label className="form-label">Full name</label>
-            <input
-              className="form-control"
-              value={form.full_name}
-              onChange={(event) => setForm((prev) => ({ ...prev, full_name: event.target.value }))}
-            />
+        {isReadOnlyMode ? (
+          <div className="admin-details-view">
+            <div className="admin-details-row">
+              <div className="admin-details-label">Full Name</div>
+              <div className="admin-details-value">{form.full_name || "-"}</div>
+            </div>
+            <div className="admin-details-row">
+              <div className="admin-details-label">Nationality</div>
+              <div className="admin-details-value">{form.nationality || "-"}</div>
+            </div>
+            <div className="admin-details-row">
+              <div className="admin-details-label">Date of Birth</div>
+              <div className="admin-details-value">{form.date_of_birth || "-"}</div>
+            </div>
+            <div className="admin-details-row">
+              <div className="admin-details-label">Photo</div>
+              <div className="admin-details-value">
+                {form.photo_url ? <img className="admin-details-image" src={form.photo_url} alt={form.full_name || "Person"} /> : "-"}
+              </div>
+            </div>
+            <div className="admin-details-row">
+              <div className="admin-details-label">Bio</div>
+              <div className="admin-details-value">{form.bio || "-"}</div>
+            </div>
+            <div className="admin-details-row">
+              <div className="admin-details-label">Instagram</div>
+              <div className="admin-details-value">{form.instagram || "-"}</div>
+            </div>
+            <div className="admin-details-row">
+              <div className="admin-details-label">IMDb</div>
+              <div className="admin-details-value">{form.imdb || "-"}</div>
+            </div>
+            <div className="admin-details-row">
+              <div className="admin-details-label">Facebook</div>
+              <div className="admin-details-value">{form.facebook || "-"}</div>
+            </div>
           </div>
-          <div className="col-md-6">
-            <label className="form-label">Nationality</label>
-            <input
-              className="form-control"
-              value={form.nationality}
-              onChange={(event) => setForm((prev) => ({ ...prev, nationality: event.target.value }))}
-            />
+        ) : (
+          <fieldset disabled={isReadOnlyMode}>
+          <div className="row g-3">
+            <div className="col-md-6">
+              <label className="form-label">Full name</label>
+              <input
+                className="form-control"
+                value={form.full_name}
+                onChange={(event) => setForm((prev) => ({ ...prev, full_name: event.target.value }))}
+              />
+            </div>
+            <div className="col-md-6">
+              <label className="form-label">Nationality</label>
+              <input
+                className="form-control"
+                value={form.nationality}
+                onChange={(event) => setForm((prev) => ({ ...prev, nationality: event.target.value }))}
+              />
+            </div>
+            <div className="col-md-6">
+              <label className="form-label">Date of birth</label>
+              <input
+                type="date"
+                className="form-control"
+                value={form.date_of_birth}
+                onChange={(event) => setForm((prev) => ({ ...prev, date_of_birth: event.target.value }))}
+              />
+            </div>
+            <div className="col-md-6">
+              <label className="form-label">Photo URL</label>
+              <input
+                className="form-control"
+                value={form.photo_url}
+                onChange={(event) => setForm((prev) => ({ ...prev, photo_url: event.target.value }))}
+              />
+            </div>
+            <div className="col-12">
+              <label className="form-label">Bio</label>
+              <textarea
+                className="form-control"
+                rows="3"
+                value={form.bio}
+                onChange={(event) => setForm((prev) => ({ ...prev, bio: event.target.value }))}
+              />
+            </div>
+            <div className="col-md-4">
+              <label className="form-label">Instagram</label>
+              <input
+                className="form-control"
+                value={form.instagram}
+                onChange={(event) => setForm((prev) => ({ ...prev, instagram: event.target.value }))}
+              />
+            </div>
+            <div className="col-md-4">
+              <label className="form-label">IMDb</label>
+              <input
+                className="form-control"
+                value={form.imdb}
+                onChange={(event) => setForm((prev) => ({ ...prev, imdb: event.target.value }))}
+              />
+            </div>
+            <div className="col-md-4">
+              <label className="form-label">Facebook</label>
+              <input
+                className="form-control"
+                value={form.facebook}
+                onChange={(event) => setForm((prev) => ({ ...prev, facebook: event.target.value }))}
+              />
+            </div>
           </div>
-          <div className="col-md-6">
-            <label className="form-label">Date of birth</label>
-            <input
-              type="date"
-              className="form-control"
-              value={form.date_of_birth}
-              onChange={(event) => setForm((prev) => ({ ...prev, date_of_birth: event.target.value }))}
-            />
-          </div>
-          <div className="col-md-6">
-            <label className="form-label">Photo URL</label>
-            <input
-              className="form-control"
-              value={form.photo_url}
-              onChange={(event) => setForm((prev) => ({ ...prev, photo_url: event.target.value }))}
-            />
-          </div>
-          <div className="col-12">
-            <label className="form-label">Bio</label>
-            <textarea
-              className="form-control"
-              rows="3"
-              value={form.bio}
-              onChange={(event) => setForm((prev) => ({ ...prev, bio: event.target.value }))}
-            />
-          </div>
-          <div className="col-md-4">
-            <label className="form-label">Instagram</label>
-            <input
-              className="form-control"
-              value={form.instagram}
-              onChange={(event) => setForm((prev) => ({ ...prev, instagram: event.target.value }))}
-            />
-          </div>
-          <div className="col-md-4">
-            <label className="form-label">IMDb</label>
-            <input
-              className="form-control"
-              value={form.imdb}
-              onChange={(event) => setForm((prev) => ({ ...prev, imdb: event.target.value }))}
-            />
-          </div>
-          <div className="col-md-4">
-            <label className="form-label">Facebook</label>
-            <input
-              className="form-control"
-              value={form.facebook}
-              onChange={(event) => setForm((prev) => ({ ...prev, facebook: event.target.value }))}
-            />
-          </div>
-        </div>
-        </fieldset>
+          </fieldset>
+        )}
       </AdminModal>
 
       <ConfirmModal

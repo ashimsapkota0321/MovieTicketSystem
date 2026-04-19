@@ -1249,6 +1249,7 @@ def _confirm_group_session_locked(session: GroupBookingSession) -> dict[str, Any
             payload=ticket_payload,
             **ticket_security,
         )
+        services.persist_ticket_render_artifacts(ticket)
 
         try:
             services.send_ticket_confirmation_email(ticket)

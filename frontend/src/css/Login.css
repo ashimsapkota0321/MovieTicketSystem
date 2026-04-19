@@ -152,6 +152,16 @@
   box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.1);
 }
 
+.mt-input-wrapper.mt-input-invalid input {
+  border-color: #c23b63;
+  box-shadow: 0 0 0 3px rgba(194, 59, 99, 0.12);
+}
+
+.mt-input-wrapper.mt-input-invalid:focus-within input {
+  border-color: #c23b63;
+  box-shadow: 0 0 0 3px rgba(194, 59, 99, 0.2);
+}
+
 .mt-input-wrapper input:disabled {
   cursor: not-allowed;
 }
@@ -171,6 +181,45 @@
 .mt-input-wrapper input:focus ~ .mt-icon,
 .mt-input-wrapper:focus-within .mt-icon {
   color: var(--primary);
+}
+
+.mt-input-wrapper.mt-input-invalid .mt-icon {
+  color: #c23b63;
+}
+
+.mt-field-error {
+  margin-top: 6px;
+  color: #dc5d84;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.mt-password-guidance {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mt-password-requirement {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: rgba(214, 224, 246, 0.72);
+  font-size: 13px;
+}
+
+.mt-password-requirement .material-symbols-outlined {
+  font-size: 18px;
+  color: rgba(214, 224, 246, 0.45);
+}
+
+.mt-password-requirement.is-valid {
+  color: #34d399;
+}
+
+.mt-password-requirement.is-valid .material-symbols-outlined {
+  color: #34d399;
 }
 
 .mt-eye-btn {

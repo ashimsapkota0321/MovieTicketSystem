@@ -18,11 +18,16 @@ import { API_BASE } from "../lib/apiBase";
 const SUPER_ADMIN_EMAIL = "asimsapkota2005@gmail.com";
 const SUPER_ADMIN_PHONE = "+977-9826633701";
 const VENDOR_REGISTRATION_EMAIL = "asimsapkota2005@gmail.com";
+const REQUIRED_FIELD_MESSAGES = {
+  emailOrPhone: "Please enter your email, phone number, or username",
+  password: "Please enter your password",
+};
 
 const LoginPage = () => {
   const navigate = useNavigate();
   const [emailOrPhone, setEmailOrPhone] = useState("");
   const [password, setPassword] = useState("");
+  const [fieldErrors, setFieldErrors] = useState({});
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(false);
@@ -170,19 +175,26 @@ const LoginPage = () => {
     e.preventDefault();
     setError("");
     setSuccess("");
+    const nextFieldErrors = {};
 
-    if (!emailOrPhone || !password) {
-      setError("All fields are required");
-      return;
+    if (!String(emailOrPhone || "").trim()) {
+      nextFieldErrors.emailOrPhone = REQUIRED_FIELD_MESSAGES.emailOrPhone;
     }
 
-    if (emailOrPhone.includes("@")) {
+    if (!String(password || "").trim()) {
+      nextFieldErrors.password = REQUIRED_FIELD_MESSAGES.password;
+    }
+
+    if (!nextFieldErrors.emailOrPhone && emailOrPhone.includes("@")) {
       if (!validateEmail(emailOrPhone)) {
-        setError("Invalid email format");
-        return;
+        nextFieldErrors.emailOrPhone = "Invalid email format";
       }
-    } else if (!validatePhone(emailOrPhone) && !validateUsername(emailOrPhone)) {
-      setError("Enter a valid email, phone number, or username");
+    } else if (!nextFieldErrors.emailOrPhone && !validatePhone(emailOrPhone) && !validateUsername(emailOrPhone)) {
+      nextFieldErrors.emailOrPhone = "Enter a valid email, phone number, or username";
+    }
+
+    setFieldErrors(nextFieldErrors);
+    if (Object.keys(nextFieldErrors).length > 0) {
       return;
     }
 
@@ -250,11 +262,11 @@ const LoginPage = () => {
             Please enter your details to login
           </p>
 
-          <form className="mt-form" onSubmit={handleSubmit}>
+          <form className="mt-form" onSubmit={handleSubmit} noValidate>
             {/* Email / Phone */}
             <label className="mt-label">
               Email or Phone Number
-              <div className="mt-input-wrapper">
+              <div className={`mt-input-wrapper ${fieldErrors.emailOrPhone ? "mt-input-invalid" : ""}`}>
                 <span className="mt-icon material-symbols-outlined">
                   person
                 </span>
@@ -262,17 +274,27 @@ const LoginPage = () => {
                   type="text"
                   placeholder="Enter your Email or Phone Number"
                   value={emailOrPhone}
-                  onChange={(e) => setEmailOrPhone(e.target.value)}
+                  onChange={(e) => {
+                    setEmailOrPhone(e.target.value);
+                    setError("");
+                    setFieldErrors((prev) => {
+                      if (!prev.emailOrPhone) return prev;
+                      const next = { ...prev };
+                      delete next.emailOrPhone;
+                      return next;
+                    });
+                  }}
                   disabled={loading}
                   required
                 />
               </div>
+              {fieldErrors.emailOrPhone ? <div className="mt-field-error">{fieldErrors.emailOrPhone}</div> : null}
             </label>
 
             {/* Password */}
             <label className="mt-label">
               Password
-              <div className="mt-input-wrapper">
+              <div className={`mt-input-wrapper ${fieldErrors.password ? "mt-input-invalid" : ""}`}>
                 <span className="mt-icon material-symbols-outlined">
                   lock
                 </span>
@@ -280,7 +302,16 @@ const LoginPage = () => {
                   type={showPassword ? "text" : "password"}
                   placeholder="Enter your password"
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    setError("");
+                    setFieldErrors((prev) => {
+                      if (!prev.password) return prev;
+                      const next = { ...prev };
+                      delete next.password;
+                      return next;
+                    });
+                  }}
                   disabled={loading}
                   required
                   minLength={8}
@@ -296,6 +327,7 @@ const LoginPage = () => {
                   </span>
                 </button>
               </div>
+              {fieldErrors.password ? <div className="mt-field-error">{fieldErrors.password}</div> : null}
             </label>
 
             {/* Remember + Forgot */}

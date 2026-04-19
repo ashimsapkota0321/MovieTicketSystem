@@ -124,6 +124,12 @@ export default function TicketDownload() {
   }, []);
 
   const handleDownload = useCallback(async () => {
+    if (downloadUrl) {
+      const filename = `ticket-${ticket.reference || "mero"}.png`;
+      triggerDownload(downloadUrl, filename);
+      return;
+    }
+
     const filename = `ticket-${ticket.reference || "mero"}.png`;
     const node = ticketRef.current;
     if (node) {
@@ -134,13 +140,9 @@ export default function TicketDownload() {
           useCORS: true,
         });
         triggerDownload(canvas.toDataURL("image/png"), filename);
-        return;
       } catch {
-        // fallback to backend download
+        // no-op fallback
       }
-    }
-    if (downloadUrl) {
-      triggerDownload(downloadUrl, filename);
     }
   }, [downloadUrl, ticket.reference, triggerDownload]);
 

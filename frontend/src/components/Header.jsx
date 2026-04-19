@@ -4,6 +4,7 @@ import { Bell, ChevronDown, Search, User } from "lucide-react";
 import { useAppContext } from "../context/Appcontext";
 import api from "../api/api";
 import AdultWarningModal from "./AdultWarningModal";
+import UserNotificationSidebar from "./UserNotificationSidebar";
 import { buildMetaLine, getMovieRatingLabel, isAdultRating, toText } from "../lib/showUtils";
 import { fetchNotifications } from "../lib/catalogApi";
 import {
@@ -70,6 +71,7 @@ export default function Header() {
   const navigate = useNavigate();
   const location = useLocation();
   const path = location.pathname;
+  const headerRef = useRef(null);
   const bookingRef = useRef(null);
   const searchRef = useRef(null);
   const ctx = safeUseAppContext();
@@ -99,6 +101,7 @@ export default function Header() {
   const [storedUser, setStoredUser] = useState(() => getStoredUser());
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [notificationSidebarOpen, setNotificationSidebarOpen] = useState(false);
   const [adultConfirmOpen, setAdultConfirmOpen] = useState(false);
   const [pendingBookingState, setPendingBookingState] = useState(null);
   const isCinemaSelected = Boolean(selectedCinemaId);
@@ -184,6 +187,31 @@ export default function Header() {
     window.addEventListener("scroll", onScroll, { passive: true });
     onScroll();
     return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const root = document.documentElement;
+    const updateHeaderOffset = () => {
+      const height = Math.ceil(headerRef.current?.getBoundingClientRect().height || 0);
+      root.style.setProperty("--wf2-header-offset", `${height}px`);
+    };
+
+    updateHeaderOffset();
+    window.addEventListener("resize", updateHeaderOffset);
+
+    let resizeObserver = null;
+    if (typeof window.ResizeObserver !== "undefined" && headerRef.current) {
+      resizeObserver = new window.ResizeObserver(updateHeaderOffset);
+      resizeObserver.observe(headerRef.current);
+    }
+
+    return () => {
+      window.removeEventListener("resize", updateHeaderOffset);
+      if (resizeObserver) resizeObserver.disconnect();
+      root.style.removeProperty("--wf2-header-offset");
+    };
   }, []);
 
   useEffect(() => {
@@ -636,7 +664,7 @@ export default function Header() {
   };
 
   return (
-    <header className={`wf2-header ${scrolled ? "wf2-headerScrolled" : ""}`}>
+    <header ref={headerRef} className={`wf2-header ${scrolled ? "wf2-headerScrolled" : ""}`}>
       <div className="wf2-container wf2-headerTop">
         <div className="wf2-headerLeft">
           <img
@@ -701,32 +729,28 @@ export default function Header() {
             </div>
 
             {shouldShowSearchPanel ? (
-              <>
-                <div className="wf2-searchBackdrop" onClick={() => setSearchOpen(false)} />
-                <div className="wf2-searchPanel" role="dialog" aria-label="Search results">
-                  <div className="wf2-searchPanelRow">
-                    <div className="wf2-searchPanelLabel">Search Titles Related To</div>
-                    <div className="wf2-searchGenreChips">
-                      {searchGenres.map((genre) => (
-                        <button
-                          key={genre}
-                          type="button"
-                          className={`wf2-searchGenreChip ${searchGenre === genre ? "wf2-searchGenreChipActive" : ""}`}
-                          onClick={() => setSearchGenre(genre)}
-                        >
-                          {genre}
-                        </button>
-                      ))}
-                    </div>
+              <div className="wf2-searchPanel" role="dialog" aria-label="Search results">
+                <div className="wf2-searchPanelRow">
+                  <div className="wf2-searchPanelLabel">Search Titles Related To</div>
+                  <div className="wf2-searchGenreChips">
+                    {searchGenres.map((genre) => (
+                      <button
+                        key={genre}
+                        type="button"
+                        className={`wf2-searchGenreChip ${searchGenre === genre ? "wf2-searchGenreChipActive" : ""}`}
+                        onClick={() => setSearchGenre(genre)}
+                      >
+                        {genre}
+                      </button>
+                    ))}
                   </div>
-
+                </div>
                 <div className="wf2-searchResultHead">
                   <div className="wf2-searchResultTitle">Search Result</div>
                   <div className="wf2-searchResultCount">
                     {searchResults.length} {searchResults.length === 1 ? "Movie" : "Movies"}
                   </div>
                 </div>
-
                 {searchResults.length ? (
                   <div className="wf2-searchResultGrid">
                     {searchResults.map((movie) => {
@@ -772,8 +796,7 @@ export default function Header() {
                 ) : (
                   <div className="wf2-searchEmpty">No matching movies found for "{searchTerm.trim()}".</div>
                 )}
-                </div>
-              </>
+              </div>
             ) : null}
           </div>
           <nav className="wf2-navPillsTop">
@@ -839,7 +862,7 @@ export default function Header() {
             <button
               className="wf2-noticeBell"
               type="button"
-              onClick={() => navigate("/notifications")}
+              onClick={() => setNotificationSidebarOpen(true)}
               aria-label="Notifications"
               title="Notifications"
             >
@@ -992,6 +1015,11 @@ export default function Header() {
           setPendingBookingState(null);
           navigateToBookingState(next);
         }}
+      />
+
+      <UserNotificationSidebar
+        isOpen={notificationSidebarOpen}
+        onClose={() => setNotificationSidebarOpen(false)}
       />
 
       {locationOpen ? (
