@@ -59,17 +59,16 @@ services:
         - requirements.txt
         - render.yaml
 
-  - type: static_site
+  - type: web
     name: mero-ticket-frontend
+    env: node
+    plan: free
+    autoDeploy: true
     buildCommand: cd frontend ; npm install ; npm run build
-    staticPublishPath: frontend/dist
+    startCommand: npx serve -s frontend/dist -l 10000
     envVars:
       - key: VITE_API_BASE_URL
         value: https://mero-ticket-backend.onrender.com
-    routes:
-      - type: rewrite
-        source: /*
-        destination: /index.html
     buildFilter:
       paths:
         - frontend/**
