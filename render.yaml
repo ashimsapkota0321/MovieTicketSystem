@@ -59,7 +59,7 @@ services:
         - requirements.txt
         - render.yaml
 
-  - type: static
+  - type: static_site
     name: mero-ticket-frontend
     buildCommand: cd frontend ; npm install ; npm run build
     staticPublishPath: frontend/dist
