@@ -1,5 +1,6 @@
 ﻿Django==5.2.4
 djangorestframework
+django-cors-headers==4.4.0
 dj-database-url==2.2.0
 psycopg2-binary==2.9.9
 PyMySQL==1.1.1
