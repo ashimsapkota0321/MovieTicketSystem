@@ -62,10 +62,61 @@ const mapDateOptions = (items) =>
   }));
 
 const mapTimeOptions = (items) =>
-  (items || []).map((time) => ({
-    value: String(time),
-    label: formatTimeLabel(time),
-  }));
+  (items || [])
+    .map((time) => normalizeTimeValue(time))
+    .filter(Boolean)
+    .map((time) => ({
+      value: time,
+      label: formatTimeLabel(time),
+    }));
+
+const normalizeTimeValue = (value) => {
+  const text = String(
+    typeof value === "object" && value !== null
+      ? value.start_time || value.start || value.startTime || value.show_start_time || value.showStartTime || value.time || ""
+      : value || ""
+  ).trim();
+  if (!text) return "";
+
+  if (text.includes("T")) {
+    const timePart = text.split("T")[1] || "";
+    const cleaned = timePart.split(/[Z+\-]/)[0].trim();
+    if (cleaned) {
+      return normalizeClockTime(cleaned);
+    }
+  }
+
+  return normalizeClockTime(text);
+};
+
+const buildTimeOptionsFromShows = (items, cinemaId, movieId, dateValue) => {
+  const selectedCinema = String(cinemaId || "").trim();
+  const selectedMovie = String(movieId || "").trim();
+  const selectedDate = String(dateValue || "").trim();
+  const seen = new Set();
+
+  return (Array.isArray(items) ? items : [])
+    .filter((show) => {
+      if (!show) return false;
+      const showCinema = String(show.vendor_id || show.vendorId || show.vendor || "").trim();
+      const showMovie = String(show.movie_id || show.movieId || show.movie || "").trim();
+      const showDate = String(show.show_date || show.date || show.showDate || "").trim();
+      if (selectedCinema && showCinema && showCinema !== selectedCinema) return false;
+      if (selectedMovie && showMovie && showMovie !== selectedMovie) return false;
+      if (selectedDate && showDate && showDate !== selectedDate) return false;
+      return true;
+    })
+    .map((show) => normalizeTimeValue(show))
+    .filter((time) => {
+      if (!time || seen.has(time)) return false;
+      seen.add(time);
+      return true;
+    })
+    .map((time) => ({
+      value: time,
+      label: formatTimeLabel(time),
+    }));
+};
 
 export default function Header() {
   const navigate = useNavigate();
@@ -437,17 +488,26 @@ export default function Header() {
           },
         });
         if (!active) return;
-        setTimeOptions(mapTimeOptions(response?.data?.times));
+        const serverTimes = mapTimeOptions(response?.data?.times);
+        const nextTimes = serverTimes.length
+          ? serverTimes
+          : buildTimeOptionsFromShows(showtimes, selectedCinemaId, selectedMovieId, selectedDate);
+        setTimeOptions(nextTimes);
+        if (!nextTimes.length) {
+          setSelectedTime("");
+        }
       } catch (error) {
         if (!active) return;
-        setTimeOptions([]);
+        setTimeOptions(
+          buildTimeOptionsFromShows(showtimes, selectedCinemaId, selectedMovieId, selectedDate)
+        );
       }
     };
     loadTimes();
     return () => {
       active = false;
     };
-  }, [selectedCinemaId, selectedMovieId, selectedDate, appSelectedLocation]);
+  }, [selectedCinemaId, selectedMovieId, selectedDate, appSelectedLocation, showtimes]);
 
   useEffect(() => {
     const handleUserUpdate = () => {

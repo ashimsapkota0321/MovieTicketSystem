@@ -88,3 +88,9 @@ auto_feature_push.ps1
 backend/app/migrations/__pycache__/
 !backend/app/management/
 backend/app/management/__pycache__/
+
+# Local-only image asset
+frontend/src/images/logo2.png
+
+# Local test notes
+testing/

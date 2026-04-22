@@ -41,7 +41,15 @@ export default function SeatSelection() {
   const selectedDateState =
     selection.date || selection.showDate || selection.show_date || selectedShowState?.date || selectedShowState?.show_date || "";
   const selectedTimeState =
-    selection.time || selection.start || selection.start_time || selectedShowState?.start || selectedShowState?.start_time || "";
+    selection.time ||
+    selection.start ||
+    selection.start_time ||
+    selection.show_start_time ||
+    selectedShowState?.time ||
+    selectedShowState?.start ||
+    selectedShowState?.start_time ||
+    selectedShowState?.show_start_time ||
+    "";
   const movie = useMemo(() => shows?.[0] ?? fallbackShows[0], [shows]);
   const displayMovie = useMemo(
     () => selectedMovieState || movie,
@@ -139,10 +147,6 @@ export default function SeatSelection() {
     gharjwai;
   const seatSubtitle = "2h 10m | Action, Comedy | May 2018 | UA 13+";
   const totalSeats = selectedSeats.length;
-  const totalPrice = Number(pricingPreview?.total || pricingPreview?.subtotal || 0);
-  const dynamicBaseSubtotal = Number(pricingPreview?.breakdown?.base_subtotal || 0);
-  const dynamicRuleAdjustment = Number(pricingPreview?.breakdown?.rule_adjustment || 0);
-  const dynamicOccupancyAdjustment = Number(pricingPreview?.breakdown?.occupancy_adjustment || 0);
   const dynamicByCategory =
     pricingPreview && typeof pricingPreview.dynamic_by_category === "object"
       ? pricingPreview.dynamic_by_category
@@ -218,6 +222,50 @@ export default function SeatSelection() {
     () => [...selectedSeats].sort((a, b) => seatSortKey(a) - seatSortKey(b)),
     [selectedSeats]
   );
+  const fallbackSeatUnitPrice = resolveFallbackSeatUnitPrice(
+    selection,
+    selectedShowState,
+    selectedShow,
+    displayMovie
+  );
+  const dynamicSubtotal = toFiniteAmount(
+    pricingPreview?.breakdown?.subtotal,
+    pricingPreview?.subtotal
+  );
+  const dynamicFinalTotal = toFiniteAmount(
+    pricingPreview?.breakdown?.final_total,
+    pricingPreview?.total,
+    dynamicSubtotal
+  );
+  const discountAmount = toFiniteAmount(
+    pricingPreview?.breakdown?.discount_amount,
+    pricingPreview?.discount_amount
+  );
+  const seatLevelTotal = Array.isArray(pricingPreview?.seats)
+    ? pricingPreview.seats.reduce(
+        (sum, seat) => sum + toFiniteAmount(seat?.final_price, seat?.base_price),
+        0
+      )
+    : 0;
+  const fallbackSelectedSeatsTotal = selectedSeatLabels.length * fallbackSeatUnitPrice;
+  const shouldUseSeatFallbackTotal =
+    selectedSeatLabels.length > 0 &&
+    dynamicFinalTotal <= 0 &&
+    dynamicSubtotal <= 0 &&
+    seatLevelTotal <= 0 &&
+    discountAmount <= 0;
+  const totalPrice = shouldUseSeatFallbackTotal
+    ? fallbackSelectedSeatsTotal
+    : dynamicFinalTotal;
+  const dynamicBaseSubtotal = shouldUseSeatFallbackTotal
+    ? fallbackSelectedSeatsTotal
+    : toFiniteAmount(pricingPreview?.breakdown?.base_subtotal);
+  const dynamicRuleAdjustment = shouldUseSeatFallbackTotal
+    ? 0
+    : toFiniteAmount(pricingPreview?.breakdown?.rule_adjustment);
+  const dynamicOccupancyAdjustment = shouldUseSeatFallbackTotal
+    ? 0
+    : toFiniteAmount(pricingPreview?.breakdown?.occupancy_adjustment);
   const activeSeatLockDeadline = useMemo(() => {
     if (!selectedSeatLabels.length) return null;
     const lockDeadlines = selectedSeatLabels
@@ -1767,6 +1815,41 @@ function buildBookingPayload(
   if (showId) payload.show_id = showId;
   if (hall) payload.hall = hall;
   return payload;
+}
+
+function toFiniteAmount(...values) {
+  for (const value of values) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) {
+      return numeric;
+    }
+  }
+  return 0;
+}
+
+function resolveFallbackSeatUnitPrice(selection, selectedShowState, selectedShow, displayMovie) {
+  const candidates = [
+    selectedShowState?.price,
+    selectedShowState?.ticketPrice,
+    selectedShowState?.base_price,
+    selectedShow?.price,
+    selectedShow?.ticketPrice,
+    selectedShow?.base_price,
+    selection?.price,
+    selection?.ticketPrice,
+    selection?.basePrice,
+    displayMovie?.price,
+    displayMovie?.ticketPrice,
+    300,
+  ];
+
+  for (const candidate of candidates) {
+    const numeric = Number(candidate);
+    if (Number.isFinite(numeric) && numeric > 0) {
+      return numeric;
+    }
+  }
+  return 300;
 }
 
 function formatNpr(value) {

@@ -6,6 +6,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import urllib.parse
 import urllib.request
 import uuid
@@ -16,6 +17,7 @@ from typing import Any, Optional
 
 from django.conf import settings
 from django.core.cache import cache
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.http import HttpResponse
 from django.shortcuts import redirect
@@ -31,6 +33,8 @@ from ..models import (
     BookingDropoffEvent,
     BookingSeat,
     Payment,
+    Seat,
+    SeatAvailability,
     Show,
     Ticket,
     UserWallet,
@@ -43,6 +47,8 @@ ESEWA_PAYMENT_METHOD_PREFIX = "ESEWA:"
 USER_WALLET_ESEWA_PENDING_CACHE_PREFIX = "mt:esewa:user-wallet:pending:"
 USER_WALLET_PAYMENT_METHOD = "USER_WALLET"
 ESEWA_SIGNED_FIELD_NAMES = "total_amount,transaction_uuid,product_code"
+
+logger = logging.getLogger(__name__)
 
 
 def _esewa_product_code() -> str:
@@ -989,6 +995,14 @@ def _confirm_booking_after_payment(
 
         _cancel_pending_booking_for_transaction(transaction_uuid, keep_booking=True)
 
+        # A transaction can be marked FAILED by an earlier non-complete callback and then later
+        # become COMPLETE. Normalize it back to PENDING so the model transition to SUCCESS is valid.
+        if locked_payment:
+            locked_payment.refresh_from_db()
+            if str(locked_payment.payment_status or "").strip().upper() == Payment.Status.FAILED:
+                Payment.objects.filter(pk=locked_payment.pk).update(payment_status=Payment.Status.PENDING)
+                locked_payment.refresh_from_db()
+
         booking_payload, booking_error, booking_status = services._create_booking_from_order(order, request=request)
         if booking_error:
             return None, booking_error, booking_status
@@ -1079,11 +1093,18 @@ def _confirm_booking_after_payment(
                 )
 
             if payment_record and not manual_review_required:
-                services._record_vendor_booking_earning(
-                    booking_instance,
-                    gross_amount=payment_amount,
-                    payment=payment_record,
-                )
+                try:
+                    services._record_vendor_booking_earning(
+                        booking_instance,
+                        gross_amount=payment_amount,
+                        payment=payment_record,
+                    )
+                except Exception:
+                    # Booking/ticket confirmation should not fail if wallet rollup side-effects fail.
+                    logger.exception(
+                        "Failed to record vendor earning for booking %s during eSewa confirmation",
+                        booking_instance.id,
+                    )
 
             if manual_review_required:
                 if str(booking_instance.booking_status or "").strip().upper() != Booking.Status.PENDING:
@@ -1390,119 +1411,168 @@ def user_wallet_booking_pay(request: Any):
     ticket: Optional[Ticket] = None
     amount_paid = Decimal("0")
 
-    with transaction.atomic():
-        booking_payload, booking_error, booking_status = services._create_booking_from_order(
-            normalized_order,
-            request=request,
-        )
-        if booking_error:
-            transaction.set_rollback(True)
-            return Response(booking_error, status=booking_status)
-
-        booking_id = _coerce_int((booking_payload or {}).get("booking_id"))
-        if not booking_id:
-            transaction.set_rollback(True)
-            return Response(
-                {"message": "Unable to complete wallet payment for this order."},
-                status=status.HTTP_409_CONFLICT,
+    try:
+        with transaction.atomic():
+            booking_payload, booking_error, booking_status = services._create_booking_from_order(
+                normalized_order,
+                request=request,
             )
+            if booking_error:
+                transaction.set_rollback(True)
+                return Response(booking_error, status=booking_status)
 
-        booking_instance = (
-            Booking.objects.select_for_update()
-            .select_related("showtime__screen", "showtime__movie")
-            .filter(pk=booking_id)
-            .first()
-        )
-        if not booking_instance or int(booking_instance.user_id) != int(customer.id):
-            transaction.set_rollback(True)
-            return Response(
-                {"message": "Booking user mismatch. Please retry checkout."},
-                status=status.HTTP_403_FORBIDDEN,
+            booking_id = _coerce_int((booking_payload or {}).get("booking_id"))
+            if not booking_id:
+                transaction.set_rollback(True)
+                return Response(
+                    {"message": "Unable to complete wallet payment for this order."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            booking_instance = (
+                Booking.objects.select_for_update()
+                .select_related("showtime__screen", "showtime__movie")
+                .filter(pk=booking_id)
+                .first()
             )
+            if not booking_instance or int(booking_instance.user_id) != int(customer.id):
+                transaction.set_rollback(True)
+                return Response(
+                    {"message": "Booking user mismatch. Please retry checkout."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
 
-        linked_show = _linked_show_for_booking(booking_instance)
+            linked_show = _linked_show_for_booking(booking_instance)
 
-        booking_total = _coerce_decimal(booking_instance.total_amount) or Decimal("0")
-        amount_paid = requested_total_amount if requested_total_amount is not None else booking_total
-        if amount_paid < booking_total:
-            amount_paid = booking_total
-        amount_paid = _quantize_money(amount_paid)
+            booking_total = _coerce_decimal(booking_instance.total_amount) or Decimal("0")
+            amount_paid = requested_total_amount if requested_total_amount is not None else booking_total
+            if amount_paid < booking_total:
+                amount_paid = booking_total
+            amount_paid = _quantize_money(amount_paid)
 
-        wallet = UserWallet.objects.select_for_update().filter(user=customer).first()
-        if wallet is None:
-            wallet = UserWallet.objects.create(user=customer)
-        wallet = services.recalculate_user_wallet_snapshot(wallet)
+            wallet = UserWallet.objects.select_for_update().filter(user=customer).first()
+            if wallet is None:
+                wallet = UserWallet.objects.create(user=customer)
 
-        wallet_balance = _quantize_money(wallet.balance)
-        if amount_paid > wallet_balance:
-            shortfall = _quantize_money(amount_paid - wallet_balance)
-            transaction.set_rollback(True)
-            return Response(
-                {
-                    "message": "Insufficient wallet balance. Please top up or use eSewa.",
-                    "required_amount": float(amount_paid),
-                    "available_balance": float(wallet_balance),
-                    "shortfall": float(shortfall),
+            # Preserve legacy direct balances when no immutable wallet transactions exist yet.
+            has_completed_wallet_tx = wallet.transactions.filter(
+                status=UserWalletTransaction.STATUS_COMPLETED,
+            ).exists()
+            if has_completed_wallet_tx:
+                wallet = services.recalculate_user_wallet_snapshot(wallet)
+            else:
+                wallet.balance = _quantize_money(wallet.balance or Decimal("0"))
+                wallet.total_credited = _quantize_money(wallet.total_credited or Decimal("0"))
+                wallet.total_debited = _quantize_money(wallet.total_debited or Decimal("0"))
+
+            wallet_balance = _quantize_money(wallet.balance)
+            if amount_paid > wallet_balance:
+                shortfall = _quantize_money(amount_paid - wallet_balance)
+                transaction.set_rollback(True)
+                return Response(
+                    {
+                        "message": "Insufficient wallet balance. Please top up or use eSewa.",
+                        "required_amount": float(amount_paid),
+                        "available_balance": float(wallet_balance),
+                        "shortfall": float(shortfall),
+                    },
+                    status=status.HTTP_402_PAYMENT_REQUIRED,
+                )
+
+            if not has_completed_wallet_tx and wallet_balance > Decimal("0"):
+                UserWalletTransaction.objects.create(
+                    wallet=wallet,
+                    user=customer,
+                    transaction_type=UserWalletTransaction.TYPE_ADJUSTMENT,
+                    status=UserWalletTransaction.STATUS_COMPLETED,
+                    amount=wallet_balance,
+                    reference_id=f"WALLET-OPENING-{customer.id}",
+                    provider="SYSTEM",
+                    processed_at=timezone.now(),
+                    metadata={
+                        "context": "LEGACY_OPENING_BALANCE_SYNC",
+                    },
+                )
+
+            wallet_reference = (
+                f"WALLET-BOOKING-{booking_instance.id}-{_build_transaction_uuid()}"
+            )
+            wallet_transaction = UserWalletTransaction.objects.create(
+                wallet=wallet,
+                user=customer,
+                booking=booking_instance,
+                transaction_type=UserWalletTransaction.TYPE_DEBIT,
+                status=UserWalletTransaction.STATUS_COMPLETED,
+                amount=amount_paid,
+                reference_id=wallet_reference,
+                provider="WALLET",
+                processed_at=timezone.now(),
+                metadata={
+                    "context": "BOOKING_CHECKOUT",
+                    "order_total": float(_quantize_money(amount_paid)),
                 },
-                status=status.HTTP_402_PAYMENT_REQUIRED,
             )
+            wallet = services.recalculate_user_wallet_snapshot(wallet)
 
-        wallet_reference = (
-            f"WALLET-BOOKING-{booking_instance.id}-{_build_transaction_uuid()}"
-        )
-        wallet_transaction = UserWalletTransaction.objects.create(
-            wallet=wallet,
-            user=customer,
-            booking=booking_instance,
-            transaction_type=UserWalletTransaction.TYPE_DEBIT,
-            status=UserWalletTransaction.STATUS_COMPLETED,
-            amount=amount_paid,
-            reference_id=wallet_reference,
-            provider="WALLET",
-            processed_at=timezone.now(),
-            metadata={
-                "context": "BOOKING_CHECKOUT",
-                "order_total": float(_quantize_money(amount_paid)),
-            },
-        )
-        wallet = services.recalculate_user_wallet_snapshot(wallet)
+            payment = Payment.objects.create(
+                booking=booking_instance,
+                payment_method=USER_WALLET_PAYMENT_METHOD,
+                payment_status=Payment.Status.SUCCESS,
+                amount=amount_paid,
+            )
+            try:
+                services._record_vendor_booking_earning(
+                    booking_instance,
+                    gross_amount=amount_paid,
+                    payment=payment,
+                )
+            except Exception:
+                # Keep wallet payment success even if wallet/commission rollup fails.
+                logger.exception(
+                    "Failed to record vendor earning for wallet booking %s",
+                    booking_instance.id,
+                )
 
-        payment = Payment.objects.create(
-            booking=booking_instance,
-            payment_method=USER_WALLET_PAYMENT_METHOD,
-            payment_status=Payment.Status.SUCCESS,
-            amount=amount_paid,
-        )
-        services._record_vendor_booking_earning(
-            booking_instance,
-            gross_amount=amount_paid,
-            payment=payment,
-        )
+            if booking_instance.booking_status != Booking.Status.CONFIRMED:
+                booking_instance.booking_status = Booking.Status.CONFIRMED
+                booking_instance.save(update_fields=["booking_status"])
 
-        reference = uuid.uuid4().hex[:10].upper()
-        ticket_payload = services._build_ticket_payload(normalized_order, reference, request)
-        ticket_payload["order"] = normalized_order
-        if booking_payload:
-            ticket_payload["booking"] = booking_payload
-        ticket_payload["payment"] = {
-            "provider": USER_WALLET_PAYMENT_METHOD,
-            "transaction_uuid": wallet_reference,
-            "total_amount": _format_amount(amount_paid),
-            "status": "COMPLETE",
-            "verified_at": timezone.now().isoformat(),
-        }
+            reference = uuid.uuid4().hex[:10].upper()
+            ticket_payload = services._build_ticket_payload(normalized_order, reference, request)
+            ticket_payload["order"] = normalized_order
+            if booking_payload:
+                ticket_payload["booking"] = booking_payload
+            ticket_payload["payment"] = {
+                "provider": USER_WALLET_PAYMENT_METHOD,
+                "transaction_uuid": wallet_reference,
+                "total_amount": _format_amount(amount_paid),
+                "status": "COMPLETE",
+                "verified_at": timezone.now().isoformat(),
+            }
 
-        ticket_security_fields = services.build_ticket_security_fields(
-            booking=booking_instance,
-            show=linked_show,
-            payment_status=Ticket.PaymentStatus.PAID,
+            ticket_security_fields = services.build_ticket_security_fields(
+                booking=booking_instance,
+                show=linked_show,
+                payment_status=Ticket.PaymentStatus.PAID,
+            )
+            ticket = Ticket.objects.create(
+                reference=reference,
+                payload=ticket_payload,
+                **ticket_security_fields,
+            )
+            services.persist_ticket_render_artifacts(ticket)
+    except ValidationError as exc:
+        logger.warning("Wallet booking payment validation failed: %s", exc)
+        return Response(
+            {"message": "Unable to complete wallet payment due to invalid data."},
+            status=status.HTTP_409_CONFLICT,
         )
-        ticket = Ticket.objects.create(
-            reference=reference,
-            payload=ticket_payload,
-            **ticket_security_fields,
+    except Exception:
+        logger.exception("Unexpected error during wallet booking payment for customer %s", customer.id)
+        return Response(
+            {"message": "Unable to complete wallet payment right now. Please retry."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
-        services.persist_ticket_render_artifacts(ticket)
 
     try:
         services.send_ticket_confirmation_email(ticket)

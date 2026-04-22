@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Search, UserPlus, Users } from "lucide-react";
+import Pagination from "../components/Pagination";
 import {
   createVendorStaffAccount,
   fetchVendorStaffAccounts,
@@ -15,6 +16,8 @@ const INITIAL_FORM = {
   is_active: true,
 };
 
+const STAFF_PER_PAGE = 10;
+
 export default function VendorStaffAccounts() {
   const [staffAccounts, setStaffAccounts] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -22,6 +25,7 @@ export default function VendorStaffAccounts() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [query, setQuery] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
   const [form, setForm] = useState(INITIAL_FORM);
 
   async function loadStaff() {
@@ -57,6 +61,23 @@ export default function VendorStaffAccounts() {
       return haystack.includes(term);
     });
   }, [query, staffAccounts]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredStaff.length / STAFF_PER_PAGE));
+
+  const paginatedStaff = useMemo(() => {
+    const start = (currentPage - 1) * STAFF_PER_PAGE;
+    return filteredStaff.slice(start, start + STAFF_PER_PAGE);
+  }, [filteredStaff, currentPage]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [query]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
 
   const activeCount = useMemo(
     () => staffAccounts.filter((item) => Boolean(item.is_active)).length,
@@ -271,7 +292,7 @@ export default function VendorStaffAccounts() {
                   <td colSpan={7}>Loading staff accounts...</td>
                 </tr>
               ) : filteredStaff.length ? (
-                filteredStaff.map((item) => (
+                paginatedStaff.map((item) => (
                   <tr key={item.id}>
                     <td>{item.id}</td>
                     <td>
@@ -309,6 +330,15 @@ export default function VendorStaffAccounts() {
             </tbody>
           </table>
         </div>
+        {filteredStaff.length > 0 ? (
+          <div className="d-flex flex-wrap justify-content-between align-items-center mt-3 gap-2">
+            <small className="text-muted">
+              Showing {(currentPage - 1) * STAFF_PER_PAGE + 1}-
+              {Math.min(currentPage * STAFF_PER_PAGE, filteredStaff.length)} of {filteredStaff.length}
+            </small>
+            <Pagination page={currentPage} totalPages={totalPages} onPageChange={setCurrentPage} />
+          </div>
+        ) : null}
       </section>
     </div>
   );

@@ -149,12 +149,28 @@ def _booking_amount_for_refund(booking: Booking, latest_payment: Optional[Paymen
     return amount
 
 
+def _has_successful_payment(latest_payment: Optional[Payment]) -> bool:
+    if not latest_payment:
+        return False
+    status_value = str(getattr(latest_payment, "payment_status", "") or "").strip().upper()
+    return status_value in {
+        "SUCCESS",
+        "PAID",
+        "CONFIRMED",
+        "COMPLETED",
+        PAYMENT_STATUS_REFUNDED,
+        PAYMENT_STATUS_PARTIALLY_REFUNDED,
+    }
+
+
 def _compute_booking_cancellation_quote(
     booking: Booking,
     latest_payment: Optional[Payment] = None,
 ) -> dict[str, Any]:
     policy = _resolve_cancellation_policy_for_booking(booking)
     showtime = booking.showtime
+    payment_status = getattr(latest_payment, "payment_status", None)
+    has_successful_payment = _has_successful_payment(latest_payment)
     amount = _booking_amount_for_refund(booking, latest_payment=latest_payment)
 
     if not showtime or not showtime.start_time:
@@ -167,6 +183,8 @@ def _compute_booking_cancellation_quote(
             "refund_amount": 0.0,
             "cancellation_charge_amount": float(amount),
             "amount_basis": float(amount),
+            "payment_status": payment_status,
+            "has_successful_payment": has_successful_payment,
             "policy": policy,
         }
 
@@ -185,6 +203,8 @@ def _compute_booking_cancellation_quote(
             "refund_amount": 0.0,
             "cancellation_charge_amount": float(amount),
             "amount_basis": float(amount),
+            "payment_status": payment_status,
+            "has_successful_payment": has_successful_payment,
             "policy": policy,
         }
 
@@ -198,6 +218,8 @@ def _compute_booking_cancellation_quote(
             "refund_amount": 0.0,
             "cancellation_charge_amount": float(amount),
             "amount_basis": float(amount),
+            "payment_status": payment_status,
+            "has_successful_payment": has_successful_payment,
             "policy": policy,
         }
 
@@ -211,6 +233,23 @@ def _compute_booking_cancellation_quote(
             "refund_amount": 0.0,
             "cancellation_charge_amount": float(amount),
             "amount_basis": float(amount),
+            "payment_status": payment_status,
+            "has_successful_payment": has_successful_payment,
+            "policy": policy,
+        }
+
+    if not has_successful_payment:
+        return {
+            "is_cancellable": True,
+            "is_refund_available": False,
+            "reason": None,
+            "hours_until_show": round(hours_until_show, 2),
+            "refund_percent": 0.0,
+            "refund_amount": 0.0,
+            "cancellation_charge_amount": 0.0,
+            "amount_basis": 0.0,
+            "payment_status": payment_status,
+            "has_successful_payment": False,
             "policy": policy,
         }
 
@@ -235,6 +274,8 @@ def _compute_booking_cancellation_quote(
         "refund_amount": float(refund_amount),
         "cancellation_charge_amount": float(charge_amount),
         "amount_basis": float(amount),
+        "payment_status": payment_status,
+        "has_successful_payment": True,
         "policy": policy,
     }
 
@@ -582,7 +623,7 @@ def vendor_cancel_booking(request: Any, booking: Booking) -> tuple[dict[str, Any
         request,
         booking,
         actor_label="vendor",
-        require_policy_eligibility=True,
+        require_policy_eligibility=False,
         require_payment_for_refund=False,
         close_pending_cancel_requests=True,
     )

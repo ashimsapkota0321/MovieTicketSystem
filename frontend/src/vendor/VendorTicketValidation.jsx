@@ -1,7 +1,6 @@
 import { createElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
-  BarChart3,
   Camera,
   CameraOff,
   CheckCircle2,
@@ -15,6 +14,7 @@ import {
   Ticket,
 } from "lucide-react";
 import jsQR from "jsqr";
+import Pagination from "../components/Pagination";
 import {
   exportVendorTicketValidationMonitorCsv,
   fetchVendorTicketValidationMonitor,
@@ -58,6 +58,7 @@ const SCAN_STATUS_TO_CODE = {
   INVALID: "SCAN_INVALID_TOKEN",
   FRAUD: "SCAN_WRONG_VENDOR",
 };
+const SCAN_LOGS_PER_PAGE = 10;
 const SCAN_UX_OUTCOMES = {
   SCAN_VALID: {
     tone: "success",
@@ -357,50 +358,36 @@ function buildMonitorAlertDisplay(alert) {
   const title = String(
     alert?.title || MONITOR_ALERT_TITLES[normalizedType] || "Validation Alert"
   ).trim();
-  const message = String(alert?.message || "").trim();
-  const windowMinutes = toWholeNumber(alert?.windowMinutes, 0);
-  const previousWindowCount = toWholeNumber(alert?.previousWindowCount, 0);
-  const threshold = toWholeNumber(alert?.threshold, 0);
-  const repeatedTicketCount = toWholeNumber(alert?.repeatedTicketCount, 0);
-  const totalInWindow = toWholeNumber(alert?.totalInWindow, count);
+  const fallbackMessage = isTriggered
+    ? `${count} issue${count === 1 ? "" : "s"} found in current filters.`
+    : "No issue detected in current filters.";
 
-  let details = "";
-  if (normalizedType === "invalid_token_spike") {
-    const detailParts = [];
-    if (windowMinutes > 0) detailParts.push(`Window: last ${windowMinutes} min`);
-    detailParts.push(`Current: ${count}`);
-    detailParts.push(`Previous: ${previousWindowCount}`);
-    if (threshold > 0) detailParts.push(`Threshold: ${threshold}`);
-    details = detailParts.join(" | ");
-  } else if (normalizedType === "repeated_duplicate_attempts") {
-    const detailParts = [];
-    if (windowMinutes > 0) detailParts.push(`Window: last ${windowMinutes} min`);
-    detailParts.push(`Duplicates: ${totalInWindow}`);
-    if (repeatedTicketCount > 0) detailParts.push(`Tickets flagged: ${repeatedTicketCount}`);
-    if (threshold > 0) detailParts.push(`Threshold: ${threshold}`);
-    details = detailParts.join(" | ");
-  }
+  const simpleMessageByType = {
+    duplicate_ticket: isTriggered
+      ? "Duplicate scans found in current filters."
+      : "No duplicate scans in current filters.",
+    fraud_suspected: isTriggered
+      ? "Fraud/invalid scans found in current filters."
+      : "No fraud or invalid scans in current filters.",
+    invalid_token_spike: isTriggered
+      ? "Invalid token activity is above normal."
+      : "Invalid token activity is normal.",
+    repeated_duplicate_attempts: isTriggered
+      ? "Repeated duplicate attempts detected."
+      : "No repeated duplicate attempts detected.",
+  };
 
-  const offenders = Array.isArray(alert?.offenders)
-    ? alert.offenders
-        .map((item) => ({
-          reference: String(item?.reference || "").trim() || "UNKNOWN",
-          ticketId: item?.ticketId ? String(item.ticketId).trim() : "",
-          duplicateAttempts: toWholeNumber(item?.duplicateAttempts, 0),
-        }))
-        .filter((item) => item.reference || item.ticketId || item.duplicateAttempts > 0)
-        .slice(0, 4)
-    : [];
+  const message = String(
+    simpleMessageByType[normalizedType] || alert?.message || fallbackMessage
+  ).trim();
 
   return {
     type: normalizedType,
     title,
     message,
     count,
-    details,
     severity,
     isTriggered,
-    offenders,
   };
 }
 
@@ -507,6 +494,7 @@ export default function VendorTicketValidation() {
   const [isLoading, setIsLoading] = useState(false);
   const [isExportingCsv, setIsExportingCsv] = useState(false);
   const [search, setSearch] = useState("");
+  const [logsPage, setLogsPage] = useState(1);
 
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
@@ -759,6 +747,23 @@ export default function VendorTicketValidation() {
       return value.includes(keyword);
     });
   }, [monitorData.scans, search]);
+
+  const scanLogTotalPages = Math.max(1, Math.ceil(filteredScans.length / SCAN_LOGS_PER_PAGE));
+
+  const paginatedScans = useMemo(() => {
+    const start = (logsPage - 1) * SCAN_LOGS_PER_PAGE;
+    return filteredScans.slice(start, start + SCAN_LOGS_PER_PAGE);
+  }, [filteredScans, logsPage]);
+
+  useEffect(() => {
+    setLogsPage(1);
+  }, [search, monitorFilters.date, monitorFilters.staff, monitorFilters.status, monitorFilters.movie, monitorFilters.show, monitorFilters.reference]);
+
+  useEffect(() => {
+    if (logsPage > scanLogTotalPages) {
+      setLogsPage(scanLogTotalPages);
+    }
+  }, [logsPage, scanLogTotalPages]);
 
   const submitScan = useCallback(
     async (payload, { rawValue = "" } = {}) => {
@@ -1257,31 +1262,6 @@ export default function VendorTicketValidation() {
     return sourceAlerts.map((alert) => buildMonitorAlertDisplay(alert));
   }, [monitorData.alerts]);
   const feedbackClass = `vendor-scanFeedback vendor-scanFeedback-${scanFeedback.tone} vendor-scanFeedback-state-${scanFeedback.state || scanFeedback.tone}`;
-  const hourlyTrend = useMemo(() => {
-    const fallback = Array.from({ length: 24 }, (_, index) => ({
-      hour: `${String(index).padStart(2, "0")}:00`,
-      total: 0,
-      failed: 0,
-    }));
-
-    const source = Array.isArray(realtime.hourlyScanTrend) && realtime.hourlyScanTrend.length
-      ? realtime.hourlyScanTrend
-      : fallback;
-
-    const normalized = source.map((item, index) => ({
-      hour: String(item?.hour || `${String(index).padStart(2, "0")}:00`),
-      total: Math.max(0, Number(item?.total || 0)),
-      failed: Math.max(0, Number(item?.failed || 0)),
-    }));
-
-    const maxTotal = Math.max(1, ...normalized.map((item) => item.total));
-    return normalized.map((item) => ({
-      ...item,
-      totalHeight: item.total > 0 ? Math.max(8, Math.round((item.total / maxTotal) * 100)) : 0,
-      failedHeight: item.failed > 0 ? Math.max(5, Math.round((item.failed / maxTotal) * 100)) : 0,
-    }));
-  }, [realtime.hourlyScanTrend]);
-
   return (
     <div className="vendor-dashboard">
       <div className="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-3">
@@ -1472,7 +1452,7 @@ export default function VendorTicketValidation() {
         <div className="vendor-card-header">
           <div>
             <h3>Validation Summary</h3>
-            <p>Real-time ticket validation and alert overview.</p>
+            <p>Simple real-time validation numbers and risk alerts.</p>
           </div>
         </div>
 
@@ -1481,39 +1461,6 @@ export default function VendorTicketValidation() {
           <SummaryCard icon={ShieldAlert} label="Failed Scans" value={realtime.todayFailedScans || 0} isDanger />
           <SummaryCard icon={CheckCircle2} label="Today Valid" value={realtime.todayValidScans || 0} />
           <SummaryCard icon={AlertTriangle} label="Today Duplicates" value={realtime.todayDuplicateScans || 0} isWarning />
-        </div>
-
-        <div className="vendor-hourlyTrendPanel">
-          <div className="vendor-hourlyTrendHeader">
-            <div className="vendor-hourlyTrendTitle">
-              <BarChart3 size={16} />
-              <span>Hourly Scan Trend (Today)</span>
-            </div>
-            <small className="text-muted">
-              Failed rate: {formatPercent(realtime.todayFailedRate)} | Updated: {formatTimeLabel(realtime.updatedAt)}
-            </small>
-          </div>
-          <div className="vendor-hourlyTrendBars" role="img" aria-label="Hourly scan trend for today">
-            {hourlyTrend.map((item) => (
-              <div
-                key={item.hour}
-                className="vendor-hourlyTrendItem"
-                title={`${item.hour} | Total: ${item.total} | Failed: ${item.failed}`}
-              >
-                <div className="vendor-hourlyTrendStack">
-                  <div
-                    className="vendor-hourlyTrendBarTotal"
-                    style={{ height: `${item.totalHeight}%` }}
-                  />
-                  <div
-                    className="vendor-hourlyTrendBarFailed"
-                    style={{ height: `${Math.min(item.totalHeight, item.failedHeight)}%` }}
-                  />
-                </div>
-                <small>{item.hour.slice(0, 2)}</small>
-              </div>
-            ))}
-          </div>
         </div>
 
         <div className="row g-2">
@@ -1537,18 +1484,6 @@ export default function VendorTicketValidation() {
                 <span className="vendor-monitorAlertCount">{alert.count}</span>
               </div>
               {alert.message ? <p className="vendor-monitorAlertMessage">{alert.message}</p> : null}
-              {alert.details ? <small className="vendor-monitorAlertMeta">{alert.details}</small> : null}
-              {alert.offenders.length ? (
-                <div className="vendor-monitorAlertOffenders">
-                  {alert.offenders.map((offender, offenderIndex) => (
-                    <span key={`${alert.type}-offender-${offenderIndex}`} className="vendor-monitorAlertOffenderChip">
-                      {offender.reference}
-                      {offender.ticketId ? ` (#${offender.ticketId})` : ""}
-                      {offender.duplicateAttempts > 0 ? ` x${offender.duplicateAttempts}` : ""}
-                    </span>
-                  ))}
-                </div>
-              ) : null}
             </article>
           ))}
         </div>
@@ -1693,7 +1628,7 @@ export default function VendorTicketValidation() {
               </tr>
             </thead>
             <tbody>
-              {filteredScans.map((scan) => (
+              {paginatedScans.map((scan) => (
                 <tr key={scan.id}>
                   <td>{scan.reference}</td>
                   <td>{scan.ticketId || "-"}</td>
@@ -1719,6 +1654,15 @@ export default function VendorTicketValidation() {
             </tbody>
           </table>
         </div>
+        {filteredScans.length > 0 ? (
+          <div className="d-flex flex-wrap justify-content-between align-items-center mt-3 gap-2">
+            <small className="text-muted">
+              Showing {(logsPage - 1) * SCAN_LOGS_PER_PAGE + 1}-
+              {Math.min(logsPage * SCAN_LOGS_PER_PAGE, filteredScans.length)} of {filteredScans.length}
+            </small>
+            <Pagination page={logsPage} totalPages={scanLogTotalPages} onPageChange={setLogsPage} />
+          </div>
+        ) : null}
       </section>
     </div>
   );

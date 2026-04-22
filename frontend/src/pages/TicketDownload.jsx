@@ -190,172 +190,116 @@ export default function TicketDownload() {
   );
 
   return (
-    <div className="wf2-orderPage wf2-ticketPage">
-      <div className="wf2-orderHeader">
-        <button
-          className="wf2-orderBack"
-          type="button"
-          onClick={() => navigate(-1)}
-          aria-label="Go back"
-        >
-          <ChevronLeft size={18} />
-        </button>
-        <div className="wf2-orderHeaderText">
-          <h2 className="wf2-orderTitle">Ticket Download</h2>
-          <p className="wf2-orderSubtitle">
-            Your ticket is ready. Download it or save the QR for entry.
+    <div className="wf2-thankyouPage wf2-ticketPage">
+      <div className="wf2-thankyouContainer wf2-ticketDownloadContainer">
+        <div className="wf2-thankyouHero">
+          <div className="wf2-thankyouCheck">
+            <Download size={22} />
+          </div>
+          <h1 className="wf2-thankyouTitle">Ticket Download</h1>
+          <p className="wf2-thankyouSubtext">
+            Your confirmed ticket is ready. Download the rendered ticket below.
           </p>
         </div>
-      </div>
 
-      <div className={`wf2-lifecycleAlert ${reviewState.className}`}>
-        {reviewState.label}
-      </div>
+        <div className={`wf2-lifecycleAlert ${reviewState.className}`}>
+          {reviewState.label}
+        </div>
 
-      <div className="wf2-orderLayout">
-        <div className="wf2-orderMain">
-          <section className="wf2-orderPanel wf2-ticketPreviewPanel">
-            <div className="wf2-orderPanelHeader">
-              <h3 className="wf2-orderPanelTitle">Ticket Preview</h3>
-              {ticket?.reference ? (
-                <span className="wf2-orderChip">Ref {ticket.reference}</span>
-              ) : null}
-            </div>
-
-            <div className="wf2-ticketFrame" ref={ticketRef} style={ticketStyle}>
-              <article className="wf2-etkShell">
-                <section className="wf2-etkMain">
-                  <header className="wf2-etkHead">
-                    <div className="wf2-etkLogo">Mero Ticket</div>
-                    <div className="wf2-etkVendorBlock">
-                      <div className="wf2-etkVendorName">{cinemaBrand.name}</div>
-                      <div className="wf2-etkVendorLocation">{cinemaLocation}</div>
-                    </div>
-                    <span className="wf2-etkType">E-TICKET</span>
-                  </header>
-
-                  <h3 className="wf2-etkMovieTitle">{movieTitle}</h3>
-
-                  <div className="wf2-etkHighlightRow">
-                    <div className="wf2-etkHighlightCell">
-                      <span>Show Date</span>
-                      <strong>{formattedDate}</strong>
-                    </div>
-                    <div className="wf2-etkHighlightCell">
-                      <span>Show Time</span>
-                      <strong>{formattedTime}</strong>
-                    </div>
-                    <div className="wf2-etkHighlightCell">
-                      <span>Seats</span>
-                      <strong>{seatLabel}</strong>
-                    </div>
+        <div className="wf2-ticketDownloadStage">
+          <div className="wf2-ticketFrame wf2-ticketDownloadFrame" ref={ticketRef} style={ticketStyle}>
+            <article className="wf2-etkShell">
+              <section className="wf2-etkMain">
+                <header className="wf2-etkHead">
+                  <div className="wf2-etkLogo">Mero Ticket</div>
+                  <div className="wf2-etkVendorBlock">
+                    <div className="wf2-etkVendorName">{cinemaBrand.name}</div>
+                    <div className="wf2-etkVendorLocation">{cinemaLocation}</div>
                   </div>
+                  <span className="wf2-etkType">E-TICKET</span>
+                </header>
 
-                  <div className="wf2-etkGrid">
-                    <div className="wf2-etkGridItem">
-                      <span>Movie</span>
-                      <strong>{movieTitle}</strong>
-                    </div>
-                    <div className="wf2-etkGridItem">
-                      <span>Cinema</span>
-                      <strong>{cinemaBrand.name}</strong>
-                    </div>
-                    <div className="wf2-etkGridItem">
-                      <span>Screen</span>
-                      <strong>{theater}</strong>
-                    </div>
-                    <div className="wf2-etkGridItem">
-                      <span>Ticket ID</span>
-                      <strong>{ticketId}</strong>
-                    </div>
+                <h3 className="wf2-etkMovieTitle">{movieTitle}</h3>
+
+                <div className="wf2-etkHighlightRow">
+                  <div className="wf2-etkHighlightCell">
+                    <span>Show Date</span>
+                    <strong>{formattedDate}</strong>
                   </div>
-
-                  <footer className="wf2-etkFooter">
-                    <div className="wf2-etkTotals">
-                      <div>
-                        <span>Ticket Price</span>
-                        <strong>{ticketTotalLabel}</strong>
-                      </div>
-                      <div>
-                        <span>Food Price</span>
-                        <strong>{foodTotalLabel}</strong>
-                      </div>
-                      <div className="wf2-etkTotalFinal">
-                        <span>Total Amount</span>
-                        <strong>{grandTotalLabel}</strong>
-                      </div>
-                    </div>
-                    <div className="wf2-etkContact">
-                      <div>Support: {SUPPORT_CONTACT}</div>
-                      <div>Website: {WEBSITE_URL}</div>
-                    </div>
-                  </footer>
-                </section>
-
-                <aside className="wf2-etkSide">
-                  <div className="wf2-etkQrWrap">
-                    {ticket?.qr_code ? (
-                      <img className="wf2-ticketQr" src={ticket.qr_code} alt="Entry QR code" />
-                    ) : (
-                      <div className="wf2-ticketQrPlaceholder">QR code not available.</div>
-                    )}
+                  <div className="wf2-etkHighlightCell">
+                    <span>Show Time</span>
+                    <strong>{formattedTime}</strong>
                   </div>
-                  <div className="wf2-etkTicketMeta">
+                  <div className="wf2-etkHighlightCell">
+                    <span>Seats</span>
+                    <strong>{seatLabel}</strong>
+                  </div>
+                </div>
+
+                <div className="wf2-etkGrid">
+                  <div className="wf2-etkGridItem">
+                    <span>Movie</span>
+                    <strong>{movieTitle}</strong>
+                  </div>
+                  <div className="wf2-etkGridItem">
+                    <span>Cinema</span>
+                    <strong>{cinemaBrand.name}</strong>
+                  </div>
+                  <div className="wf2-etkGridItem">
+                    <span>Screen</span>
+                    <strong>{theater}</strong>
+                  </div>
+                  <div className="wf2-etkGridItem">
                     <span>Ticket ID</span>
                     <strong>{ticketId}</strong>
                   </div>
-                  <p className="wf2-etkSideHint">Scan this QR at cinema entry.</p>
-                </aside>
-              </article>
-            </div>
-          </section>
+                </div>
 
-          <section className="wf2-orderPanel">
-            <div className="wf2-orderPanelHeader">
-              <h3 className="wf2-orderPanelTitle">Ticket Details</h3>
-            </div>
-            <div className="wf2-ticketDetailGrid">
-              <div>
-                <div className="wf2-ticketDetailLabel">Movie</div>
-                <div className="wf2-ticketDetailValue">{movieTitle}</div>
-              </div>
-              <div>
-                <div className="wf2-ticketDetailLabel">Language</div>
-                <div className="wf2-ticketDetailValue">{order.movie.language}</div>
-              </div>
-              <div>
-                <div className="wf2-ticketDetailLabel">Runtime</div>
-                <div className="wf2-ticketDetailValue">{order.movie.runtime}</div>
-              </div>
-              <div>
-                <div className="wf2-ticketDetailLabel">Seats</div>
-                <div className="wf2-ticketDetailValue">{seatLabel}</div>
-              </div>
-              <div>
-                <div className="wf2-ticketDetailLabel">Venue</div>
-                <div className="wf2-ticketDetailValue">{cinemaBrand.name}</div>
-              </div>
-              <div>
-                <div className="wf2-ticketDetailLabel">Location</div>
-                <div className="wf2-ticketDetailValue">{cinemaLocation}</div>
-              </div>
-            </div>
-          </section>
-        </div>
+                <footer className="wf2-etkFooter">
+                  <div className="wf2-etkTotals">
+                    <div>
+                      <span>Ticket Price</span>
+                      <strong>{ticketTotalLabel}</strong>
+                    </div>
+                    <div>
+                      <span>Food Price</span>
+                      <strong>{foodTotalLabel}</strong>
+                    </div>
+                    <div className="wf2-etkTotalFinal">
+                      <span>Total Amount</span>
+                      <strong>{grandTotalLabel}</strong>
+                    </div>
+                  </div>
+                  <div className="wf2-etkContact">
+                    <div>Support: {SUPPORT_CONTACT}</div>
+                    <div>Website: {WEBSITE_URL}</div>
+                  </div>
+                </footer>
+              </section>
 
-        <aside className="wf2-orderSidebar">
-          <section className="wf2-orderPanel">
-            <div className="wf2-orderPanelHeader">
-              <h3 className="wf2-orderPanelTitle">Download Ticket</h3>
-            </div>
-            <div className="wf2-ticketDownloadNote">
-              Save the ticket image to your device. Present it at entry if needed.
-            </div>
+              <aside className="wf2-etkSide">
+                <div className="wf2-etkQrWrap">
+                  {ticket?.qr_code ? (
+                    <img className="wf2-ticketQr" src={ticket.qr_code} alt="Entry QR code" />
+                  ) : (
+                    <div className="wf2-ticketQrPlaceholder">QR code not available.</div>
+                  )}
+                </div>
+                <div className="wf2-etkTicketMeta">
+                  <span>Ticket ID</span>
+                  <strong>{ticketId}</strong>
+                </div>
+                <p className="wf2-etkSideHint">Scan this QR at cinema entry.</p>
+              </aside>
+            </article>
+          </div>
+
+          <div className="wf2-ticketDownloadActions">
             <button
               className="wf2-orderDownloadBtn"
               type="button"
               onClick={handleDownload}
-              disabled={!downloadUrl || reviewState.blockDownload}
+              disabled={reviewState.blockDownload}
             >
               <Download size={18} /> Download Ticket
             </button>
@@ -366,8 +310,8 @@ export default function TicketDownload() {
             >
               Back to Thank You
             </button>
-          </section>
-        </aside>
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -272,6 +272,30 @@ export default function OrderConfirm() {
         user_id: order?.bookingContext?.user_id || state?.user?.id || null,
         priceLockToken: priceLockToken,
         price_lock_token: priceLockToken,
+        date:
+          order?.bookingContext?.date ||
+          order?.bookingContext?.showDate ||
+          order?.movie?.showDate ||
+          state?.movie?.showDate ||
+          null,
+        time:
+          order?.bookingContext?.time ||
+          order?.bookingContext?.showTime ||
+          order?.movie?.showTime ||
+          state?.movie?.showTime ||
+          null,
+        showDate:
+          order?.bookingContext?.showDate ||
+          order?.bookingContext?.date ||
+          order?.movie?.showDate ||
+          state?.movie?.showDate ||
+          null,
+        showTime:
+          order?.bookingContext?.showTime ||
+          order?.bookingContext?.time ||
+          order?.movie?.showTime ||
+          state?.movie?.showTime ||
+          null,
       },
     };
   };

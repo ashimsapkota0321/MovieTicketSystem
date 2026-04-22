@@ -1,28 +1,10 @@
 @import url("https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&display=swap");
 
 .admin-shell {
+  --admin-sidebar-width: 260px;
   --admin-bg: #ffffff;
   --admin-panel: #ffffff;
 
-.admin-table .btn-outline-light.btn-sm {
-  width: 38px;
-  height: 38px;
-  border-radius: 12px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  line-height: 0;
-}
-
-.admin-table .btn-outline-light.btn-sm svg {
-  width: 18px;
-  height: 18px;
-  stroke: currentColor;
-  stroke-width: 2.2;
-  opacity: 1;
-  display: block;
-}
   --admin-panel-2: #f8fafc;
   --admin-border: #e6eaef;
   --admin-muted: #7b8794;
@@ -49,7 +31,7 @@
   min-height: 100vh;
   height: 100vh;
   display: grid;
-  grid-template-columns: 260px 1fr;
+  grid-template-columns: var(--admin-sidebar-width) 1fr;
   background: var(--admin-bg);
   overflow: hidden;
   transition: grid-template-columns 0.3s ease;
@@ -176,6 +158,9 @@
 .admin-sidebar {
   position: sticky;
   top: 0;
+  width: var(--admin-sidebar-width);
+  min-width: var(--admin-sidebar-width);
+  max-width: var(--admin-sidebar-width);
   height: 100vh;
   background: #ffffff;
   border-right: 1px solid var(--admin-border);
@@ -852,6 +837,26 @@
   vertical-align: middle;
 }
 
+.admin-table .btn-outline-light.btn-sm {
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  line-height: 0;
+}
+
+.admin-table .btn-outline-light.btn-sm svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  opacity: 1;
+  display: block;
+}
+
 .admin-movies-table {
   table-layout: fixed;
   min-width: 1600px;
@@ -1470,6 +1475,9 @@
   }
 
   .admin-sidebar {
+    width: var(--admin-sidebar-width);
+    min-width: var(--admin-sidebar-width);
+    max-width: var(--admin-sidebar-width);
     position: fixed;
     left: -100%;
     transition: left 0.3s ease;

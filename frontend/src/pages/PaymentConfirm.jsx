@@ -51,7 +51,9 @@ export default function ThankYou() {
   const formatPrice = (value) => `Npr ${Number(value || 0).toLocaleString()}`;
 
   const handleGoDownload = (autoDownload = false) => {
-    navigate("/ticket-download", {
+    const reference = String(ticket?.reference || "").trim();
+    const query = reference ? `?ref=${encodeURIComponent(reference)}` : "";
+    navigate(`/ticket-download${query}`, {
       state: {
         order,
         ticket,

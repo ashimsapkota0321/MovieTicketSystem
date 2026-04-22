@@ -173,6 +173,28 @@ export default function MovieDetails() {
   };
 
   const currentUser = getStoredUser();
+  const resolveReviewSubmitErrorMessage = (error) => {
+    const payload = error?.payload;
+    const duplicateMessage =
+      payload?.non_field_errors?.[0] ||
+      payload?.detail ||
+      payload?.message ||
+      payload?.error;
+
+    if (typeof duplicateMessage === "string" && duplicateMessage.trim()) {
+      if (/already\s+submitted\s+a\s+review|one\s+review\s+per\s+movie/i.test(duplicateMessage)) {
+        return "You have already reviewed this movie. Only one review per movie is allowed.";
+      }
+      return duplicateMessage;
+    }
+
+    if (Number(error?.status) === 400) {
+      return "You have already reviewed this movie. Only one review per movie is allowed.";
+    }
+
+    return error?.message || "Unable to submit review.";
+  };
+
   const handleReviewSubmit = async () => {
     setReviewStatus("");
     if (!currentUser?.id) {
@@ -209,7 +231,7 @@ export default function MovieDetails() {
       setReviewRating(0);
       setEditingReviewId(null);
     } catch (error) {
-      setReviewStatus(error.message || "Unable to submit review.");
+      setReviewStatus(resolveReviewSubmitErrorMessage(error));
     }
   };
 

@@ -1330,6 +1330,14 @@ export async function refundAdminBooking(bookingId, payload = {}) {
   return data?.booking || data;
 }
 
+export async function markAdminBookingComplete(bookingId) {
+  const data = await request(`/api/admin/bookings/${bookingId}/status/complete/`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  return data?.booking || data;
+}
+
 export async function deleteAdminBooking(bookingId) {
   const data = await request(`/api/admin/bookings/${bookingId}/`, { method: "DELETE" });
   return data;
@@ -1505,6 +1513,14 @@ export async function refundVendorBooking(bookingId, payload = {}) {
   const data = await request(`/api/vendor/bookings/${bookingId}/refund/`, {
     method: "POST",
     body: JSON.stringify(payload),
+  });
+  return data?.booking || data;
+}
+
+export async function markVendorBookingComplete(bookingId) {
+  const data = await request(`/api/vendor/bookings/${bookingId}/status/complete/`, {
+    method: "POST",
+    body: JSON.stringify({}),
   });
   return data?.booking || data;
 }

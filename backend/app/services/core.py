@@ -14,7 +14,7 @@ import uuid
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
-from datetime import date as date_cls, datetime, time as time_cls, timedelta
+from datetime import date as date_cls, datetime, time as time_cls, timedelta, timezone as datetime_timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable, Optional
 
@@ -248,7 +248,7 @@ DEFAULT_REFUND_PERCENT_1_TO_2H = Decimal("70.00")
 DEFAULT_REFUND_PERCENT_LESS_THAN_1H = Decimal("0.00")
 SHOW_BUFFER_MINUTES_DEFAULT = 20
 SHOW_MIN_LEAD_HOURS_DEFAULT = 2
-SHOW_OPERATING_OPEN_TIME_DEFAULT = time_cls(hour=9, minute=0)
+SHOW_OPERATING_OPEN_TIME_DEFAULT = time_cls(hour=6, minute=0)
 SHOW_OPERATING_CLOSE_TIME_DEFAULT = time_cls(hour=0, minute=0)
 SHOW_BUFFER_MINUTES_MAX = 180
 TICKET_QR_SIGNING_SALT = "app.ticket.qr.v1"
@@ -11220,8 +11220,11 @@ def _seat_sort_key(label: str) -> tuple[str, int, str]:
 
 
 def _combine_show_datetime(show_date: date_cls, show_time: time_cls) -> datetime:
-    """Combine date/time and normalize into UTC for backend processing."""
-    return combine_date_time_utc(show_date, show_time)
+    """Combine date/time in the active timezone and normalize into UTC."""
+    local_dt = datetime.combine(show_date, show_time)
+    if timezone.is_naive(local_dt):
+        local_dt = timezone.make_aware(local_dt, timezone.get_current_timezone())
+    return local_dt.astimezone(datetime_timezone.utc)
 
 
 def _resolve_booking_context(payload: dict[str, Any]) -> dict[str, Any]:
@@ -11285,6 +11288,8 @@ def _resolve_booking_context(payload: dict[str, Any]) -> dict[str, Any]:
             "start",
             "start_time",
             "startTime",
+            "show_time",
+            "showTime",
             default=coalesce(payload, "time", "start", "start_time", "startTime"),
         )
     )
@@ -15900,7 +15905,8 @@ def _resolve_show_for_booking_ticket(booking: Optional[Booking]) -> Optional[Sho
 def compute_ticket_validation_window(
     show_datetime: Optional[datetime],
 ) -> tuple[Optional[datetime], Optional[datetime]]:
-    """Compute allowed scan window: 1 hour before show until 15 minutes after."""
+    """Compute allowed scan window: 2 hours before show until 15 minutes after."""
+    TICKET_VALIDATION_OPEN_WINDOW_HOURS = 2
     show_dt = _ensure_timezone_aware(show_datetime)
     if not show_dt:
         return None, None
@@ -16071,8 +16077,10 @@ def verify_ticket_qr_token(
         return False, "invalid"
 
     token_ticket_id = str(decoded.get("ticket_id") or decoded.get("tid") or "").strip()
+    token_reference = str(decoded.get("reference") or "").strip()
     if token_ticket_id != str(ticket.ticket_id):
-        return False, "invalid"
+        if not token_reference or token_reference.lower() != str(ticket.reference or "").strip().lower():
+            return False, "invalid"
 
     exp_value = decoded.get("exp")
     try:

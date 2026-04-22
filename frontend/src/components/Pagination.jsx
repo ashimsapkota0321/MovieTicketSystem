@@ -2,9 +2,10 @@ import React from "react";
 import "./Pagination.css";
 
 export default function Pagination({ page, totalPages, onPageChange }) {
-  if (totalPages <= 1) return null;
+  const safeTotalPages = Math.max(1, Number(totalPages) || 1);
+  const safePage = Math.min(Math.max(1, Number(page) || 1), safeTotalPages);
   const pages = [];
-  for (let i = 1; i <= totalPages; i++) {
+  for (let i = 1; i <= safeTotalPages; i++) {
     pages.push(i);
   }
 
@@ -12,15 +13,15 @@ export default function Pagination({ page, totalPages, onPageChange }) {
     <div className="custom-pagination">
       <button
         className="page-btn"
-        onClick={() => onPageChange(page - 1)}
-        disabled={page === 1}
+        onClick={() => onPageChange(safePage - 1)}
+        disabled={safePage === 1}
       >
         Prev
       </button>
       {pages.map((p) => (
         <button
           key={p}
-          className={`page-btn${p === page ? " active" : ""}`}
+          className={`page-btn${p === safePage ? " active" : ""}`}
           onClick={() => onPageChange(p)}
         >
           {p}
@@ -28,8 +29,8 @@ export default function Pagination({ page, totalPages, onPageChange }) {
       ))}
       <button
         className="page-btn"
-        onClick={() => onPageChange(page + 1)}
-        disabled={page === totalPages}
+        onClick={() => onPageChange(safePage + 1)}
+        disabled={safePage === safeTotalPages}
       >
         Next
       </button>

@@ -19,6 +19,7 @@ from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.http import QueryDict
+from django.db import connection
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from PIL import Image
@@ -71,7 +72,7 @@ from .models import (
 )
 from .permissions import issue_access_token
 from .permissions import resolve_customer
-from .serializers import BannerCreateUpdateSerializer, MovieAdminWriteSerializer
+from .serializers import BannerCreateUpdateSerializer, MovieAdminWriteSerializer, UserRegistrationSerializer
 from .views.auth import logout, refresh
 from .views.ticket_validation import (
     SCAN_CODE_ALREADY_USED,
@@ -1240,6 +1241,68 @@ class RegistrationOtpEmailTests(TestCase):
         self.assertEqual(status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("Email verification required", str(payload.get("message") or ""))
 
+
+class UserRegistrationSerializerTests(TestCase):
+    """Unit tests for user registration serializer email validation."""
+
+    def test_validate_email_accepts_unique_email_and_normalizes(self) -> None:
+        data = {
+            "phone_number": "9810000001",
+            "email": "User@Domain.Com",
+            "dob": date(1995, 1, 1),
+            "first_name": "Test",
+            "last_name": "User",
+            "password": "StrongPass123!",
+            "confirm_password": "StrongPass123!",
+        }
+
+        serializer = UserRegistrationSerializer(data=data)
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertEqual(serializer.validated_data["email"], "user@domain.com")
+
+    def test_validate_email_rejects_duplicate_email(self) -> None:
+        User.objects.create(
+            phone_number="9810000002",
+            email="existing@example.com",
+            username="existing-user",
+            dob=date(1995, 1, 1),
+            first_name="Existing",
+            last_name="User",
+            password="StrongPass123!",
+        )
+
+        data = {
+            "phone_number": "9810000003",
+            "email": "existing@example.com",
+            "dob": date(1995, 1, 1),
+            "first_name": "New",
+            "last_name": "User",
+            "password": "StrongPass123!",
+            "confirm_password": "StrongPass123!",
+        }
+
+        serializer = UserRegistrationSerializer(data=data)
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("email", serializer.errors)
+
+    def test_validate_email_rejects_invalid_email_format(self) -> None:
+        data = {
+            "phone_number": "9810000004",
+            "email": "abc@",
+            "dob": date(1995, 1, 1),
+            "first_name": "Bad",
+            "last_name": "Email",
+            "password": "StrongPass123!",
+            "confirm_password": "StrongPass123!",
+        }
+
+        serializer = UserRegistrationSerializer(data=data)
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("email", serializer.errors)
+
 class NotificationBackgroundQueueTests(TestCase):
     """Ensure notification emails are dispatched through the background queue."""
 
@@ -1721,6 +1784,101 @@ class CustomerRefundRequestNotificationTests(TestCase):
             "APPROVED",
         )
 
+    def test_vendor_can_approve_pending_cancel_request_after_policy_window_changes(self) -> None:
+        request = type(
+            "Request",
+            (),
+            {
+                "user": self.customer,
+                "data": {"reason": "Need to cancel due to emergency"},
+            },
+        )()
+        request_payload, request_status = services.customer_cancel_booking(request, self.booking)
+        self.assertIn(request_status, {status.HTTP_200_OK, status.HTTP_202_ACCEPTED}, request_payload)
+
+        # Simulate vendor delay: request is pending, but show moves into <1h window before approval.
+        self.showtime.start_time = timezone.now() + timedelta(minutes=30)
+        self.showtime.save(update_fields=["start_time"])
+
+        vendor_request = type(
+            "Request",
+            (),
+            {
+                "user": self.vendor,
+                "data": {"action": "APPROVE", "reason": "Approved by vendor"},
+            },
+        )()
+
+        payload, status_code = services.vendor_cancel_booking(vendor_request, self.booking)
+
+        self.assertEqual(status_code, status.HTTP_200_OK, payload)
+        self.assertIn("Booking cancelled", str(payload.get("message") or ""))
+        self.booking.refresh_from_db()
+        self.assertEqual(self.booking.booking_status, services.BOOKING_STATUS_CANCELLED)
+
+        vendor_notification = Notification.objects.filter(
+            recipient_role=Notification.ROLE_VENDOR,
+            recipient_id=self.vendor.id,
+            event_type=Notification.EVENT_BOOKING_CANCEL_REQUEST,
+            metadata__booking_id=self.booking.id,
+        ).order_by("-id").first()
+        self.assertIsNotNone(vendor_notification)
+        self.assertEqual(
+            str((vendor_notification.metadata or {}).get("request_status") or ""),
+            "APPROVED",
+        )
+
+    def test_pending_unpaid_booking_cancellation_is_cancel_only(self) -> None:
+        pending_booking = Booking.objects.create(
+            user=self.customer,
+            showtime=self.showtime,
+            booking_status=services.BOOKING_STATUS_PENDING,
+            total_amount=Decimal("450.00"),
+        )
+
+        request = type(
+            "Request",
+            (),
+            {
+                "user": self.customer,
+                "data": {"reason": "Change of plan"},
+            },
+        )()
+
+        payload, status_code = services.customer_cancel_booking(request, pending_booking)
+
+        self.assertEqual(status_code, status.HTTP_202_ACCEPTED, payload)
+        self.assertEqual(str((payload.get("cancellation") or {}).get("has_successful_payment") or False), "False")
+
+        vendor_notification = Notification.objects.filter(
+            recipient_role=Notification.ROLE_VENDOR,
+            recipient_id=self.vendor.id,
+            event_type=Notification.EVENT_BOOKING_CANCEL_REQUEST,
+            metadata__booking_id=pending_booking.id,
+        ).order_by("-id").first()
+        self.assertIsNotNone(vendor_notification)
+        self.assertEqual(
+            str((vendor_notification.metadata or {}).get("request_type") or ""),
+            "CANCEL_ONLY",
+        )
+        refund_preview = (vendor_notification.metadata or {}).get("refund_preview") or {}
+        self.assertEqual(float(refund_preview.get("refund_amount") or 0), 0.0)
+        self.assertEqual(float(refund_preview.get("cancellation_charge_amount") or 0), 0.0)
+
+        vendor_request = type(
+            "Request",
+            (),
+            {
+                "user": self.vendor,
+                "data": {"action": "APPROVE", "reason": "Approved without refund"},
+            },
+        )()
+        approve_payload, approve_status = services.vendor_cancel_booking(vendor_request, pending_booking)
+        self.assertEqual(approve_status, status.HTTP_200_OK, approve_payload)
+        pending_booking.refresh_from_db()
+        self.assertEqual(pending_booking.booking_status, services.BOOKING_STATUS_CANCELLED)
+        self.assertFalse(Payment.objects.filter(booking=pending_booking).exists())
+
 
 class ReviewOwnershipPermissionsTests(TestCase):
     """Ensure customers can only edit/delete their own reviews."""
@@ -1825,7 +1983,7 @@ class ReviewOwnershipPermissionsTests(TestCase):
 @override_settings(
     SHOW_BUFFER_MINUTES=20,
     SHOW_MIN_LEAD_HOURS=2,
-    SHOW_OPERATING_OPEN_TIME="09:00",
+    SHOW_OPERATING_OPEN_TIME="06:00",
     SHOW_OPERATING_CLOSE_TIME="00:00",
 )
 class ShowSchedulingRulesTests(TestCase):
@@ -2495,6 +2653,35 @@ class BookingPaymentIdempotencyTests(TestCase):
         reviewed_booking = Booking.objects.get(pk=reviewed_booking_id)
         self.assertEqual(reviewed_booking.booking_status, services.BOOKING_STATUS_PENDING)
         self.assertEqual(Ticket.objects.filter(payload__payment__transaction_uuid=self.transaction_uuid).count(), 0)
+
+    def test_esewa_initiate_accepts_show_date_time_aliases(self) -> None:
+        request = self.factory.post(
+            "/api/payment/esewa/initiate/",
+            {
+                "amount": "250",
+                "order": {
+                    "ticketTotal": 250,
+                    "selectedSeats": ["A1"],
+                    "bookingContext": {
+                        "movieId": self.movie.id,
+                        "cinemaId": self.vendor.id,
+                        "showDate": self.show.show_date.isoformat(),
+                        "showTime": self.show.start_time.strftime("%H:%M:%S"),
+                        "hall": self.show.hall,
+                        "selectedSeats": ["A1"],
+                        "user_id": self.customer.id,
+                    },
+                },
+                "success_url": "http://localhost:5173/payment-success",
+                "failure_url": "http://localhost:5173/payment-failure",
+            },
+            format="json",
+        )
+
+        response = esewa_initiate(request)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertTrue(str(response.data.get("transaction_uuid") or "").strip())
 
     def test_esewa_verify_recovers_booking_context_without_cache(self) -> None:
         cache.clear()
@@ -4807,6 +4994,16 @@ class TicketValidationRaceSafetyTests(TestCase):
         self.assertEqual(response.data.get("code"), SCAN_CODE_OUTSIDE_VALID_TIME_WINDOW)
         self.assertEqual(response.data.get("scan", {}).get("status"), TicketValidationScan.STATUS_INVALID)
 
+    def test_scan_within_earlier_validation_window_is_accepted(self) -> None:
+        self.ticket.show_datetime = timezone.now() + timedelta(hours=1, minutes=30)
+        self.ticket.save(update_fields=["show_datetime"])
+
+        response = validate_ticket_scan(self._scan_request({"reference": self.ticket.reference}))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data.get("code"), SCAN_CODE_VALID)
+        self.assertEqual(response.data.get("scan", {}).get("status"), TicketValidationScan.STATUS_VALID)
+
     def test_scan_rejects_legacy_paid_alias_without_successful_payment_record(self) -> None:
         legacy_ticket = Ticket.objects.create(
             reference="LEGACY001",
@@ -5204,6 +5401,49 @@ class TicketValidationRaceSafetyTests(TestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertTrue(mocked_lock.called)
+
+    def test_download_ticket_repairs_corrupted_ticket_uuid(self) -> None:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE tickets SET ticket_id = %s WHERE id = %s",
+                ["not-a-valid-uuid", self.ticket.id],
+            )
+
+        content = services.build_ticket_download(self.ticket.reference)
+
+        self.assertIsInstance(content, (bytes, bytearray))
+        self.ticket.refresh_from_db()
+        self.assertTrue(str(self.ticket.ticket_id).strip())
+
+    def test_download_ticket_accepts_case_insensitive_reference(self) -> None:
+        content = services.build_ticket_download(self.ticket.reference.lower())
+
+        self.assertIsInstance(content, (bytes, bytearray))
+
+    def test_scan_recovers_ticket_from_qr_token_when_uuid_row_is_corrupted(self) -> None:
+        token = services.generate_ticket_qr_token(self.ticket)
+        scan_blob = json.dumps(
+            {
+                "qr_payload": {
+                    "ticket_id": str(self.ticket.ticket_id),
+                    "token": token,
+                }
+            }
+        )
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE tickets SET ticket_id = %s WHERE id = %s",
+                ["not-a-valid-uuid", self.ticket.id],
+            )
+
+        response = validate_ticket_scan(self._scan_request({"scan_data": scan_blob}))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data.get("code"), SCAN_CODE_VALID)
+
+        self.ticket.refresh_from_db()
+        self.assertTrue(self.ticket.is_used)
 
 
 class BackupRestoreCommandTests(TransactionTestCase):

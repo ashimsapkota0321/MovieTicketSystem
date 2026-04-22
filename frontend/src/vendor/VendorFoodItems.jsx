@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
+import Pagination from "../components/Pagination";
 import AdminModal from "../admin/components/AdminModal";
 import ConfirmModal from "../admin/components/ConfirmModal";
 import {
@@ -10,7 +11,9 @@ import {
 } from "../lib/catalogApi";
 
 export default function VendorFoodItems() {
+  const ITEMS_PER_PAGE = 8;
   const [items, setItems] = useState([]);
+  const [currentPage, setCurrentPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -26,6 +29,19 @@ export default function VendorFoodItems() {
     () => items.filter((item) => item.soldOut).length,
     [items]
   );
+
+  const totalPages = Math.max(1, Math.ceil(items.length / ITEMS_PER_PAGE));
+
+  const paginatedItems = useMemo(() => {
+    const start = (currentPage - 1) * ITEMS_PER_PAGE;
+    return items.slice(start, start + ITEMS_PER_PAGE);
+  }, [items, currentPage]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
 
   const loadItems = async () => {
     setLoading(true);
@@ -161,7 +177,7 @@ export default function VendorFoodItems() {
               </tr>
             </thead>
             <tbody>
-              {items.map((item) => {
+              {paginatedItems.map((item) => {
                 const isVeg =
                   typeof item?.isVeg === "boolean"
                     ? item.isVeg
@@ -230,6 +246,15 @@ export default function VendorFoodItems() {
             </tbody>
           </table>
         </div>
+        {items.length > 0 ? (
+          <div className="d-flex flex-wrap justify-content-between align-items-center mt-3 gap-2">
+            <small className="text-muted">
+              Showing {(currentPage - 1) * ITEMS_PER_PAGE + 1}-
+              {Math.min(currentPage * ITEMS_PER_PAGE, items.length)} of {items.length}
+            </small>
+            <Pagination page={currentPage} totalPages={totalPages} onPageChange={setCurrentPage} />
+          </div>
+        ) : null}
       </section>
 
       <AdminModal

@@ -12,7 +12,9 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 from django.conf import settings
+from django.core import signing
 from django.core.cache import cache
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Avg, Count, Max, Q
 from django.http import HttpResponse
@@ -22,6 +24,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from .. import services
+from .. import selectors
 from ..models import Payment, Show, Ticket, TicketValidationScan, VendorStaff
 from ..permissions import resolve_vendor, resolve_vendor_staff, vendor_required
 from ..utils import combine_date_time_utc, ensure_utc_datetime, parse_date, parse_time
@@ -295,6 +298,25 @@ def _extract_ticket_vendor_id(ticket: Ticket) -> int | None:
     return _coerce_positive_int(vendor_raw)
 
 
+def _resolve_scan_ticket(scan: TicketValidationScan) -> Ticket | None:
+    try:
+        ticket = scan.ticket
+    except Exception:
+        ticket = None
+
+    if ticket:
+        return ticket
+
+    reference = str(getattr(scan, "reference", "") or "").strip()
+    if not reference:
+        return None
+
+    try:
+        return selectors.get_ticket(reference)
+    except Exception:
+        return None
+
+
 def _resolve_ticket_show_datetime(ticket: Ticket) -> datetime | None:
     if ticket.show_datetime:
         return ensure_utc_datetime(ticket.show_datetime)
@@ -358,7 +380,7 @@ def _build_show_label(
 
 
 def _extract_scan_show_context(scan: TicketValidationScan) -> dict[str, Any]:
-    ticket = scan.ticket
+    ticket = _resolve_scan_ticket(scan)
     show = ticket.show if ticket and ticket.show_id else None
     payload = ticket.payload if ticket and isinstance(ticket.payload, dict) else {}
     movie_payload = payload.get("movie") if isinstance(payload.get("movie"), dict) else {}
@@ -409,12 +431,13 @@ def _build_scan_payload(scan: TicketValidationScan) -> dict[str, Any]:
     actor_type, actor_staff_id, actor_name = _resolve_scan_actor(scan)
     show_context = _extract_scan_show_context(scan)
     risk_payload = services.build_fraud_risk_payload(score=int(scan.fraud_score or 0), signals=[])
+    ticket = _resolve_scan_ticket(scan)
 
     return {
         "id": scan.id,
         "reference": scan.reference,
-        "ticketReference": scan.ticket.reference if scan.ticket else None,
-        "ticketId": str(scan.ticket.ticket_id) if scan.ticket and scan.ticket.ticket_id else None,
+        "ticketReference": ticket.reference if ticket else None,
+        "ticketId": str(ticket.ticket_id) if ticket and ticket.ticket_id else None,
         "status": scan.status,
         "reason": scan.reason,
         "fraudScore": int(scan.fraud_score or 0),
@@ -635,9 +658,13 @@ def _ticket_lookup_query(lookup: dict[str, Any]) -> Ticket | None:
     ticket_uuid = lookup.get("ticket_uuid")
     ticket_pk = lookup.get("ticket_pk")
     reference = lookup.get("reference")
+    token = str(lookup.get("token") or "").strip()
 
     if ticket_uuid:
-        ticket = Ticket.objects.select_related("show").filter(ticket_id=ticket_uuid).first()
+        try:
+            ticket = Ticket.objects.select_related("show").filter(ticket_id=ticket_uuid).first()
+        except (TypeError, ValueError, ValidationError):
+            ticket = None
         if ticket:
             return ticket
 
@@ -647,7 +674,17 @@ def _ticket_lookup_query(lookup: dict[str, Any]) -> Ticket | None:
             return ticket
 
     if reference:
-        return Ticket.objects.select_related("show").filter(reference__iexact=reference).first()
+        return selectors.get_ticket(reference)
+
+    if token:
+        try:
+            decoded_token = signing.loads(token, salt=services.TICKET_QR_SIGNING_SALT)
+        except Exception:
+            decoded_token = None
+        if isinstance(decoded_token, dict):
+            decoded_reference = _normalize_reference(decoded_token.get("reference"))
+            if decoded_reference:
+                return selectors.get_ticket(decoded_reference)
 
     return None
 
@@ -1107,7 +1144,6 @@ def _parse_monitor_filters(request: Any) -> dict[str, Any]:
 
 def _base_monitor_queryset(vendor: Any):
     return TicketValidationScan.objects.filter(vendor=vendor).select_related(
-        "ticket__show__movie",
         "vendor_staff",
         "vendor",
         "scanned_by",

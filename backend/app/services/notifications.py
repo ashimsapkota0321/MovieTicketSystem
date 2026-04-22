@@ -428,6 +428,11 @@ def _notify_customer_cancel_request_rejected(
         pending.is_read = False
         pending.read_at = None
         pending.save(update_fields=["title", "message", "metadata", "is_read", "read_at"])
+        _queue_notification_email(
+            subject="Cancellation request rejected",
+            message=message,
+            recipient_email=customer.email,
+        )
         return
 
     metadata = _build_booking_notification_metadata(booking, include_booking_detail=True)
@@ -465,7 +470,7 @@ def _notify_customer_cancel_request_submitted(
         {
             "request_id": request_id,
             "request_status": "PENDING",
-            "request_type": "CANCEL_AND_REFUND",
+            "request_type": "CANCEL_AND_REFUND" if bool(quote.get("has_successful_payment")) else "CANCEL_ONLY",
             "refund_preview": {
                 "is_refund_available": bool(quote.get("is_refund_available")),
                 "refund_percent": float(quote.get("refund_percent") or 0),
@@ -485,7 +490,9 @@ def _notify_customer_cancel_request_submitted(
         title="Cancellation request submitted",
         message=(
             f"Your cancellation request for booking #{booking.id} was sent to the cinema. "
-            "You will be notified once the vendor approves refund."
+            "You will be notified once the vendor reviews it."
+            if not bool(quote.get("has_successful_payment"))
+            else "You will be notified once the vendor approves refund."
         ),
         metadata=metadata,
         send_email_too=True,
@@ -540,7 +547,7 @@ def _notify_vendor_cancel_request(
     metadata.update(
         {
             "request_status": "PENDING",
-            "request_type": "CANCEL_AND_REFUND",
+            "request_type": "CANCEL_AND_REFUND" if bool(quote.get("has_successful_payment")) else "CANCEL_ONLY",
             "requested_by": "customer",
             "requested_reason": reason,
             "refund_preview": {
@@ -559,10 +566,12 @@ def _notify_vendor_cancel_request(
         recipient_id=vendor.id,
         recipient_email=vendor.email,
         event_type=Notification.EVENT_BOOKING_CANCEL_REQUEST,
-        title="Refund request pending approval",
+        title="Cancellation request pending approval",
         message=(
-            f"Customer requested cancellation/refund for booking #{booking.id}. "
-            "Review and process manually from vendor bookings."
+            f"Customer requested cancellation for booking #{booking.id}. "
+            "No refund is applicable for this request. Review and respond from vendor bookings."
+            if not bool(quote.get("has_successful_payment"))
+            else f"Customer requested cancellation/refund for booking #{booking.id}. Review and process manually from vendor bookings."
         ),
         metadata=metadata,
         send_email_too=True,

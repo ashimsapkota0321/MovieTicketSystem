@@ -1,5 +1,0 @@
-{
-    "CodeGPT.apiKey": "OpenAI",
-    "python.defaultInterpreterPath": "${workspaceFolder}\\.env\\Scripts\\python.exe",
-    "python.terminal.activateEnvironment": true
-}

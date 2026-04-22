@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Eye, ReceiptText, Trash2, XCircle } from "lucide-react";
+import { CheckCircle2, Eye, ReceiptText, Trash2, XCircle } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import AdminPageHeader from "./components/AdminPageHeader";
 import AdminModal from "./components/AdminModal";
@@ -10,6 +10,7 @@ import {
   deleteAdminBooking,
   fetchAdminBooking,
   fetchAdminBookings,
+  markAdminBookingComplete,
   refundAdminBooking,
 } from "../lib/catalogApi";
 
@@ -154,6 +155,34 @@ export default function AdminBookings() {
     }
   };
 
+  const handleMarkComplete = async (booking) => {
+    if (!booking?.id) return;
+    if (!isBookingPendingStatus(booking)) {
+      const statusValue = String(booking?.status || "").trim().toUpperCase();
+      const isPaidLike =
+        statusValue === "PAID" ||
+        statusValue === "CONFIRMED" ||
+        statusValue === "SUCCESS";
+      pushToast({
+        title: isPaidLike ? "Already paid" : "Status locked",
+        message: isPaidLike
+          ? "This booking is already paid/confirmed. Status change is not allowed."
+          : "Only pending bookings can be marked complete.",
+      });
+      return;
+    }
+    try {
+      await markAdminBookingComplete(booking.id);
+      await loadBookings();
+      pushToast({ title: "Booking completed", message: `Booking #${booking.id} marked complete.` });
+    } catch (error) {
+      pushToast({
+        title: "Status update failed",
+        message: error.message || "Unable to mark booking complete.",
+      });
+    }
+  };
+
   const handleDelete = async () => {
     if (!activeBooking?.id) return;
     try {
@@ -237,6 +266,15 @@ export default function AdminBookings() {
                     </td>
                     <td>
                       <div className="d-flex gap-2">
+                        <button
+                          type="button"
+                          className="btn btn-outline-light btn-sm"
+                          onClick={() => handleMarkComplete(booking)}
+                          title={isBookingPendingStatus(booking) ? "Mark complete" : "Status change not allowed"}
+                          aria-label="Mark complete"
+                        >
+                          <CheckCircle2 size={16} />
+                        </button>
                         <button
                           type="button"
                           className="btn btn-outline-light btn-sm"
@@ -428,4 +466,9 @@ function resolveAdminBookingStatus(booking) {
   }
 
   return { label: booking?.status || "Unknown", tone: "info" };
+}
+
+function isBookingPendingStatus(booking) {
+  const statusValue = String(booking?.status || "").trim().toUpperCase();
+  return statusValue === "PENDING";
 }

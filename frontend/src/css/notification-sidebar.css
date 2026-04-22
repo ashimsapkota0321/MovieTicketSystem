@@ -3,7 +3,7 @@
 /* Vendor Notification Sidebar */
 .vendor-notification-sidebar {
   position: fixed;
-  right: -360px;
+  right: 0;
   top: 0;
   width: 360px;
   height: 100vh;
@@ -13,12 +13,15 @@
   display: flex;
   flex-direction: column;
   z-index: 1300;
-  transition: right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transform: translateX(calc(100% + 42px));
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  pointer-events: none;
   overflow: hidden;
 }
 
 .vendor-notification-sidebar.open {
-  right: 0;
+  transform: translateX(0);
+  pointer-events: auto;
 }
 
 .vendor-notification-backdrop {
@@ -194,7 +197,7 @@
 /* Admin Notification Sidebar */
 .admin-notification-sidebar {
   position: fixed;
-  right: -360px;
+  right: 0;
   top: 0;
   width: 360px;
   height: 100vh;
@@ -204,12 +207,15 @@
   display: flex;
   flex-direction: column;
   z-index: 1300;
-  transition: right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transform: translateX(calc(100% + 42px));
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  pointer-events: none;
   overflow: hidden;
 }
 
 .admin-notification-sidebar.open {
-  right: 0;
+  transform: translateX(0);
+  pointer-events: auto;
 }
 
 .admin-notification-backdrop {

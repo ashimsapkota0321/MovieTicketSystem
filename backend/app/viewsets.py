@@ -147,7 +147,12 @@ class ReviewViewSet(viewsets.ModelViewSet):
             user = customer
 
         if movie and user and Review.objects.filter(movie=movie, user=user).exists():
-            raise ValidationError("You have already reviewed this movie.")
+            # Return a field-specific error for better frontend UX
+            raise ValidationError({
+                "non_field_errors": [
+                    "You have already submitted a review for this movie. Only one review per movie is allowed."
+                ]
+            })
 
         if is_admin_request(self.request):
             serializer.save()

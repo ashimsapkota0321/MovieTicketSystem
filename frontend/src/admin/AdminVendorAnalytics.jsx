@@ -2,15 +2,19 @@ import { useEffect, useState, useMemo } from "react";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ScatterChart, Scatter } from "recharts";
 import { TrendingUp, Calendar, Users, Zap, ArrowUpRight, ArrowDownLeft } from "lucide-react";
 import AdminPageHeader from "./components/AdminPageHeader";
+import Pagination from "../components/Pagination";
 import { getAuthHeaders } from "../lib/authSession";
 import { API_BASE_URL } from "../lib/apiBase";
 import "../css/admin-vendor-analytics.css";
+
+const HEATMAP_VENDORS_PER_PAGE = 8;
 
 export default function AdminVendorAnalytics() {
   const [analyticsData, setAnalyticsData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [timeRange, setTimeRange] = useState("last_30_days");
   const [selectedVendor, setSelectedVendor] = useState(null);
+  const [heatmapVendorPage, setHeatmapVendorPage] = useState(1);
 
   useEffect(() => {
     loadAnalytics();
@@ -50,6 +54,30 @@ export default function AdminVendorAnalytics() {
       intensity: Math.min(100, (item.revenue / 50000) * 100), // Color intensity 0-100
     }));
   }, [analyticsData]);
+
+  const revenueHeatmapVendors = useMemo(() => {
+    return Array.from(new Set(revenueHeatmapData.map((d) => d.vendor)));
+  }, [revenueHeatmapData]);
+
+  const heatmapVendorTotalPages = Math.max(
+    1,
+    Math.ceil(revenueHeatmapVendors.length / HEATMAP_VENDORS_PER_PAGE)
+  );
+
+  const paginatedHeatmapVendors = useMemo(() => {
+    const start = (heatmapVendorPage - 1) * HEATMAP_VENDORS_PER_PAGE;
+    return revenueHeatmapVendors.slice(start, start + HEATMAP_VENDORS_PER_PAGE);
+  }, [revenueHeatmapVendors, heatmapVendorPage]);
+
+  useEffect(() => {
+    setHeatmapVendorPage(1);
+  }, [timeRange]);
+
+  useEffect(() => {
+    if (heatmapVendorPage > heatmapVendorTotalPages) {
+      setHeatmapVendorPage(heatmapVendorTotalPages);
+    }
+  }, [heatmapVendorPage, heatmapVendorTotalPages]);
 
   const bookingVolumeByDayOfWeek = useMemo(() => {
     if (!analyticsData?.booking_volume_by_day) return [];
@@ -193,7 +221,7 @@ export default function AdminVendorAnalytics() {
                   </tr>
                 </thead>
                 <tbody>
-                  {Array.from(new Set(revenueHeatmapData.map((d) => d.vendor))).map((vendor) => (
+                  {paginatedHeatmapVendors.map((vendor) => (
                     <tr key={vendor}>
                       <td className="vendor-col vendor-name">{vendor}</td>
                       {["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].map((month) => {
@@ -214,6 +242,22 @@ export default function AdminVendorAnalytics() {
                 </tbody>
               </table>
             </div>
+            {revenueHeatmapVendors.length > 0 ? (
+              <div className="d-flex flex-wrap justify-content-between align-items-center mt-3 gap-2">
+                <small className="text-muted">
+                  Showing {(heatmapVendorPage - 1) * HEATMAP_VENDORS_PER_PAGE + 1}-
+                  {Math.min(
+                    heatmapVendorPage * HEATMAP_VENDORS_PER_PAGE,
+                    revenueHeatmapVendors.length
+                  )} of {revenueHeatmapVendors.length} vendors
+                </small>
+                <Pagination
+                  page={heatmapVendorPage}
+                  totalPages={heatmapVendorTotalPages}
+                  onPageChange={setHeatmapVendorPage}
+                />
+              </div>
+            ) : null}
           </div>
 
           {/* Occupancy Heatmap */}

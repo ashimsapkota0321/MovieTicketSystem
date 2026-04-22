@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Armchair, CalendarPlus, MoveRight, Sparkles, Trash2 } from "lucide-react";
+import { Armchair, CalendarPlus, Eye, MoveRight, Sparkles, Trash2 } from "lucide-react";
+import Pagination from "../components/Pagination";
 import AdminModal from "../admin/components/AdminModal";
 import ConfirmModal from "../admin/components/ConfirmModal";
 import {
@@ -15,6 +16,7 @@ import {
 import { useAppContext } from "../context/Appcontext";
 
 const EMPTY_LIST = [];
+const SHOWS_PER_PAGE = 8;
 
 export default function VendorShows() {
   const navigate = useNavigate();
@@ -52,8 +54,10 @@ export default function VendorShows() {
   const [showModal, setShowModal] = useState(false);
   const [movieModal, setMovieModal] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [hallSwapModal, setHallSwapModal] = useState(false);
   const [showToDelete, setShowToDelete] = useState(null);
+  const [selectedShowDetails, setSelectedShowDetails] = useState(null);
   const [showToSwap, setShowToSwap] = useState(null);
   const [hallSwapPreview, setHallSwapPreview] = useState(null);
   const [swapLoading, setSwapLoading] = useState(false);
@@ -63,6 +67,7 @@ export default function VendorShows() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [movieForm, setMovieForm] = useState(() => buildEmptyMovie());
   const [query, setQuery] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
   const [notice, setNotice] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [searchParams] = useSearchParams();
@@ -91,6 +96,23 @@ export default function VendorShows() {
       return haystack.includes(term);
     });
   }, [vendorShows, query]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredVendorShows.length / SHOWS_PER_PAGE));
+
+  const paginatedVendorShows = useMemo(() => {
+    const start = (currentPage - 1) * SHOWS_PER_PAGE;
+    return filteredVendorShows.slice(start, start + SHOWS_PER_PAGE);
+  }, [filteredVendorShows, currentPage]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [query]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
 
   const showStats = useMemo(() => {
     const nowShowing = vendorShows.filter(
@@ -187,6 +209,16 @@ export default function VendorShows() {
       },
     });
   };
+
+  const handleOpenShowDetails = (show) => {
+    setSelectedShowDetails(show || null);
+    setShowDetailsModal(true);
+  };
+
+  const selectedShowMovie = useMemo(
+    () => findMovieForShow(movies, selectedShowDetails),
+    [movies, selectedShowDetails]
+  );
 
   const handleSave = async () => {
     setErrorMessage("");
@@ -426,7 +458,7 @@ export default function VendorShows() {
               </tr>
             </thead>
             <tbody>
-              {filteredVendorShows.map((show) => (
+              {paginatedVendorShows.map((show) => (
                 <tr key={show.id}>
                   <td className="fw-semibold">{show.movie}</td>
                   <td>{show.date}</td>
@@ -439,6 +471,15 @@ export default function VendorShows() {
                   <td>{show.status}</td>
                   <td>{show.listingStatus || "Now Showing"}</td>
                   <td>
+                    <button
+                      type="button"
+                      className="vendor-icon-btn me-2"
+                      title="View details"
+                      aria-label="View show details"
+                      onClick={() => handleOpenShowDetails(show)}
+                    >
+                      <Eye size={16} />
+                    </button>
                     <button
                       type="button"
                       className="vendor-icon-btn me-2"
@@ -478,6 +519,15 @@ export default function VendorShows() {
             </tbody>
           </table>
         </div>
+        {filteredVendorShows.length > 0 ? (
+          <div className="d-flex flex-wrap justify-content-between align-items-center mt-3 gap-2">
+            <small className="text-muted">
+              Showing {(currentPage - 1) * SHOWS_PER_PAGE + 1}-
+              {Math.min(currentPage * SHOWS_PER_PAGE, filteredVendorShows.length)} of {filteredVendorShows.length}
+            </small>
+            <Pagination page={currentPage} totalPages={totalPages} onPageChange={setCurrentPage} />
+          </div>
+        ) : null}
       </section>
 
       <AdminModal
@@ -766,6 +816,84 @@ export default function VendorShows() {
         onCancel={() => setShowConfirm(false)}
         onConfirm={handleDelete}
       />
+
+      <AdminModal
+        show={showDetailsModal}
+        title="Show Details"
+        onClose={() => {
+          setShowDetailsModal(false);
+          setSelectedShowDetails(null);
+        }}
+        footer={
+          <button
+            type="button"
+            className="btn btn-outline-light"
+            onClick={() => {
+              setShowDetailsModal(false);
+              setSelectedShowDetails(null);
+            }}
+          >
+            Close
+          </button>
+        }
+      >
+        {selectedShowDetails ? (
+          <div className="row g-3">
+            <div className="col-md-6">
+              <label className="form-label text-muted mb-1">Movie</label>
+              <div className="fw-semibold">{selectedShowDetails.movie || "-"}</div>
+            </div>
+            <div className="col-md-6">
+              <label className="form-label text-muted mb-1">Vendor</label>
+              <div className="fw-semibold">{selectedShowDetails.vendor || vendorName}</div>
+            </div>
+            <div className="col-md-4">
+              <label className="form-label text-muted mb-1">Date</label>
+              <div className="fw-semibold">{selectedShowDetails.date || "-"}</div>
+            </div>
+            <div className="col-md-4">
+              <label className="form-label text-muted mb-1">Start Time</label>
+              <div className="fw-semibold">{selectedShowDetails.start || "-"}</div>
+            </div>
+            <div className="col-md-4">
+              <label className="form-label text-muted mb-1">End Time</label>
+              <div className="fw-semibold">{selectedShowDetails.end || "-"}</div>
+            </div>
+            <div className="col-md-4">
+              <label className="form-label text-muted mb-1">Hall</label>
+              <div className="fw-semibold">{selectedShowDetails.hall || "-"}</div>
+            </div>
+            <div className="col-md-4">
+              <label className="form-label text-muted mb-1">Screen Type</label>
+              <div className="fw-semibold">{selectedShowDetails.screenType || "-"}</div>
+            </div>
+            <div className="col-md-4">
+              <label className="form-label text-muted mb-1">Price</label>
+              <div className="fw-semibold">
+                {selectedShowDetails.price != null && selectedShowDetails.price !== ""
+                  ? `Rs ${selectedShowDetails.price}`
+                  : "-"}
+              </div>
+            </div>
+            <div className="col-md-6">
+              <label className="form-label text-muted mb-1">Status</label>
+              <div className="fw-semibold">{selectedShowDetails.status || "-"}</div>
+            </div>
+            <div className="col-md-6">
+              <label className="form-label text-muted mb-1">Listing</label>
+              <div className="fw-semibold">{selectedShowDetails.listingStatus || "-"}</div>
+            </div>
+            <div className="col-md-6">
+              <label className="form-label text-muted mb-1">Movie Duration</label>
+              <div className="fw-semibold">{selectedShowMovie?.duration || "-"}</div>
+            </div>
+            <div className="col-md-6">
+              <label className="form-label text-muted mb-1">Movie Language</label>
+              <div className="fw-semibold">{selectedShowMovie?.language || "-"}</div>
+            </div>
+          </div>
+        ) : null}
+      </AdminModal>
 
       <AdminModal
         show={hallSwapModal}

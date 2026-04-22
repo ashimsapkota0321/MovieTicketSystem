@@ -12,7 +12,8 @@ from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from ..models import Booking, BookingFoodItem, Combo, ComboItem, FoodItem, Order, OrderItem
+from .. import services
+from ..models import Booking, BookingFoodItem, Combo, ComboItem, FoodItem, Notification, Order, OrderItem
 from ..permissions import is_authenticated, resolve_customer, resolve_vendor, vendor_required
 from ..utils import build_media_url
 
@@ -91,6 +92,50 @@ def _sync_food_item_availability(item: FoodItem) -> None:
         # Auto-restore availability only when inventory was previously auto-sold-out.
         item.is_available = True
         item.sold_out_at = None
+
+
+def _notify_vendor_low_stock(
+    item: FoodItem,
+    *,
+    previous_stock: int,
+    previous_threshold: int,
+    previous_track_inventory: bool,
+) -> None:
+    """Create in-app alert when stock first crosses into threshold range."""
+    if not item or not item.vendor_id:
+        return
+
+    current_stock = int(item.stock_quantity or 0)
+    threshold = int(item.sold_out_threshold or 0)
+    if not item.track_inventory:
+        return
+
+    was_already_low = bool(previous_track_inventory) and int(previous_stock) <= int(previous_threshold)
+    is_now_low = current_stock <= threshold
+    if not is_now_low or was_already_low:
+        return
+
+    vendor = item.vendor
+    if not vendor:
+        return
+
+    services._create_notification(
+        recipient_role=Notification.ROLE_VENDOR,
+        recipient_id=vendor.id,
+        recipient_email=vendor.email,
+        event_type=Notification.EVENT_CUSTOM_MESSAGE,
+        title="Low stock alert",
+        message=f"{item.item_name} stock reached {current_stock} (threshold {threshold}).",
+        metadata={
+            "alert_type": "FOOD_LOW_STOCK",
+            "food_item_id": item.id,
+            "food_item_name": item.item_name,
+            "stock_quantity": current_stock,
+            "sold_out_threshold": threshold,
+            "is_available": bool(item.is_available),
+        },
+        send_email_too=False,
+    )
 
 
 def _serialize_combo(combo: Combo) -> dict[str, Any]:
@@ -234,6 +279,10 @@ def vendor_food_item_detail(request: Any, item_id: int):
         item.delete()
         return Response({"message": "Food item deleted."}, status=status.HTTP_200_OK)
 
+    previous_stock = int(item.stock_quantity or 0)
+    previous_threshold = int(item.sold_out_threshold or 0)
+    previous_track_inventory = bool(item.track_inventory)
+
     item_name = request.data.get("item_name")
     if item_name is None:
         item_name = request.data.get("itemName")
@@ -306,6 +355,12 @@ def vendor_food_item_detail(request: Any, item_id: int):
 
     _sync_food_item_availability(item)
     item.save()
+    _notify_vendor_low_stock(
+        item,
+        previous_stock=previous_stock,
+        previous_threshold=previous_threshold,
+        previous_track_inventory=previous_track_inventory,
+    )
     return Response({"item": _serialize_food_item(item, request)}, status=status.HTTP_200_OK)
 
 
@@ -531,6 +586,7 @@ def booking_food_orders(request: Any):
 
                 if food_item.track_inventory:
                     current_stock = int(food_item.stock_quantity or 0)
+                    previous_threshold = int(food_item.sold_out_threshold or 0)
                     if quantity > current_stock:
                         transaction.set_rollback(True)
                         return Response(
@@ -542,6 +598,12 @@ def booking_food_orders(request: Any):
                     food_item.stock_quantity = current_stock - quantity
                     _sync_food_item_availability(food_item)
                     food_item.save(update_fields=["stock_quantity", "is_available", "sold_out_at"])
+                    _notify_vendor_low_stock(
+                        food_item,
+                        previous_stock=current_stock,
+                        previous_threshold=previous_threshold,
+                        previous_track_inventory=True,
+                    )
 
                 order_item = OrderItem.objects.create(
                     order=order,
@@ -623,9 +685,17 @@ def booking_food_orders(request: Any):
                     if not food_item or not food_item.track_inventory:
                         continue
                     required = int(component.quantity or 1) * quantity
-                    food_item.stock_quantity = int(food_item.stock_quantity or 0) - required
+                    previous_stock = int(food_item.stock_quantity or 0)
+                    previous_threshold = int(food_item.sold_out_threshold or 0)
+                    food_item.stock_quantity = previous_stock - required
                     _sync_food_item_availability(food_item)
                     food_item.save(update_fields=["stock_quantity", "is_available", "sold_out_at"])
+                    _notify_vendor_low_stock(
+                        food_item,
+                        previous_stock=previous_stock,
+                        previous_threshold=previous_threshold,
+                        previous_track_inventory=True,
+                    )
 
                 unit_price = Decimal(combo.combo_price)
                 line_total = unit_price * quantity

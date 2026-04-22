@@ -1,8 +1,9 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import { verifyEsewaPayment } from "../lib/catalogApi";
-import { CheckCircle } from "lucide-react";
+import { CheckCircle, RefreshCw } from "lucide-react";
+import "../css/orderConfirm.css";
 
 function decodeEsewaData(dataValue) {
   if (!dataValue) return null;
@@ -26,6 +27,7 @@ function decodeEsewaData(dataValue) {
 export default function PaymentSuccess() {
   const location = useLocation();
   const navigate = useNavigate();
+  const redirectedRef = useRef(false);
   const [verification, setVerification] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -68,78 +70,104 @@ export default function PaymentSuccess() {
     };
   }, [dataValue, transactionUuid]);
 
-
-  if (loading) {
-    return (
-      <div style={{ minHeight: "80vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--page-bg, #181a20)" }}>
-        <div style={{ background: "#23232a", borderRadius: 20, boxShadow: "0 4px 32px rgba(0,0,0,0.18)", padding: "48px 32px", maxWidth: 420, width: "100%", textAlign: "center" }}>
-          <div style={{ color: "#bfc9d8", fontSize: 18 }}>Verifying payment...</div>
-        </div>
-      </div>
-    );
-  }
-
-  const verified = Boolean(verification?.verified);
   const confirmed = Boolean(verification?.confirmed);
-  const completed = Boolean(verification?.is_complete);
-  const statusLabel = verification?.status || verification?.status_check?.status || "UNKNOWN";
   const orderPayload = verification?.order || verification?.ticket?.payload?.order || null;
   const ticketPayload = verification?.ticket || null;
 
-  const handleContinue = () => {
-    if (!confirmed || !ticketPayload) return;
+  useEffect(() => {
+    if (!confirmed || !ticketPayload || redirectedRef.current) {
+      return;
+    }
+    redirectedRef.current = true;
     navigate("/thank-you", {
+      replace: true,
       state: {
         order: orderPayload || {},
         ticket: ticketPayload,
       },
     });
-  };
+  }, [confirmed, navigate, orderPayload, ticketPayload]);
+
+
+  if (loading) {
+    return (
+      <div className="wf2-thankyouPage">
+        <div className="wf2-thankyouContainer" style={{ maxWidth: 760 }}>
+          <div className="wf2-thankyouHero">
+            <RefreshCw size={34} style={{ animation: "wf2Spin 1.1s linear infinite" }} />
+            <h1 className="wf2-thankyouTitle" style={{ fontSize: "clamp(24px, 4vw, 36px)" }}>
+              Verifying Payment
+            </h1>
+            <p className="wf2-thankyouSubtext">
+              Please wait while we confirm your eSewa transaction and prepare your ticket.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const statusLabel = verification?.status || verification?.status_check?.status || "UNKNOWN";
+  const verified = Boolean(verification?.verified);
+  const completed = Boolean(verification?.is_complete);
 
   return (
-    <div style={{ minHeight: "80vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--page-bg, #181a20)" }}>
-      <div style={{ background: "#23232a", borderRadius: 20, boxShadow: "0 4px 32px rgba(0,0,0,0.18)", padding: "48px 32px", maxWidth: 420, width: "100%", textAlign: "center" }}>
-        <CheckCircle size={64} color="#0ec3e0" style={{ marginBottom: 16 }} />
-        <h2 style={{ color: "#fff", marginBottom: 8 }}>Thank You!</h2>
-        <div style={{ color: "#bfc9d8", fontSize: 18, marginBottom: 24 }}>
-          {error ? (
-            <span style={{ color: "#ff6b6b" }}>{error}</span>
-          ) : confirmed ? (
-            <>Your payment was successful.<br />Your booking is confirmed.</>
-          ) : (
-            <>Your payment was received, but booking is not yet confirmed.<br />Please check your ticket or contact support.</>
-          )}
-        </div>
-        <div style={{ display: "flex", gap: 12, justifyContent: "center", marginTop: 24 }}>
-          <button
-            className="wf2-orderPayBtn"
-            style={{ minWidth: 120 }}
-            onClick={() => navigate("/")}
-          >
-            Go Home
-          </button>
-          {confirmed ? (
-            <button
-              className="wf2-orderPayBtn wf2-btnSecondary"
-              style={{ minWidth: 120 }}
-              onClick={handleContinue}
-            >
-              Download Ticket
-            </button>
-          ) : (
-            <button
-              className="wf2-orderPayBtn wf2-btnSecondary"
-              style={{ minWidth: 120 }}
-              onClick={() => navigate("/movies")}
-            >
-              Browse Movies
-            </button>
-          )}
-        </div>
-        <details style={{ marginTop: 32, color: "#bfc9d8", textAlign: "left" }}>
-          <summary>Decoded response</summary>
-          <pre style={{ whiteSpace: "pre-wrap", color: "#bfc9d8" }}>{JSON.stringify(verification?.decoded || decoded || {}, null, 2)}</pre>
-        </details>
+    <div className="wf2-thankyouPage">
+      <div className="wf2-thankyouContainer" style={{ maxWidth: 760 }}>
+        <section className="wf2-thankyouHero">
+          <div className="wf2-thankyouCheck">
+            <CheckCircle size={34} />
+          </div>
+          <h1 className="wf2-thankyouTitle" style={{ fontSize: "clamp(24px, 4vw, 38px)" }}>
+            {error ? "Payment Verification Failed" : confirmed ? "Payment Verified" : "Payment Received"}
+          </h1>
+          <p className="wf2-thankyouSubtext">
+            {error
+              ? error
+              : confirmed
+                ? "Your booking is confirmed. Redirecting you to the Thank You page..."
+                : "Your payment was received, but booking confirmation is still in progress."}
+          </p>
+        </section>
+
+        <section className="wf2-lifecycleShell">
+          <div className="wf2-lifecycleGrid wf2-thankyouLifecycleGrid">
+            <article className="wf2-lifecycleCard">
+              <span>Verification</span>
+              <strong>{verified ? "Verified" : "Pending"}</strong>
+              <p>Server-side signature validation and status check.</p>
+            </article>
+            <article className="wf2-lifecycleCard">
+              <span>Gateway Status</span>
+              <strong>{statusLabel}</strong>
+              <p>Latest transaction state from eSewa response.</p>
+            </article>
+            <article className="wf2-lifecycleCard">
+              <span>Booking</span>
+              <strong>{confirmed ? "Confirmed" : completed ? "Processing" : "Awaiting"}</strong>
+              <p>Ticket creation and booking sync status.</p>
+            </article>
+          </div>
+
+          <div className={`wf2-lifecycleAlert ${error ? "wf2-lifecycleAlertDanger" : confirmed ? "wf2-lifecycleAlertSuccess" : "wf2-lifecycleAlertWarning"}`}>
+            {error
+              ? "We could not complete verification right now. You can retry or check your tickets from profile."
+              : confirmed
+                ? "Verification complete. You will be redirected automatically."
+                : "Payment was captured, but confirmation is not ready yet. Please retry in a few seconds."}
+          </div>
+
+          <div className="wf2-lifecycleActions">
+            <button className="wf2-thankyouBtnPrimary" onClick={() => navigate("/")}>Go Home</button>
+            <button className="wf2-thankyouBtnGhost" onClick={() => navigate("/movies")}>Browse Movies</button>
+            <button className="wf2-thankyouBtnGhost" onClick={() => window.location.reload()}>Retry Check</button>
+          </div>
+
+          <details className="wf2-lifecycleDetails">
+            <summary>Decoded response</summary>
+            <pre>{JSON.stringify(verification?.decoded || decoded || {}, null, 2)}</pre>
+          </details>
+        </section>
       </div>
     </div>
   );

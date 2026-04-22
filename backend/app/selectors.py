@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timedelta
 from typing import Any, Iterable, Optional
 
+from django.core.exceptions import ValidationError
+from django.db import connection
 from django.db.models import Q
 from django.utils import timezone
 
@@ -34,6 +37,103 @@ SHOW_STATUS_UPCOMING = Show.STATUS_UPCOMING
 SHOW_STATUS_RUNNING = Show.STATUS_RUNNING
 SHOW_STATUS_COMPLETED = Show.STATUS_COMPLETED
 BOOKING_CLOSE_BEFORE_START_MINUTES = Show.BOOKING_CLOSE_BEFORE_START_MINUTES
+
+
+def _repair_malformed_ticket_uuid_rows() -> None:
+    """Repair any malformed ticket UUID values that can break ORM lookups."""
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT id, ticket_id FROM tickets")
+            rows = cursor.fetchall()
+    except Exception:
+        return
+
+    for row_id, ticket_uuid in rows:
+        try:
+            uuid.UUID(str(ticket_uuid))
+        except (TypeError, ValueError, AttributeError):
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        "UPDATE tickets SET ticket_id = %s WHERE id = %s",
+                        [str(uuid.uuid4()), row_id],
+                    )
+            except Exception:
+                continue
+
+
+def _hydrate_ticket_from_row(row: tuple[Any, ...]) -> Ticket:
+    """Build a Ticket instance from a raw database row."""
+    (
+        ticket_pk,
+        ticket_uuid,
+        reference,
+        user_id,
+        show_id,
+        seats,
+        show_datetime,
+        payment_status,
+        token_expires_at,
+        is_used,
+        payload,
+        created_at,
+    ) = row
+
+    if isinstance(payload, str):
+        try:
+            import json
+
+            payload = json.loads(payload)
+        except Exception:
+            payload = {}
+
+    try:
+        parsed_ticket_uuid = uuid.UUID(str(ticket_uuid))
+    except (TypeError, ValueError, AttributeError):
+        parsed_ticket_uuid = uuid.uuid4()
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE tickets SET ticket_id = %s WHERE id = %s",
+                [str(parsed_ticket_uuid), ticket_pk],
+            )
+
+    ticket = Ticket(
+        id=ticket_pk,
+        ticket_id=parsed_ticket_uuid,
+        reference=str(reference or ""),
+        user_id=user_id,
+        show_id=show_id,
+        seats=seats,
+        show_datetime=show_datetime,
+        payment_status=payment_status,
+        token_expires_at=token_expires_at,
+        is_used=bool(is_used),
+        payload=payload if isinstance(payload, dict) else {},
+        created_at=created_at,
+    )
+    ticket._state.adding = False
+    ticket._state.db = connection.alias
+    return ticket
+
+
+def _get_ticket_by_reference_raw(reference: str) -> Optional[Ticket]:
+    """Resolve a ticket by exact or case-insensitive reference without ORM conversion."""
+    query = (
+        "SELECT id, ticket_id, reference, user_id, show_id, seats, show_datetime, "
+        "payment_status, token_expires_at, is_used, payload, created_at "
+        "FROM tickets WHERE reference = %s LIMIT 1"
+    )
+    with connection.cursor() as cursor:
+        cursor.execute(query, [reference])
+        row = cursor.fetchone()
+        if row:
+            return _hydrate_ticket_from_row(row)
+
+        cursor.execute(query.replace("reference = %s", "LOWER(reference) = LOWER(%s)"), [reference])
+        row = cursor.fetchone()
+        if row:
+            return _hydrate_ticket_from_row(row)
+    return None
 
 
 def _combine_local_show_datetime(show_date, show_time):
@@ -685,7 +785,47 @@ def build_show_payload(
 
 def get_ticket(reference: str) -> Optional[Ticket]:
     """Return a ticket by reference or None."""
-    try:
-        return Ticket.objects.get(reference=reference)
-    except Ticket.DoesNotExist:
+    raw_reference = str(reference or "").strip()
+    if not raw_reference:
         return None
+
+    _repair_malformed_ticket_uuid_rows()
+
+    ticket = _get_ticket_by_reference_raw(raw_reference)
+    if ticket:
+        return ticket
+
+    try:
+        ticket = Ticket.objects.get(reference=raw_reference)
+        return ticket
+    except Ticket.DoesNotExist:
+        pass
+    except (TypeError, ValueError, ValidationError):
+        Ticket.objects.filter(reference__iexact=raw_reference).update(ticket_id=uuid.uuid4())
+
+    ticket = Ticket.objects.filter(reference__iexact=raw_reference).first()
+    if ticket:
+        return ticket
+
+    ticket = (
+        Ticket.objects.filter(payload__reference__iexact=raw_reference)
+        .order_by("-id")
+        .first()
+    )
+    if ticket:
+        return ticket
+
+    ticket = (
+        Ticket.objects.filter(payload__payment__transaction_uuid=raw_reference)
+        .order_by("-id")
+        .first()
+    )
+    if ticket:
+        return ticket
+
+    try:
+        ticket_uuid = uuid.UUID(raw_reference)
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+    return Ticket.objects.filter(ticket_id=ticket_uuid).first()

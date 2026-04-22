@@ -951,6 +951,27 @@
   justify-content: center;
 }
 
+.wf2-ticketDownloadContainer {
+  gap: 16px;
+}
+
+.wf2-ticketDownloadStage {
+  display: grid;
+  gap: 18px;
+  justify-items: center;
+}
+
+.wf2-ticketDownloadFrame {
+  width: min(1280px, 100%);
+}
+
+.wf2-ticketDownloadActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+}
+
 @media (max-width: 1024px) {
   .wf2-thankyouRow {
     grid-template-columns: 1fr;
@@ -980,8 +1001,21 @@
     width: 100%;
   }
 
+  .wf2-ticketDownloadFrame {
+    width: 100%;
+  }
+
   .wf2-lifecycleGrid {
     grid-template-columns: 1fr;
+  }
+}
+
+@keyframes wf2Spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
   }
 }
 

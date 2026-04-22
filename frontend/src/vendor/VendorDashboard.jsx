@@ -14,10 +14,21 @@ import {
 import { Bar, Line } from "react-chartjs-2";
 import {
   fetchVendorRevenueAnalytics,
+  fetchVendorTicketValidationMonitor,
+  fetchVendorSeatLayout,
   fetchVendorWalletBalance,
   fetchVendorWalletTransactions,
 } from "../lib/catalogApi";
 import "../css/vendorRevenueDashboard.css";
+
+const CATEGORY_KEYS = ["normal", "executive", "premium", "vip"];
+const DEFAULT_SEAT_GROUPS = [
+  { key: "normal", label: "Normal", rows: ["A", "B", "C", "D"] },
+  { key: "executive", label: "Executive", rows: ["E", "F", "G", "H"] },
+  { key: "premium", label: "Premium", rows: ["I", "J"] },
+  { key: "vip", label: "VIP", rows: ["K", "L"] },
+];
+const DEFAULT_SEAT_COLS = Array.from({ length: 15 }, (_, i) => i + 1);
 
 ChartJS.register(
   CategoryScale,
@@ -55,6 +66,8 @@ const MOVIE_PALETTE = [
 export default function VendorDashboard() {
   const navigate = useNavigate();
   const [analytics, setAnalytics] = useState(null);
+  const [seatLayout, setSeatLayout] = useState(null);
+  const [validationRealtime, setValidationRealtime] = useState(null);
   const [wallet, setWallet] = useState(null);
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -71,12 +84,16 @@ export default function VendorDashboard() {
     try {
       setLoading(true);
       setError("");
-      const [revenueData, walletData, txData] = await Promise.all([
+      const [revenueData, seatLayoutData, validationData, walletData, txData] = await Promise.all([
         fetchVendorRevenueAnalytics({ range: rangeKey, group: period }),
+        fetchVendorSeatLayout().catch(() => null),
+        fetchVendorTicketValidationMonitor({ limit: 50 }).catch(() => null),
         fetchVendorWalletBalance(),
         fetchVendorWalletTransactions(),
       ]);
       setAnalytics(revenueData || {});
+      setSeatLayout(seatLayoutData || null);
+      setValidationRealtime(validationData?.realtime || null);
       applyWalletPayload(walletData || {});
       setTransactions(Array.isArray(txData) ? txData : []);
     } catch (err) {
@@ -155,6 +172,154 @@ export default function VendorDashboard() {
   const withdrawalRequests = pendingPayouts.length;
   const showsWithEarnings = earningsPerShow.filter((item) => Number(item?.vendor_earning || 0) > 0).length;
 
+  const seatInsights = useMemo(() => {
+    const seatMap = buildSeatMap(seatLayout);
+    const dynamicSeatGroups =
+      Array.isArray(seatLayout?.seat_groups) && seatLayout.seat_groups.length
+        ? seatLayout.seat_groups
+        : DEFAULT_SEAT_GROUPS;
+    const dynamicSeatCols =
+      Array.isArray(seatLayout?.seat_columns) && seatLayout.seat_columns.length
+        ? seatLayout.seat_columns
+            .map((value) => Number(value))
+            .filter((value) => Number.isInteger(value) && value > 0)
+        : DEFAULT_SEAT_COLS;
+
+    const soldSeatSet = new Set(
+      [
+        ...(Array.isArray(seatLayout?.sold_seats) ? seatLayout.sold_seats : []),
+        ...(Array.isArray(seatLayout?.seats) ? seatLayout.seats : [])
+          .filter((seat) => String(seat?.status || "").toLowerCase() === "booked")
+          .map((seat) => seat.label),
+      ]
+        .map((seat) => normalizeSeatLabel(seat))
+        .filter(Boolean)
+    );
+
+    const unavailableSeatSet = new Set(
+      [
+        ...(Array.isArray(seatLayout?.unavailable_seats) ? seatLayout.unavailable_seats : []),
+        ...(Array.isArray(seatLayout?.seats) ? seatLayout.seats : [])
+          .filter((seat) => String(seat?.status || "").toLowerCase() === "unavailable")
+          .map((seat) => seat.label),
+      ]
+        .map((seat) => normalizeSeatLabel(seat))
+        .filter(Boolean)
+    );
+
+    const reservedSeatSet = new Set(
+      [
+        ...(Array.isArray(seatLayout?.reserved_seats) ? seatLayout.reserved_seats : []),
+        ...(Array.isArray(seatLayout?.reservedSeats) ? seatLayout.reservedSeats : []),
+      ]
+        .map((seat) => normalizeSeatLabel(seat))
+        .filter(Boolean)
+    );
+
+    const rowStats = [];
+    const categoryBuckets = new Map(
+      CATEGORY_KEYS.map((key) => [
+        key,
+        { key, total: 0, booked: 0, reserved: 0, unavailable: 0, available: 0 },
+      ])
+    );
+
+    dynamicSeatGroups.forEach((group) => {
+      const categoryKey = CATEGORY_KEYS.includes(group?.key) ? group.key : "normal";
+      const rowsList = Array.isArray(group?.rows) ? group.rows : [];
+      rowsList.forEach((rawRow) => {
+        const row = normalizeSeatLabel(rawRow);
+        if (!row) return;
+
+        const rowBucket = {
+          row,
+          category: categoryKey,
+          total: 0,
+          booked: 0,
+          reserved: 0,
+          unavailable: 0,
+          available: 0,
+        };
+
+        dynamicSeatCols.forEach((col) => {
+          const seatLabel = `${row}${col}`;
+          const seat = seatMap.get(normalizeSeatLabel(seatLabel)) || null;
+          const status = getVendorSeatStatus(
+            seatLabel,
+            seat,
+            soldSeatSet,
+            unavailableSeatSet,
+            reservedSeatSet
+          );
+
+          rowBucket.total += 1;
+          if (status === "seat--sold") rowBucket.booked += 1;
+          else if (status === "seat--reserved") rowBucket.reserved += 1;
+          else if (status === "seat--unavailable") rowBucket.unavailable += 1;
+          else rowBucket.available += 1;
+        });
+
+        rowBucket.pressure = rowBucket.total
+          ? ((rowBucket.booked + rowBucket.reserved) / rowBucket.total) * 100
+          : 0;
+        rowStats.push(rowBucket);
+
+        const categoryBucket = categoryBuckets.get(categoryKey);
+        if (categoryBucket) {
+          categoryBucket.total += rowBucket.total;
+          categoryBucket.booked += rowBucket.booked;
+          categoryBucket.reserved += rowBucket.reserved;
+          categoryBucket.unavailable += rowBucket.unavailable;
+          categoryBucket.available += rowBucket.available;
+        }
+      });
+    });
+
+    const totals = rowStats.reduce(
+      (acc, row) => ({
+        total: acc.total + row.total,
+        booked: acc.booked + row.booked,
+        reserved: acc.reserved + row.reserved,
+        unavailable: acc.unavailable + row.unavailable,
+        available: acc.available + row.available,
+      }),
+      { total: 0, booked: 0, reserved: 0, unavailable: 0, available: 0 }
+    );
+
+    const categoryStats = CATEGORY_KEYS.map((key) => {
+      const bucket = categoryBuckets.get(key) || {
+        key,
+        total: 0,
+        booked: 0,
+        reserved: 0,
+        unavailable: 0,
+        available: 0,
+      };
+      const pressure = bucket.total ? ((bucket.booked + bucket.reserved) / bucket.total) * 100 : 0;
+      return {
+        ...bucket,
+        pressure,
+      };
+    });
+
+    const hotRows = [...rowStats]
+      .sort((left, right) => {
+        if (right.pressure !== left.pressure) return right.pressure - left.pressure;
+        return right.booked - left.booked;
+      })
+      .slice(0, 5);
+
+    const occupancy = totals.total ? ((totals.booked + totals.reserved) / totals.total) * 100 : 0;
+
+    return {
+      totals,
+      occupancy,
+      rowStats,
+      categoryStats,
+      hotRows,
+    };
+  }, [seatLayout]);
+
   const payoutCards = [
     { label: "Wallet Balance", value: walletBalance },
     { label: "Available Payout", value: availablePayout, highlight: true },
@@ -215,6 +380,43 @@ export default function VendorDashboard() {
     }),
     [movieBars]
   );
+
+  const validationTrendData = useMemo(() => {
+    const fallback = Array.from({ length: 24 }, (_, index) => ({
+      hour: `${String(index).padStart(2, "0")}:00`,
+      total: 0,
+      failed: 0,
+    }));
+
+    const source = Array.isArray(validationRealtime?.hourlyScanTrend) && validationRealtime.hourlyScanTrend.length
+      ? validationRealtime.hourlyScanTrend
+      : fallback;
+
+    return {
+      labels: source.map((item) => String(item?.hour || "").slice(0, 2)),
+      datasets: [
+        {
+          type: "bar",
+          label: "Scans",
+          data: source.map((item) => Math.max(0, Number(item?.total || 0))),
+          backgroundColor: "rgba(29, 158, 117, 0.22)",
+          borderColor: "#1D9E75",
+          borderWidth: 1,
+          borderRadius: 4,
+        },
+        {
+          type: "line",
+          label: "Failed",
+          data: source.map((item) => Math.max(0, Number(item?.failed || 0))),
+          borderColor: "#D85A30",
+          backgroundColor: "rgba(216, 90, 48, 0.12)",
+          tension: 0.28,
+          pointRadius: 2,
+          yAxisID: "y",
+        },
+      ],
+    };
+  }, [validationRealtime]);
 
   const commonChartOptions = {
     responsive: true,
@@ -418,6 +620,44 @@ export default function VendorDashboard() {
       <section className="mvd-card">
         <div className="mvd-section-head">
           <div>
+            <h3>Ticket Validation Trend</h3>
+            <p>Hourly entry scans and failed attempts from ticket checks.</p>
+          </div>
+        </div>
+        <div className="mvd-chart-wrap">
+          <Bar
+            data={validationTrendData}
+            options={{
+              ...commonChartOptions,
+              plugins: {
+                ...commonChartOptions.plugins,
+                legend: { display: true },
+                tooltip: {
+                  callbacks: {
+                    label: (context) => `${context.dataset.label}: ${Number(context.raw || 0).toLocaleString()}`,
+                  },
+                },
+              },
+              scales: {
+                x: {
+                  grid: { display: false },
+                  ticks: { maxRotation: 0, minRotation: 0 },
+                },
+                y: {
+                  beginAtZero: true,
+                  ticks: {
+                    callback: (value) => Number(value).toLocaleString(),
+                  },
+                },
+              },
+            }}
+          />
+        </div>
+      </section>
+
+      <section className="mvd-card">
+        <div className="mvd-section-head">
+          <div>
             <h3>Occupancy by Slot</h3>
             <p>Live occupancy health for each show slot.</p>
           </div>
@@ -466,6 +706,110 @@ export default function VendorDashboard() {
               ) : null}
             </tbody>
           </table>
+        </div>
+      </section>
+
+      <section className="mvd-card">
+        <div className="mvd-section-head">
+          <div>
+            <h3>Seat Heatmap & Insights</h3>
+            <p>Quickly spot crowded rows, weak zones, and category-level pressure.</p>
+          </div>
+        </div>
+
+        <div className="vendor-seatInsightMetrics">
+          <article className="vendor-seatInsightMetric">
+            <span>Total Seats</span>
+            <strong>{seatInsights.totals.total.toLocaleString()}</strong>
+          </article>
+          <article className="vendor-seatInsightMetric">
+            <span>Occupied (Booked + Reserved)</span>
+            <strong>{(seatInsights.totals.booked + seatInsights.totals.reserved).toLocaleString()}</strong>
+          </article>
+          <article className="vendor-seatInsightMetric">
+            <span>Live Occupancy</span>
+            <strong>{seatInsights.occupancy.toFixed(1)}%</strong>
+          </article>
+          <article className="vendor-seatInsightMetric">
+            <span>Unavailable</span>
+            <strong>{seatInsights.totals.unavailable.toLocaleString()}</strong>
+          </article>
+        </div>
+
+        <div className="vendor-seatInsightLayout">
+          <div className="vendor-seatHeatPanel">
+            <div className="vendor-seatHeatHeader">
+              <h4>Row Pressure Heatmap</h4>
+              <p>Pressure = booked + reserved seats in each row.</p>
+            </div>
+            <div className="vendor-seatHeatRows">
+              {seatInsights.rowStats.map((row) => {
+                const tone = row.pressure >= 70 ? "hot" : row.pressure >= 40 ? "warm" : "cool";
+                return (
+                  <article key={`heat-${row.row}`} className={`vendor-seatHeatRow ${tone}`}>
+                    <div className="vendor-seatHeatMeta">
+                      <strong>Row {row.row}</strong>
+                      <span>{capitalize(row.category)}</span>
+                    </div>
+                    <div className="vendor-seatHeatTrack">
+                      <div
+                        className="vendor-seatHeatFill"
+                        style={{ width: `${Math.min(100, Math.max(0, row.pressure))}%` }}
+                      />
+                    </div>
+                    <div className="vendor-seatHeatValue">
+                      {row.pressure.toFixed(0)}% ({row.booked + row.reserved}/{row.total})
+                    </div>
+                  </article>
+                );
+              })}
+              {seatInsights.rowStats.length === 0 ? (
+                <div className="text-muted">No rows available for heatmap yet.</div>
+              ) : null}
+            </div>
+          </div>
+
+          <aside className="vendor-seatInsightSide">
+            <section className="vendor-seatInsightBlock">
+              <h4>Category Utilization</h4>
+              <div className="vendor-seatCategoryList">
+                {seatInsights.categoryStats.map((item) => (
+                  <div className="vendor-seatCategoryItem" key={`category-${item.key}`}>
+                    <div className="vendor-seatCategoryHead">
+                      <span>{capitalize(item.key)}</span>
+                      <strong>{item.pressure.toFixed(0)}%</strong>
+                    </div>
+                    <div className="vendor-seatCategoryTrack">
+                      <div
+                        className={`vendor-seatCategoryFill ${item.key}`}
+                        style={{ width: `${Math.min(100, Math.max(0, item.pressure))}%` }}
+                      />
+                    </div>
+                    <small>
+                      {item.booked + item.reserved}/{item.total} occupied
+                    </small>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="vendor-seatInsightBlock">
+              <h4>Hot Rows Watchlist</h4>
+              <ul className="vendor-seatHotList">
+                {seatInsights.hotRows.map((row) => (
+                  <li key={`hot-${row.row}`}>
+                    <span>Row {row.row}</span>
+                    <strong>{row.pressure.toFixed(0)}%</strong>
+                  </li>
+                ))}
+                {seatInsights.hotRows.length === 0 ? (
+                  <li>
+                    <span className="text-muted">No row activity yet.</span>
+                  </li>
+                ) : null}
+              </ul>
+            </section>
+          </aside>
         </div>
       </section>
 
@@ -631,4 +975,42 @@ function formatDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
   return date.toLocaleString();
+}
+
+function buildSeatMap(layout) {
+  const seats = Array.isArray(layout?.seats) ? layout.seats : [];
+  const seatMap = new Map();
+  seats.forEach((seat) => {
+    const row = String(seat.row_label || "").trim().toUpperCase();
+    const column = String(seat.seat_number || "").trim();
+    if (!row || !column) return;
+    seatMap.set(normalizeSeatLabel(`${row}${column}`), seat);
+  });
+  return seatMap;
+}
+
+function normalizeSeatLabel(value) {
+  return String(value || "")
+    .replace(/\s+/g, "")
+    .toUpperCase()
+    .trim();
+}
+
+function getVendorSeatStatus(key, seat, soldSeatSet, unavailableSeatSet, reservedSeatSet) {
+  const normalized = normalizeSeatLabel(key);
+  const seatStatus = String(seat?.status || "").toLowerCase();
+  if (soldSeatSet.has(normalized) || seatStatus === "booked") return "seat--sold";
+  if (unavailableSeatSet.has(normalized) || seatStatus === "unavailable") {
+    return "seat--unavailable";
+  }
+  if (reservedSeatSet?.has?.(normalized) || seatStatus === "reserved") {
+    return "seat--reserved";
+  }
+  return "seat--available";
+}
+
+function capitalize(value) {
+  const text = String(value || "");
+  if (!text) return text;
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }

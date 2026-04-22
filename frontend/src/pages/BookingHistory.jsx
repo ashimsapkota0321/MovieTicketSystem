@@ -17,6 +17,7 @@ export default function BookingHistory() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busyBookingId, setBusyBookingId] = useState(null);
+  const [cancelConfirmBooking, setCancelConfirmBooking] = useState(null);
 
   const loadBookings = async (active = true) => {
     setLoading(true);
@@ -54,19 +55,28 @@ export default function BookingHistory() {
     return bookings.slice(start, start + PAGE_SIZE);
   }, [bookings, page]);
 
-  const handleCancelRequest = async (booking) => {
+  const requestCancelConfirmation = (booking) => {
     const bookingId = Number(booking?.id || 0);
     if (!bookingId || busyBookingId === bookingId) return;
 
-    const showDate = toDate(booking?.showTime);
-    if (showDate && showDate.getTime() <= Date.now()) {
-      setError("Show already started. Cancellation request is not allowed.");
+    if (!canCustomerRequestCancellation(booking)) {
+      const reason = String(booking?.cancellation?.reason || "").trim();
+      setError(reason || "Cancellation request is not allowed for this booking.");
       return;
     }
 
-    if (!window.confirm(`Send cancellation request for booking #${bookingId}?`)) {
-      return;
-    }
+    setCancelConfirmBooking(booking);
+  };
+
+  const closeCancelConfirmation = () => {
+    if (busyBookingId != null) return;
+    setCancelConfirmBooking(null);
+  };
+
+  const handleCancelRequest = async () => {
+    const booking = cancelConfirmBooking;
+    const bookingId = Number(booking?.id || 0);
+    if (!bookingId || busyBookingId === bookingId) return;
 
     setBusyBookingId(bookingId);
     setError("");
@@ -82,6 +92,7 @@ export default function BookingHistory() {
       setError(err.message || "Unable to submit cancellation request.");
     } finally {
       setBusyBookingId(null);
+      setCancelConfirmBooking(null);
     }
   };
 
@@ -197,11 +208,9 @@ export default function BookingHistory() {
               const isTerminalStatus = ["cancelled", "refunded"].includes(
                 String(booking?.status || "").trim().toLowerCase()
               );
-              const showDate = toDate(booking?.showTime);
-              const isShowStarted = showDate ? showDate.getTime() <= Date.now() : true;
-              const canRequestCancel = !isTerminalStatus && !isShowStarted;
-              const pendingLabel =
-                String(booking?.cancellation?.request_status || "").toUpperCase() === "PENDING";
+              const cancellationRequestStatus = getCancellationRequestStatus(booking);
+              const pendingLabel = cancellationRequestStatus === "PENDING";
+              const canRequestCancel = !isTerminalStatus && canCustomerRequestCancellation(booking);
               const lifecycle = getLifecycleState(booking);
 
               return (
@@ -224,7 +233,7 @@ export default function BookingHistory() {
                       <button
                         type="button"
                         className="wf2-customerPageAction"
-                        onClick={() => handleCancelRequest(booking)}
+                        onClick={() => requestCancelConfirmation(booking)}
                         disabled={busyBookingId === bookingId}
                       >
                         {busyBookingId === bookingId ? "Sending..." : "Request Cancel"}
@@ -255,6 +264,25 @@ export default function BookingHistory() {
           <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
         )}
       </div>
+
+      {cancelConfirmBooking ? (
+        <div className="wf2-confirmBackdrop" onClick={closeCancelConfirmation} role="presentation">
+          <div className="wf2-confirmModal" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="booking-cancel-confirm-title">
+            <h3 id="booking-cancel-confirm-title">Send cancellation request?</h3>
+            <p>
+              Are you sure you want to send cancellation request for booking #{cancelConfirmBooking.id}?
+            </p>
+            <div className="wf2-confirmActions">
+              <button type="button" className="wf2-customerPageAction" onClick={closeCancelConfirmation}>
+                Cancel
+              </button>
+              <button type="button" className="wf2-customerPageAction wf2-customerPageActionDanger" onClick={handleCancelRequest}>
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -313,4 +341,26 @@ function getLifecycleState(booking) {
     return { label: "Cancelled", className: "" };
   }
   return { label: bookingStatus || "Unknown", className: "" };
+}
+
+function getCancellationRequestStatus(booking) {
+  return String(booking?.cancellation?.request_status || "").trim().toUpperCase();
+}
+
+function canCustomerRequestCancellation(booking) {
+  const requestStatus = getCancellationRequestStatus(booking);
+  if (requestStatus === "PENDING") {
+    return false;
+  }
+
+  const cancellableFlag = booking?.cancellation?.is_cancellable;
+  if (typeof cancellableFlag === "boolean") {
+    return cancellableFlag;
+  }
+
+  const showDate = toDate(booking?.showTime);
+  if (!showDate) {
+    return false;
+  }
+  return showDate.getTime() > Date.now();
 }

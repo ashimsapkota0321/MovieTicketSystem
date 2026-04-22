@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { Bell, X, Trash2, Check, AlertCircle, Info } from "lucide-react";
-import { getAuthHeaders } from "../lib/authSession";
-import { API_BASE_URL } from "../lib/apiBase";
+import { fetchNotifications, markNotificationsRead } from "../lib/catalogApi";
 
 export default function VendorNotificationSidebar({ isOpen, onClose }) {
   const [notifications, setNotifications] = useState([]);
@@ -17,16 +16,12 @@ export default function VendorNotificationSidebar({ isOpen, onClose }) {
   const loadNotifications = async () => {
     try {
       setLoading(true);
-      const response = await fetch(`${API_BASE_URL}/vendor/notifications/?limit=50`, {
-        headers: { Accept: "application/json", ...getAuthHeaders() },
-      });
-      if (!response.ok) return;
-      const data = await response.json();
+      const data = await fetchNotifications({ limit: 50, unread: true });
       setNotifications(Array.isArray(data?.notifications) ? data.notifications : []);
       setUnreadCount(data?.unread_count || 0);
-    } catch (err) {
-      // Fallback: show mock notifications
-      setNotifications(generateMockNotifications());
+    } catch {
+      setNotifications([]);
+      setUnreadCount(0);
     } finally {
       setLoading(false);
     }
@@ -34,46 +29,37 @@ export default function VendorNotificationSidebar({ isOpen, onClose }) {
 
   const handleMarkAsRead = async (notifId) => {
     try {
-      await fetch(`${API_BASE_URL}/vendor/notifications/${notifId}/read/`, {
-        method: "POST",
-        headers: { ...getAuthHeaders() },
-      });
-      setNotifications((prev) =>
-        prev.map((n) => (n.id === notifId ? { ...n, is_read: true } : n))
-      );
+      await markNotificationsRead({ ids: [notifId] });
+      setNotifications((prev) => prev.filter((n) => n.id !== notifId));
       setUnreadCount(Math.max(0, unreadCount - 1));
-    } catch (err) {
+    } catch {
       // Silent fail
     }
   };
 
   const handleDelete = async (notifId) => {
     try {
-      await fetch(`${API_BASE_URL}/vendor/notifications/${notifId}/`, {
-        method: "DELETE",
-        headers: { ...getAuthHeaders() },
-      });
+      await markNotificationsRead({ ids: [notifId] });
       setNotifications((prev) => prev.filter((n) => n.id !== notifId));
-    } catch (err) {
+      setUnreadCount(Math.max(0, unreadCount - 1));
+    } catch {
       // Silent fail
     }
   };
 
   const handleClearAll = async () => {
     try {
-      await fetch(`${API_BASE_URL}/vendor/notifications/clear/`, {
-        method: "POST",
-        headers: { ...getAuthHeaders() },
-      });
+      await markNotificationsRead({ all: true });
       setNotifications([]);
       setUnreadCount(0);
-    } catch (err) {
+    } catch {
       // Silent fail
     }
   };
 
-  const getNotificationIcon = (type) => {
-    switch (type) {
+  const getNotificationIcon = (notification) => {
+    const tone = resolveNotificationTone(notification);
+    switch (tone) {
       case "warning":
         return <AlertCircle size={16} className="notification-icon warning" />;
       case "info":
@@ -125,7 +111,7 @@ export default function VendorNotificationSidebar({ isOpen, onClose }) {
                   >
                     <div className="notification-content">
                       <div className="notification-header-mini">
-                        {getNotificationIcon(notif.type)}
+                        {getNotificationIcon(notif)}
                         <span className="notification-title">{notif.title}</span>
                       </div>
                       <p className="notification-message">{notif.message}</p>
@@ -190,6 +176,15 @@ export default function VendorNotificationSidebar({ isOpen, onClose }) {
   );
 }
 
+function resolveNotificationTone(notification) {
+  const eventType = String(notification?.event_type || "").toUpperCase();
+  const metaType = String(notification?.metadata?.alert_type || "").toUpperCase();
+  if (metaType === "FOOD_LOW_STOCK") return "warning";
+  if (["NEW_BOOKING", "PAYMENT_SUCCESS", "REFUND_PROCESSED"].includes(eventType)) return "success";
+  if (["SHOW_UPDATE", "BOOKING_CANCEL_REQUEST", "BOOKING_CANCELLED", "CUSTOM_MESSAGE"].includes(eventType)) return "warning";
+  return "info";
+}
+
 function formatNotificationTime(dateString) {
   if (!dateString) return "Now";
   try {
@@ -210,39 +205,3 @@ function formatNotificationTime(dateString) {
   }
 }
 
-function generateMockNotifications() {
-  return [
-    {
-      id: 1,
-      title: "Booking Confirmation",
-      message: "New booking received for Hall A on April 20, 2026",
-      type: "success",
-      is_read: false,
-      created_at: new Date(Date.now() - 5 * 60000).toISOString(),
-    },
-    {
-      id: 2,
-      title: "Low Inventory Alert",
-      message: "Popcorn inventory is running low",
-      type: "warning",
-      is_read: false,
-      created_at: new Date(Date.now() - 30 * 60000).toISOString(),
-    },
-    {
-      id: 3,
-      title: "System Update",
-      message: "New features available in your dashboard",
-      type: "info",
-      is_read: true,
-      created_at: new Date(Date.now() - 2 * 3600000).toISOString(),
-    },
-    {
-      id: 4,
-      title: "Payment Received",
-      message: "₹45,000 received from booking cancellations",
-      type: "success",
-      is_read: true,
-      created_at: new Date(Date.now() - 24 * 3600000).toISOString(),
-    },
-  ];
-}

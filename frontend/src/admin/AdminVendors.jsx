@@ -4,10 +4,13 @@ import { useSearchParams } from "react-router-dom";
 import AdminPageHeader from "./components/AdminPageHeader";
 import AdminModal from "./components/AdminModal";
 import ConfirmModal from "./components/ConfirmModal";
+import Pagination from "../components/Pagination";
 import { vendors as seedVendors } from "./data";
 import { useAdminToast } from "./AdminToastContext";
 import { getAuthHeaders } from "../lib/authSession";
 import { API_BASE_URL } from "../lib/apiBase";
+
+const VENDORS_PER_PAGE = 10;
 
 const INITIAL_FORM = {
   name: "",
@@ -33,6 +36,7 @@ export default function AdminVendors() {
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("Status");
   const [cityFilter, setCityFilter] = useState("City");
+  const [currentPage, setCurrentPage] = useState(1);
   const [searchParams] = useSearchParams();
   const queryFromUrl = String(searchParams.get("q") || "");
 
@@ -70,6 +74,23 @@ export default function AdminVendors() {
 
     return list;
   }, [vendorRows, searchTerm, statusFilter, cityFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredVendorRows.length / VENDORS_PER_PAGE));
+
+  const paginatedVendorRows = useMemo(() => {
+    const start = (currentPage - 1) * VENDORS_PER_PAGE;
+    return filteredVendorRows.slice(start, start + VENDORS_PER_PAGE);
+  }, [filteredVendorRows, currentPage]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, statusFilter, cityFilter]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
 
   const formatDate = (value) => {
     if (!value) return "-";
@@ -273,7 +294,7 @@ export default function AdminVendors() {
               </tr>
             </thead>
             <tbody>
-              {filteredVendorRows.map((vendor) => (
+              {paginatedVendorRows.map((vendor) => (
                 <tr key={vendor.id}>
                   <td>
                     <div className="fw-semibold">{vendor.name}</div>
@@ -344,15 +365,15 @@ export default function AdminVendors() {
             </tbody>
           </table>
         </div>
-        <nav className="d-flex justify-content-between align-items-center mt-3">
-          <span className="text-muted small">Page 1 of 2</span>
-          <ul className="pagination mb-0">
-            <li className="page-item disabled"><span className="page-link">Prev</span></li>
-            <li className="page-item active"><span className="page-link">1</span></li>
-            <li className="page-item"><span className="page-link">2</span></li>
-            <li className="page-item"><span className="page-link">Next</span></li>
-          </ul>
-        </nav>
+        {filteredVendorRows.length > 0 ? (
+          <div className="d-flex flex-wrap justify-content-between align-items-center mt-3 gap-2">
+            <span className="text-muted small">
+              Showing {(currentPage - 1) * VENDORS_PER_PAGE + 1}-
+              {Math.min(currentPage * VENDORS_PER_PAGE, filteredVendorRows.length)} of {filteredVendorRows.length}
+            </span>
+            <Pagination page={currentPage} totalPages={totalPages} onPageChange={setCurrentPage} />
+          </div>
+        ) : null}
       </section>
 
       <AdminModal

@@ -17,7 +17,7 @@ import {
   Crown,
   Wallet,
 } from "lucide-react";
-import logo from "../images/logo.png";
+import logo from "../images/logo2.png";
 
 const navItems = [
   { label: "Dashboard", icon: LayoutGrid, to: "/admin/dashboard" },

@@ -5,9 +5,11 @@ import {
   fetchVendorOffers,
   updateVendorOffer,
 } from "../lib/catalogApi";
+import Pagination from "../components/Pagination";
 
 const OFFER_TYPES = ["PROMO", "BUNDLE", "PERK", "LOYALTY"];
 const DISCOUNT_TYPES = ["NONE", "PERCENTAGE", "FIXED"];
+const OFFERS_PER_PAGE = 8;
 
 function emptyForm() {
   return {
@@ -33,12 +35,26 @@ export default function VendorOffers() {
   const [notice, setNotice] = useState("");
   const [saving, setSaving] = useState(false);
   const [editingOfferId, setEditingOfferId] = useState(null);
+  const [currentPage, setCurrentPage] = useState(1);
   const [form, setForm] = useState(emptyForm);
 
   const activeOfferCount = useMemo(
     () => offers.filter((item) => item.is_active).length,
     [offers]
   );
+
+  const totalPages = Math.max(1, Math.ceil(offers.length / OFFERS_PER_PAGE));
+
+  const paginatedOffers = useMemo(() => {
+    const start = (currentPage - 1) * OFFERS_PER_PAGE;
+    return offers.slice(start, start + OFFERS_PER_PAGE);
+  }, [offers, currentPage]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
 
   const loadOffers = async () => {
     setLoading(true);
@@ -341,7 +357,7 @@ export default function VendorOffers() {
               </tr>
             </thead>
             <tbody>
-              {offers.map((offer) => (
+              {paginatedOffers.map((offer) => (
                 <tr key={offer.id}>
                   <td>{offer.title}</td>
                   <td>{offer.offer_type}</td>
@@ -382,6 +398,15 @@ export default function VendorOffers() {
             </tbody>
           </table>
         </div>
+        {offers.length > 0 ? (
+          <div className="d-flex flex-wrap justify-content-between align-items-center mt-3 gap-2">
+            <small className="text-muted">
+              Showing {(currentPage - 1) * OFFERS_PER_PAGE + 1}-
+              {Math.min(currentPage * OFFERS_PER_PAGE, offers.length)} of {offers.length}
+            </small>
+            <Pagination page={currentPage} totalPages={totalPages} onPageChange={setCurrentPage} />
+          </div>
+        ) : null}
       </section>
     </div>
   );

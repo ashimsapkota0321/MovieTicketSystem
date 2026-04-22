@@ -21,6 +21,10 @@ import {
 } from "../lib/catalogApi";
 import { useAppContext } from "../context/Appcontext";
 import { useVendorToast } from "./VendorToastContext";
+import Pagination from "../components/Pagination";
+
+const PROMOS_PER_PAGE = 8;
+const CAMPAIGNS_PER_PAGE = 8;
 
 const seatScopes = ["ALL", "NORMAL", "EXECUTIVE", "PREMIUM", "VIP"];
 const discountTypes = ["PERCENTAGE", "FIXED", "BOGO"];
@@ -116,6 +120,8 @@ export default function VendorCampaignPromos() {
   const [savingCampaign, setSavingCampaign] = useState(false);
   const [runningCampaignId, setRunningCampaignId] = useState(null);
   const [editingPromoId, setEditingPromoId] = useState(null);
+  const [promoPage, setPromoPage] = useState(1);
+  const [campaignPage, setCampaignPage] = useState(1);
   const [promoForm, setPromoForm] = useState(emptyPromoForm);
   const [campaignForm, setCampaignForm] = useState(emptyCampaignForm);
   const { pushToast } = useVendorToast();
@@ -136,6 +142,31 @@ export default function VendorCampaignPromos() {
       ),
     [campaigns]
   );
+
+  const promoTotalPages = Math.max(1, Math.ceil(promos.length / PROMOS_PER_PAGE));
+  const campaignTotalPages = Math.max(1, Math.ceil(campaigns.length / CAMPAIGNS_PER_PAGE));
+
+  const paginatedPromos = useMemo(() => {
+    const start = (promoPage - 1) * PROMOS_PER_PAGE;
+    return promos.slice(start, start + PROMOS_PER_PAGE);
+  }, [promos, promoPage]);
+
+  const paginatedCampaigns = useMemo(() => {
+    const start = (campaignPage - 1) * CAMPAIGNS_PER_PAGE;
+    return campaigns.slice(start, start + CAMPAIGNS_PER_PAGE);
+  }, [campaigns, campaignPage]);
+
+  useEffect(() => {
+    if (promoPage > promoTotalPages) {
+      setPromoPage(promoTotalPages);
+    }
+  }, [promoPage, promoTotalPages]);
+
+  useEffect(() => {
+    if (campaignPage > campaignTotalPages) {
+      setCampaignPage(campaignTotalPages);
+    }
+  }, [campaignPage, campaignTotalPages]);
 
   const loadData = async () => {
     setLoading(true);
@@ -617,7 +648,7 @@ export default function VendorCampaignPromos() {
               </tr>
             </thead>
             <tbody>
-              {promos.map((promo) => (
+              {paginatedPromos.map((promo) => (
                 <tr key={promo.id}>
                   <td>
                     <div className="fw-semibold">{promo.code}</div>
@@ -679,6 +710,15 @@ export default function VendorCampaignPromos() {
             </tbody>
           </table>
         </div>
+        {promos.length > 0 ? (
+          <div className="d-flex flex-wrap justify-content-between align-items-center mt-3 gap-2">
+            <small className="text-muted">
+              Showing {(promoPage - 1) * PROMOS_PER_PAGE + 1}-
+              {Math.min(promoPage * PROMOS_PER_PAGE, promos.length)} of {promos.length}
+            </small>
+            <Pagination page={promoPage} totalPages={promoTotalPages} onPageChange={setPromoPage} />
+          </div>
+        ) : null}
       </section>
 
       <section className="vendor-card">
@@ -838,7 +878,7 @@ export default function VendorCampaignPromos() {
               </tr>
             </thead>
             <tbody>
-              {campaigns.map((campaign) => (
+              {paginatedCampaigns.map((campaign) => (
                 <tr key={campaign.id}>
                   <td>
                     <div className="fw-semibold">{campaign.name}</div>
@@ -896,6 +936,15 @@ export default function VendorCampaignPromos() {
             </tbody>
           </table>
         </div>
+        {campaigns.length > 0 ? (
+          <div className="d-flex flex-wrap justify-content-between align-items-center mt-3 gap-2">
+            <small className="text-muted">
+              Showing {(campaignPage - 1) * CAMPAIGNS_PER_PAGE + 1}-
+              {Math.min(campaignPage * CAMPAIGNS_PER_PAGE, campaigns.length)} of {campaigns.length}
+            </small>
+            <Pagination page={campaignPage} totalPages={campaignTotalPages} onPageChange={setCampaignPage} />
+          </div>
+        ) : null}
       </section>
     </div>
   );
